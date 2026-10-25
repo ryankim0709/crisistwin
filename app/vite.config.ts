@@ -84,7 +84,8 @@ function presentAsThisApplication(proxyReq: import("node:http").ClientRequest): 
 }
 
 /**
- * The /live controller console needs the controller token on every /api/live/ call. In
+ * The /live controller console needs the controller token on every /api/live/ call (and the
+ * shared-world writes under /api/world/, docs/shared-world.md). In
  * development this proxy attaches it from the server's environment (never the bundle), so the
  * page needs no token form. It does so for local requests only, so a phone or a browser on
  * another machine never gets controller rights from this proxy (ADR 0034). Modes of
@@ -104,7 +105,8 @@ function attachControllerToken(
   req: import("node:http").IncomingMessage,
 ): void {
   const token = process.env.LIVE_CONTROLLER_TOKEN;
-  if (!token || !req.url?.startsWith("/api/live/") || req.headers.authorization) return;
+  const controlled = req.url?.startsWith("/api/live/") || req.url?.startsWith("/api/world/");
+  if (!token || !controlled || req.headers.authorization) return;
   if (
     shouldSignController(
       process.env.LIVE_CONTROLLER_PROXY,

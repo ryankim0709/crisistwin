@@ -1,0 +1,406 @@
+/* App integration tab (AppIntegrationPage.tsx). Prefix: aix-. Layout only; primitives come from the kit. */
+
+.aix-header-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ct-space-3);
+}
+.aix-clock {
+  padding: var(--ct-space-2) var(--ct-space-3);
+  border-radius: var(--ct-radius-md);
+  background: var(--ct-surface-muted);
+  color: var(--ct-ink-muted);
+  font-size: var(--ct-text-md);
+  font-variant-numeric: tabular-nums;
+}
+.aix-clock strong {
+  color: var(--ct-ink);
+  font-size: var(--ct-text-lg);
+}
+
+.aix-note,
+.aix-dim {
+  margin: 0;
+  color: var(--ct-ink-muted);
+  font-size: var(--ct-text-sm);
+}
+.aix-note {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ct-space-1) var(--ct-space-2);
+}
+.aix-visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+/* Stats: compact metric tiles. */
+.aix-stats {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ct-space-2);
+  margin-block: var(--ct-space-3);
+}
+.aix-stats .ui-metrics {
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: var(--ct-space-2);
+}
+.aix-stats .ui-metric {
+  gap: var(--ct-space-1);
+  padding: var(--ct-space-3) var(--ct-space-4);
+}
+.aix-stats .ui-metric strong {
+  font-size: var(--ct-text-2xl);
+}
+
+/* Three columns: list | map | OK + messages. Narrower: the right column drops below. */
+.aix-grid {
+  display: grid;
+  grid-template-columns: minmax(240px, 300px) minmax(0, 1fr) minmax(280px, 340px);
+  gap: var(--ct-space-4);
+  align-items: start;
+}
+@media (max-width: 1280px) {
+  .aix-grid {
+    grid-template-columns: minmax(240px, 300px) minmax(0, 1fr);
+  }
+  .aix-side {
+    grid-column: 1 / -1;
+    display: grid !important;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  }
+}
+@media (max-width: 820px) {
+  .aix-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.aix-side {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ct-space-4);
+  min-width: 0;
+}
+.aix-grid > .ui-panel,
+.aix-side > .ui-panel,
+.aix-bottom > .ui-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ct-space-3);
+  min-width: 0;
+}
+
+/* On our app */
+.aix-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 560px;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+.aix-row {
+  display: flex;
+  flex: none;
+  align-items: flex-start;
+  gap: var(--ct-space-2);
+  min-height: 48px;
+  padding: var(--ct-space-2);
+  line-height: var(--ct-leading-snug);
+  border: 1px solid transparent;
+  border-radius: var(--ct-radius-md);
+  cursor: pointer;
+}
+.aix-row:hover {
+  background: var(--ct-surface-muted);
+}
+.aix-row.is-selected {
+  border-color: var(--ct-app-user);
+  background: var(--ct-info-soft);
+}
+.aix-glyph {
+  flex: none;
+  margin-top: 3px;
+}
+.aix-key-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ct-space-1) var(--ct-space-3);
+  margin: 0;
+  padding: 0;
+  color: var(--ct-ink-muted);
+  font-size: var(--ct-text-sm);
+  list-style: none;
+}
+.aix-key-list li {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ct-space-1);
+}
+.aix-row-body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+.aix-row-name {
+  font-size: var(--ct-text-base);
+  font-weight: var(--ct-weight-semibold);
+}
+.aix-row-status {
+  color: var(--ct-ink-muted);
+  font-size: var(--ct-text-sm);
+}
+.aix-flags {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+}
+
+/* Map */
+.aix-layers {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ct-space-1);
+}
+.aix-map {
+  position: relative;
+  height: clamp(380px, 58vh, 620px);
+  overflow: hidden;
+  border: 1px solid var(--ct-border);
+  border-radius: var(--ct-radius-md);
+}
+.aix-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ct-space-1) var(--ct-space-4);
+  margin: 0;
+  padding: 0;
+  color: var(--ct-ink-muted);
+  font-size: var(--ct-text-sm);
+  list-style: none;
+}
+.aix-legend li {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ct-space-1);
+}
+.aix-key {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+}
+.aix-key--real {
+  border: 2px solid var(--ct-app-user);
+  background: var(--ct-app-user);
+}
+.aix-key--sim {
+  border: 2px solid var(--ct-app-user);
+  background: var(--ct-surface);
+}
+.aix-key--leave,
+.aix-key--ready {
+  border-radius: var(--ct-radius-xs);
+  border: 2px solid var(--ct-danger);
+  background: var(--ct-danger-soft);
+}
+.aix-key--ready {
+  border: 2px dashed var(--ct-warning);
+  background: var(--ct-warning-soft);
+}
+.aix-key--fire {
+  border-radius: var(--ct-radius-xs);
+  border: 2px solid var(--ct-fire);
+  background: repeating-linear-gradient(135deg, var(--ct-fire) 0 2px, transparent 2px 5px);
+}
+.aix-key--closed {
+  width: 20px;
+  height: 0;
+  border-radius: 0;
+  border-top: 4px dashed var(--ct-closure);
+}
+
+/* Needs your OK */
+.aix-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ct-space-1);
+  padding: var(--ct-space-3);
+  border: 1px solid var(--ct-warning-border);
+  border-radius: var(--ct-radius-md);
+  background: var(--ct-warning-soft);
+}
+.aix-card--help {
+  border-color: var(--ct-danger-border);
+  background: var(--ct-danger-soft);
+}
+.aix-card-title {
+  font-size: var(--ct-text-lg);
+}
+.aix-card-line,
+.aix-card-detail {
+  color: var(--ct-ink-muted);
+  font-size: var(--ct-text-md);
+}
+.aix-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ct-space-2);
+  margin-top: var(--ct-space-1);
+}
+
+/* Messages */
+.aix-timeline {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ct-space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.aix-msg {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr);
+  align-items: baseline;
+  gap: var(--ct-space-2);
+  padding: var(--ct-space-2);
+  border-radius: var(--ct-radius-md);
+  background: var(--ct-surface-sunken);
+  font-size: var(--ct-text-md);
+}
+.aix-msg-time {
+  color: var(--ct-ink-muted);
+  font-size: var(--ct-text-sm);
+  font-variant-numeric: tabular-nums;
+}
+.aix-msg-dir {
+  color: var(--ct-ink-subtle);
+}
+.aix-msg--from .aix-msg-dir {
+  color: var(--ct-app-user);
+}
+
+/* Bottom row: the phone, what simulated people did */
+.aix-bottom {
+  display: grid;
+  grid-template-columns: minmax(0, 3fr) minmax(300px, 2fr);
+  gap: var(--ct-space-4);
+  margin-top: var(--ct-space-4);
+  align-items: stretch;
+}
+@media (max-width: 1000px) {
+  .aix-bottom {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.aix-sees {
+  flex-direction: row !important;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: var(--ct-space-6) !important;
+}
+.aix-sees-text {
+  display: flex;
+  flex: 1 1 220px;
+  flex-direction: column;
+  gap: var(--ct-space-2);
+  min-width: 0;
+}
+.aix-sees-text h2 {
+  margin: 0;
+  font-size: var(--ct-text-xl);
+}
+.aix-sees-text p {
+  margin: 0;
+}
+.aix-story {
+  margin: 0;
+  padding-left: var(--ct-space-5);
+  color: var(--ct-ink-muted);
+  font-size: var(--ct-text-md);
+}
+/* Placeholder frame until the phone mirror lands (PhoneMirror.tsx). */
+.aix-phone {
+  flex: none;
+  width: 240px;
+  padding: 10px;
+  border-radius: 32px;
+  background: var(--ct-ink);
+}
+.aix-phone-screen {
+  display: flex;
+  flex-direction: column;
+  min-height: 420px;
+  overflow: hidden;
+  border-radius: 24px;
+  background: var(--ct-bg);
+}
+
+.aix-bars {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ct-space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.aix-bars li {
+  display: grid;
+  grid-template-columns: minmax(150px, 180px) minmax(0, 1fr) 28px;
+  align-items: center;
+  gap: var(--ct-space-3);
+  font-size: var(--ct-text-md);
+}
+.aix-bars strong {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.aix-bar {
+  display: block;
+  height: 10px;
+  overflow: hidden;
+  border-radius: var(--ct-radius-pill);
+  background: var(--ct-surface-muted);
+}
+.aix-bar > span {
+  display: block;
+  height: 100%;
+  background: var(--ct-brand);
+}
+
+/* Older phones: collapsed under the list. */
+.aix-older summary {
+  color: var(--ct-ink-muted);
+  font-size: var(--ct-text-md);
+  cursor: pointer;
+}
+.aix-older[open] summary {
+  margin-bottom: var(--ct-space-2);
+}
+.aix-older .aix-list {
+  max-height: 320px;
+}
+/* One wide tile while the traffic model loads. */
+.aix-stats .aix-metric-wide {
+  grid-column: span 5;
+}
+.aix-stats .aix-metric-wide strong {
+  color: var(--ct-ink-muted);
+  font-size: var(--ct-text-lg);
+}
+@media (max-width: 900px) {
+  .aix-stats .aix-metric-wide {
+    grid-column: 1 / -1;
+  }
+}

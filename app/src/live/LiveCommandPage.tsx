@@ -23,6 +23,7 @@ import { nf } from "../demo/format";
 import { CONGESTION_LABEL, TRAVEL_LABEL, fireModelLabel, studioMoistureLabel, studioWindLabel } from "../demo/observation";
 import SelectedPanel from "../demo/SelectedPanel";
 import { useCommandBoard } from "../demo/useCommandBoard";
+import { useRoadAccess } from "../demo/useRoadAccess";
 import "../demo/demo.css";
 import AuditLog from "./AuditLog";
 import DetailsDrawer from "./DetailsDrawer";
@@ -49,6 +50,7 @@ import { useCommand } from "./useCommand";
 import { usePoll } from "./usePoll";
 import type { Decision } from "./types";
 import { useTwin } from "./useTwin";
+import { PeopleSummary, usePeople } from "./people";
 import { LiveBadge } from "./WorkspaceHeader";
 import "./live.css";
 
@@ -62,6 +64,8 @@ const LAYER_LABEL: Record<LayerKey, string> = {
   reports: "Reports",
   roads: "Roads",
   shelters: "Shelters",
+  people: "People",
+  noTruck: "Roads trucks can't use",
 };
 type StageView = "map" | "diorama";
 const VIEW_STORAGE_KEY = "crisistwin.live.view";
@@ -223,6 +227,8 @@ export default function LiveCommandPage() {
     reports: true,
     roads: true,
     shelters: true,
+    people: true,
+    noTruck: false,
   });
   // A different incident: drop the selection and per-incident panels (the polls restart themselves).
   useEffect(() => {
@@ -258,6 +264,9 @@ export default function LiveCommandPage() {
   const unauthorized = command.error?.unauthorized ?? false;
   const data = unauthorized ? null : command.data;
   const twinData = data ? twin.data : null;
+  // The simulated people picture polls only while its layer is on.
+  const people = usePeople(data && layers.people ? incidentToken : null, incidentId);
+  const peopleData = data && layers.people ? people.data : null;
   // The simulated board (fires, units, households) and the AI commander, on the drill's zones.
   const cb = useCommandBoard({ token, incidentId, data });
   // The drill's resource snapshot (households, engines): drawer, zone panel, station labels.
@@ -326,12 +335,15 @@ export default function LiveCommandPage() {
   // The board's map layers, drawn on the live map (demo/boardMapLayers.ts). The handlers and the
   // latest input sit in refs: CommandMap calls onMapReady once, at load.
   const boardLayers = useRef<BoardLayers | null>(null);
+  const roadAccess = useRoadAccess(incidentId, !!cb.board);
   const boardInput: BoardLayerInput = {
     board: cb.board,
     forecasts: cb.forecasts,
     routes: cb.routes.routes,
     selection: cb.selection,
     snapshot,
+    closedRoads: roadAccess.data?.closed_roads ?? null,
+    showClosedRoads: layers.noTruck,
   };
   const boardInputRef = useRef(boardInput);
   const boardHandlers = useRef({ onSelect: selectBoard });
@@ -342,7 +354,7 @@ export default function LiveCommandPage() {
     boardInputRef.current = boardInput;
     boardLayers.current?.update(boardInput);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- the board is mutated in place; version marks changes
-  }, [cb.board, cb.version, cb.forecasts, cb.routes.routes, cb.selection, snapshot]);
+  }, [cb.board, cb.version, cb.forecasts, cb.routes.routes, cb.selection, snapshot, roadAccess.data, layers.noTruck]);
   const onMapReady = useCallback((map: MapLibreMap) => {
     const layers = attachBoardLayers(map, EXTRA_LAYERS_BEFORE_ID, {
       onSelect: (sel) => boardHandlers.current.onSelect(sel),
@@ -457,20 +469,24 @@ export default function LiveCommandPage() {
   const needsYou =
     pendingProposals.length > 0 || !!cb.notice || !!cb.routes.error || !!studioError || (!!actionError && !selected);
 
+  // Over the map it heads the column of map controls (people strip, layer toggles); over the 3D view it floats alone.
+  const liveBadge = data ? (
+    <LiveBadge
+      data={data}
+      receivedAt={command.receivedAt}
+      now={now}
+      connectionError={command.error ? command.error.message : null}
+    />
+  ) : null;
+
   return (
     <div className={`lc-root dm-root${data ? "" : " lc-root--gate"}`}>
       <main className={`lc-stage${showDiorama ? " lc-stage--diorama" : ""}`}>
-        {data ? (
-          <LiveBadge
-            data={data}
-            receivedAt={command.receivedAt}
-            now={now}
-            connectionError={command.error ? command.error.message : null}
-          />
-        ) : null}
+        {data && showDiorama ? liveBadge : null}
         <CommandMap
           data={data}
           twin={twinData}
+          people={peopleData}
           items={items}
           selected={selected}
           focus={focus}
@@ -482,12 +498,16 @@ export default function LiveCommandPage() {
           interceptClick={interceptClick}
         />
         {data && !showDiorama ? (
-          <LayerToggles
-            layers={layers}
-            onToggle={(k) => setLayers((l) => ({ ...l, [k]: !l[k] }))}
-          />
+          <div className="lc-map-top">
+            {liveBadge}
+            {layers.people ? <PeopleSummary snapshot={peopleData} error={people.error} /> : null}
+            <LayerToggles
+              layers={layers}
+              onToggle={(k) => setLayers((l) => ({ ...l, [k]: !l[k] }))}
+            />
+          </div>
         ) : null}
-        {data && !showDiorama ? <MapLegend record={!isPackage} board={!!board} /> : null}
+        {data && !showDiorama ? <MapLegend record={!isPackage} board={!!board} people={layers.people} /> : null}
         {/* The map stays mounted under the diorama, so its view and board layers survive a switch. */}
         {showDiorama && board && landscape ? (
           <DemoDiorama

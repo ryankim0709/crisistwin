@@ -3,6 +3,8 @@ import { LEVEL_COLOR, MAP_COLOR } from "../live/CommandMap";
 import { fireHatch } from "../live/mapStyle";
 import type { ScenarioSnapshot, SnapshotStation } from "../live/scenarioSnapshot";
 import type { LonLat } from "../live/types";
+import { GROUND_APPARATUS } from "../studio/apparatus";
+import type { AccessClassWire, RoadAccessResponse } from "./contracts";
 import { shortStationName } from "./format";
 import { boardFireFeatures, firePolygons } from "./fireFootprint";
 import {
@@ -34,6 +36,12 @@ export interface BoardLayerInput {
   selection: BoardSelection | null;
   /** The drill's resource snapshot (live/scenarioSnapshot.ts); station labels show its engine counts. */
   snapshot?: ScenarioSnapshot | null;
+  /**
+   * Drill roads closed by the road access rules (GET /api/demo/road_access). Drawn dashed for the
+   * selected unit's class, or, with `showClosedRoads`, for every class on the board.
+   */
+  closedRoads?: RoadAccessResponse["closed_roads"] | null;
+  showClosedRoads?: boolean;
 }
 
 export interface BoardLayers {
@@ -61,6 +69,8 @@ export const BOARD_COLOR = {
   trafficSlow: "#C26A00",
   trafficJam: "#B3140C",
   evacuee: "#1F6FEB",
+  /** Road closed to a unit's apparatus class (dashed); unused by fire, zones, routes and units. */
+  noTruck: "#8B1E3F",
 };
 
 type Feature = GeoJSON.Feature<GeoJSON.Geometry, Record<string, string | number | boolean | null>>;
@@ -105,9 +115,9 @@ function zoneTag(state: ZoneMapState, forecast: ZoneForecast | undefined): strin
   return "";
 }
 
-/** Fire footprints at board.minute: the simulator solver's burned cells, contoured (fireFootprint.ts). */
+/** Fire footprints at board.minute (the solver's burned cells, fireFootprint.ts). */
 function fireFeatures(board: Board): Feature[] {
-  return boardFireFeatures(board).features.map((f) => ({ ...f, properties: { ...f.properties } }));
+  return boardFireFeatures(board).features.map((f): Feature => ({ ...f, properties: { ...f.properties } }));
 }
 
 function buildFireLabels(board: Board): Feature[] {
@@ -197,12 +207,26 @@ function metresBetween(a: LonLat, b: LonLat): number {
  * station, are spread on a ring of FAN_RADIUS_M around it, in unit-id order starting from north, so
  * each stays visible and clickable. Deterministic; a lone unit stays at its true position.
  */
-/** An available unit standing at its home station: drawn as part of the station's marker, not as its own dot. */
+/** Unit states that stand still at a station (free, resting after work, or out of service). */
+const AT_STATION: ReadonlySet<Board["teams"][number]["status"]> = new Set(["available", "resting", "out_of_service"]);
+
+/** The station a unit stands at when it is home: the one it covers on a move-up, else its own. */
+function parkedStationId(team: Board["teams"][number]): string {
+  return team.coverStation ?? team.station;
+}
+
+/**
+ * A unit standing at its station (free, resting or out of service; the station it covers after a
+ * move-up): drawn as part of the station's marker, not as its own dot.
+ */
 function isParked(board: Board, team: Board["teams"][number]): boolean {
-  if (team.status !== "available") return false;
-  const home = board.stations.find((s) => s.id === team.station);
+  if (!AT_STATION.has(team.status)) return false;
+  const home = board.stations.find((s) => s.id === parkedStationId(team));
   return !!home && metresBetween(team.position, home.location) < PARKED_M;
 }
+
+/** Driving on a road line: to a fire, home, or to cover another station. */
+const DRIVING: ReadonlySet<Board["teams"][number]["status"]> = new Set(["en_route", "returning", "moving_up"]);
 
 export function fanOutTeams(board: Board): Map<string, LonLat> {
   const spots: { at: LonLat; members: { id: string; pos: LonLat }[] }[] = [];
@@ -237,8 +261,8 @@ function buildTeams(board: Board, fanned: Map<string, LonLat>) {
     const pos = fanned.get(team.id) ?? teamPosition(board, team);
     teams.push(point(pos, { id: team.id, status: team.status }));
     // Only road lines are drawn: a unit waiting for its road route stays where it is, with no line.
-    // Returning units (driving back to their station) draw their road home dotted.
-    if ((team.status === "en_route" || team.status === "returning") && team.route && team.route.length > 1) {
+    // Returning and moving-up units (driving to a station) draw their road dotted.
+    if (DRIVING.has(team.status) && team.route && team.route.length > 1) {
       lines.push(lineFeature(team.route, { id: team.id, status: team.status }));
     }
   }
@@ -268,7 +292,7 @@ function buildStations(board: Board, snapshot: ScenarioSnapshot | null | undefin
     const snap = snapshotStationAt(snapshot, s.location);
     const name = shortStationName(s.name);
     const parked = board.teams
-      .filter((t) => t.station === s.id && isParked(board, t))
+      .filter((t) => parkedStationId(t) === s.id && isParked(board, t))
       .map((t) => t.id)
       .sort();
     const head = snap ? `${name} · ${snap.engines_available}/${snap.engines_total}` : name;
@@ -314,6 +338,24 @@ function buildAttackLines(board: Board, selection: BoardSelection | null) {
   return { lines, points };
 }
 
+/** Roads closed to the selected unit's class, or (toggle) to any class on the board. */
+function buildClosedRoads(board: Board, input: BoardLayerInput): Feature[] {
+  const roads = input.closedRoads;
+  if (!roads) return [];
+  const team = input.selection?.kind === "team" ? board.teams.find((t) => t.id === input.selection?.id) : undefined;
+  const classOf = (kind: keyof typeof GROUND_APPARATUS) => GROUND_APPARATUS[kind].access as AccessClassWire;
+  let classes: AccessClassWire[];
+  if (team) classes = [classOf(team.kind)];
+  else if (input.showClosedRoads) classes = [...new Set(board.teams.map((t) => classOf(t.kind)))];
+  else return [];
+  const out: Feature[] = [];
+  for (const f of roads.features) {
+    const rule = classes.map((c) => f.properties.closed[c]).find(Boolean);
+    if (rule) out.push(lineFeature(f.geometry.coordinates as LonLat[], { rule, reason: f.properties.reason }));
+  }
+  return out;
+}
+
 function buildSelection(sel: BoardSelection | null, board: Board, fanned: Map<string, LonLat>): { areas: Feature[]; points: Feature[] } {
   const none = { areas: [], points: [] };
   if (!sel) return none;
@@ -342,7 +384,7 @@ function selectionCenter(sel: BoardSelection, board: Board): LonLat | null {
 
 const SOURCES = [
   "bd-zones", "bd-zone-labels", "bd-routes", "bd-fires", "bd-fire-labels", "bd-team-lines", "bd-teams",
-  "bd-stations", "bd-dest", "bd-sel-area", "bd-sel-point", "bd-evac", "bd-attack-lines", "bd-attack-points",
+  "bd-stations", "bd-dest", "bd-sel-area", "bd-sel-point", "bd-evac", "bd-attack-lines", "bd-attack-points", "bd-no-truck",
 ];
 const HATCH_IMAGE = "bd-fire-hatch";
 /** Fire station marker, the red of the 3D firehouses. */
@@ -416,6 +458,12 @@ function installLayers(map: MapLibreMap, beforeId: string): string[] {
     "line-width": STATE_MATCH({ overrun: 3, ordered: 2.5, threatened: 2, quiet: 0.6 }),
     "line-opacity": 0.95,
   } });
+  add({ id: "bd-no-truck-casing", type: "line", source: "bd-no-truck", layout: { "line-cap": "round" }, paint: {
+    "line-color": BOARD_COLOR.halo, "line-width": 5, "line-opacity": 0.8,
+  } });
+  add({ id: "bd-no-truck", type: "line", source: "bd-no-truck", paint: {
+    "line-color": BOARD_COLOR.noTruck, "line-width": 2.5, "line-dasharray": [1, 1.2],
+  } });
   add({ id: "bd-sel-area", type: "line", source: "bd-sel-area", layout: { "line-join": "round" }, paint: { "line-color": MAP_COLOR.selection, "line-width": 4.5 } });
   // Evacuation routes: colour and label by simulated delay band, width by the zone's vehicles on the road.
   add({ id: "bd-routes", type: "line", source: "bd-routes", layout: { "line-join": "round" }, paint: {
@@ -459,8 +507,8 @@ function installLayers(map: MapLibreMap, beforeId: string): string[] {
   add({ id: "bd-team-lines", type: "line", source: "bd-team-lines", paint: {
     "line-color": MAP_COLOR.responder,
     "line-width": 1.5,
-    "line-opacity": ["match", ["get", "status"], "returning", 0.6, 1] as never,
-    "line-dasharray": ["match", ["get", "status"], "returning", ["literal", [0.5, 2]], ["literal", [1.5, 1.5]]] as never,
+    "line-opacity": ["match", ["get", "status"], ["returning", "moving_up"], 0.6, 1] as never,
+    "line-dasharray": ["match", ["get", "status"], ["returning", "moving_up"], ["literal", [0.5, 2]], ["literal", [1.5, 1.5]]] as never,
   } });
   // A station is one marker: red with the number of units parked there, or a small ring when none are.
   add({ id: "bd-stations", type: "circle", source: "bd-stations", paint: {
@@ -490,8 +538,8 @@ function installLayers(map: MapLibreMap, beforeId: string): string[] {
     "circle-radius": 6,
     "circle-color": MAP_COLOR.responder,
     "circle-stroke-color": "#FFFFFF",
-    "circle-stroke-width": ["match", ["get", "status"], ["en_route", "returning"], 1, 2] as never,
-    "circle-opacity": ["match", ["get", "status"], "en_route", 0.75, "returning", 0.55, 1] as never,
+    "circle-stroke-width": ["match", ["get", "status"], ["en_route", "returning", "moving_up"], 1, 2] as never,
+    "circle-opacity": ["match", ["get", "status"], "en_route", 0.75, ["returning", "moving_up"], 0.55, 1] as never,
   } });
   add({ id: "bd-team-labels", type: "symbol", source: "bd-teams",
     layout: { visibility: "none", "text-field": ["get", "id"], "text-font": FONT, "text-size": 11, "text-offset": [0, -1], "text-anchor": "bottom", "text-allow-overlap": true },
@@ -582,6 +630,7 @@ export function attachBoardLayers(
       setData("bd-dest", r.dests);
       setData("bd-sel-area", sel.areas);
       setData("bd-sel-point", sel.points);
+      setData("bd-no-truck", buildClosedRoads(board, input));
       // Move the camera only when the selection changes, not on each board update.
       const key = input.selection ? `${input.selection.kind}:${input.selection.id}` : null;
       if (key !== lastSelKey && input.selection) {

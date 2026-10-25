@@ -14,7 +14,7 @@ from pymongo import ReturnDocument
 from pymongo.errors import DuplicateKeyError
 from rest_framework.response import Response
 
-from . import aar, board, controller, incidents, twin_service
+from . import aar, board, controller, incidents, twin_service, virtual_people
 from . import impact as impact_mod
 from .auth import Principal, client_ip, issue_token, live_view, rate_limited, secret_matches
 from .common import (
@@ -939,16 +939,23 @@ def checkin_help(request, checkin_id: str, principal: Principal):
     return ok({"checkin": checkin_json(stored)})
 
 
-@live_view(["POST", "DELETE"], roles=["responder"])
+@live_view(["POST", "DELETE"], roles=["civilian", "responder"])
 def my_location(request, principal: Principal):
+    """Latest phone position. Always kept on the device document (`location`, for the controller's
+    participants list); a responder's also feeds `live_responder_locations` (task routing)."""
     incident_id = principal.incident_id or controller_incident()
     locations = col("live_responder_locations")
+    devices = col("live_devices")
     if request.method == "DELETE":
+        devices.update_one({"party_key": principal.party_key}, {"$unset": {"location": ""}})
         locations.delete_one({"incident_id": incident_id, "party_key": principal.party_key})
         return Response(status=204, headers={"Cache-Control": "no-store"})
     code = "invalid_location"
     body = json_body(request, code)
-    coord = parse_coord(body.get("coord"), "coord", code)
+    raw = body.get("coord")
+    if raw is None and "lon" in body and "lat" in body:
+        raw = [body.get("lon"), body.get("lat")]
+    coord = parse_coord(raw, "coord", code)
     accuracy = body.get("accuracy_m")
     if accuracy is not None and (not _bool_number(accuracy) or accuracy < 0):
         return error(400, code, "`accuracy_m` must be a nonnegative number or null.")
@@ -958,6 +965,16 @@ def my_location(request, principal: Principal):
         return error(400, code, "`at` is in the future.")
     if now - at > timedelta(seconds=RESPONDER_LOCATION_TTL_S):
         return error(400, code, "`at` is older than the location expiry.")
+    devices.update_one(
+        {"party_key": principal.party_key},
+        {"$set": {"location": {
+            "coord": [coord[0], coord[1]],
+            "accuracy_m": float(accuracy) if accuracy is not None else None,
+            "at": at,
+        }, "last_seen_at": now}},
+    )
+    if principal.role != "responder":
+        return Response(status=204, headers={"Cache-Control": "no-store"})
     locations.update_one(
         {"incident_id": incident_id, "party_key": principal.party_key},
         {
@@ -1046,7 +1063,8 @@ def _checkin_summary(incident_id: str) -> dict[str, Any]:
     ]
     by_zone.sort(key=lambda r: r["zone_id"])
     need_help = [
-        {"id": d["id"], "zone_id": d.get("zone_id"), "coord": d.get("coord"), "at": iso(d["at"]), "help": help_json(d)}
+        {"id": d["id"], "zone_id": d.get("zone_id"), "coord": d.get("coord"), "at": iso(d["at"]), "help": help_json(d),
+         "simulated": bool(d.get("simulated"))}
         for d in col("live_checkins")
         .find({"incident_id": incident_id, "status": "need_help", "help.status": {"$ne": "resolved"}})
         .sort("at", -1)
@@ -1059,6 +1077,7 @@ def command(request, incident_id: str, principal: Principal):
     twin_service.warm(incident_id)
     snapshot = load_snapshot(incident_id, wall_now())
     controller.maybe_auto_replan(snapshot)
+    virtual_people.tick_in_background(incident_id, snapshot)  # simulated people act on the drill clock
     index, now = snapshot.index, snapshot.now
     locations = list(col("live_responder_locations").find({"incident_id": incident_id, "expires_at": {"$gt": now}}))
     simulated = {
@@ -1254,6 +1273,15 @@ def _twin_unavailable(exc: twin_service.TwinUnavailable) -> Response:
 def twin(request, incident_id: str, principal: Principal):
     try:
         return ok(twin_service.monitor(load_snapshot(incident_id, wall_now())))
+    except twin_service.TwinUnavailable as exc:
+        return _twin_unavailable(exc)
+
+
+@live_view(["GET"], roles=["controller"])
+def twin_people(request, incident_id: str, principal: Principal):
+    """Estimated people of the simulated twin (docs/twin-api.md "People snapshot")."""
+    try:
+        return ok(twin_service.people(load_snapshot(incident_id, wall_now())))
     except twin_service.TwinUnavailable as exc:
         return _twin_unavailable(exc)
 

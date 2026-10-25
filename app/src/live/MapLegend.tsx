@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { EvidenceTag } from "../ui";
 import { BOARD_COLOR } from "../demo/boardMapLayers";
 import { LEVEL_COLOR, MAP_COLOR } from "./CommandMap";
+import { PEOPLE_SWATCH } from "./people";
 
 const zoneSw = (color: string, opacity: number, width = 2): ReactNode => (
   <svg viewBox="0 0 20 14" aria-hidden="true">
@@ -49,7 +50,7 @@ const BOARD_ROWS: { key: string; label: string; swatch: ReactNode }[] = [
   },
   {
     key: "bd-returning",
-    label: "Unit returning to station (sim)",
+    label: "Unit returning to its station or moving up to cover another, on its road (sim)",
     swatch: (
       <svg viewBox="0 0 20 14" aria-hidden="true">
         <line x1="1" y1="7" x2="19" y2="7" stroke={MAP_COLOR.responder} strokeOpacity="0.6" strokeWidth="1.5" strokeDasharray="0.5 2" />
@@ -64,6 +65,16 @@ const BOARD_ROWS: { key: string; label: string; swatch: ReactNode }[] = [
       <svg viewBox="0 0 20 14" aria-hidden="true">
         <line x1="1" y1="7" x2="19" y2="7" stroke={MAP_COLOR.responder} strokeWidth="1.5" strokeDasharray="2 2" />
         <circle cx="6" cy="7" r="4.5" fill={MAP_COLOR.responder} fillOpacity="0.75" stroke="#fff" strokeWidth="1" />
+      </svg>
+    ),
+  },
+  {
+    key: "bd-no-truck",
+    label: "Road the unit's truck can't use (rules R01-R12)",
+    swatch: (
+      <svg viewBox="0 0 20 14" aria-hidden="true">
+        <line x1="1" y1="7" x2="19" y2="7" stroke="#fff" strokeWidth="5" />
+        <line x1="1" y1="7" x2="19" y2="7" stroke={BOARD_COLOR.noTruck} strokeWidth="2.5" strokeDasharray="2.5 3" />
       </svg>
     ),
   },
@@ -101,7 +112,7 @@ const BOARD_ROWS: { key: string; label: string; swatch: ReactNode }[] = [
   },
   {
     key: "bd-station",
-    label: "Fire station; the number is units parked there (sim)",
+    label: "Fire station; the number is units parked there: free, resting or out of service (sim)",
     swatch: (
       <svg viewBox="0 0 20 14" aria-hidden="true">
         <circle cx="10" cy="7" r="6" fill="#C62828" stroke="#fff" strokeWidth="1.5" />
@@ -253,7 +264,25 @@ const ROWS: { key: string; label: string; swatch: ReactNode }[] = [
   },
 ];
 
-export default function MapLegend({ record = true, board = false }: { record?: boolean; board?: boolean }) {
+/** The simulated people layer's marks (live/people/peopleLayer.ts); its summary strip has the counts. */
+const PEOPLE_ROWS: { key: keyof typeof PEOPLE_SWATCH; label: string }[] = [
+  { key: "home", label: "Residents still home, per area (sim)" },
+  { key: "driving", label: "People driving out (sim)" },
+  { key: "queued", label: "People waiting in traffic (sim)" },
+  { key: "stuck", label: "People stuck: long queue, closed road, fire or no way out (sim)" },
+  { key: "out", label: "People who reached an exit or shelter (sim)" },
+];
+
+export default function MapLegend({
+  record = true,
+  board = false,
+  people = false,
+}: {
+  record?: boolean;
+  board?: boolean;
+  /** The people layer is on: list its marks. */
+  people?: boolean;
+}) {
   return (
     <details className="lc-legend">
       <summary>Legend</summary>
@@ -272,6 +301,19 @@ export default function MapLegend({ record = true, board = false }: { record?: b
             {BOARD_ROWS.map((r) => (
               <li key={r.key}>
                 <span className="lc-legend-sw">{r.swatch}</span>
+                {r.label}
+              </li>
+            ))}
+          </>
+        )}
+        {people && (
+          <>
+            <li className="lc-legend-group">
+              People <EvidenceTag kind="simulated" />
+            </li>
+            {PEOPLE_ROWS.map((r) => (
+              <li key={`ppl-${r.key}`}>
+                <span className="lc-legend-sw">{PEOPLE_SWATCH[r.key]}</span>
                 {r.label}
               </li>
             ))}

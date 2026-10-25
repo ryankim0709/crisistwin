@@ -12,8 +12,10 @@ import {
   fetchRegionCatalog,
   fetchRegionLandscape,
 } from "../fire/landscapePackage";
-import { loadLandscape, type LandscapeGrid, type MercatorBox } from "../fire/landscape";
+import { type LandscapeGrid, type MercatorBox } from "../fire/landscape";
+import { loadLandscapeCached } from "../fire/landscapeCache";
 import { CALIFORNIA_REGIONS, type LandscapeRegion } from "../fire/regions";
+import { boardCellMetersFor } from "../fire/boardSize";
 import { cellAt } from "../fire/spread";
 import type { StudioScenario } from "./contracts";
 
@@ -21,12 +23,30 @@ import type { StudioScenario } from "./contracts";
 export const STUDIO_DEFAULT_REGION_ID = "berkeley-hills-tilden";
 const REGION_STORAGE_KEY = "crisistwin.studio.region";
 
+/**
+ * Studio board half-widths on offer (ground metres); null is the region's own board. The choice
+ * lives in the shared world (`region.radiusMeters`, docs/shared-world.md), so every tab follows it.
+ */
+export const STUDIO_BOARD_SIZES: readonly { radiusMeters: number | null; label: string }[] = [
+  { radiusMeters: null, label: "Region default (~7 km)" },
+  ...[10, 15, 20, 30, 45, 60].map((km) => ({
+    radiusMeters: km * 1000,
+    label: `About ${km * 2} \u00d7 ${km * 2} km`,
+  })),
+];
+/** A world radius at or above this is a chosen size; below it the region's own board is used. */
+export const STUDIO_CUSTOM_RADIUS_METERS = 10_000;
+
+export function studioRadiusOverride(worldRadiusMeters: number): number | null {
+  return worldRadiusMeters >= STUDIO_CUSTOM_RADIUS_METERS ? worldRadiusMeters : null;
+}
+
 export type RegionCatalogState =
   { status: "loading" } | { status: "ready"; ids: ReadonlySet<string> } | { status: "error" };
 
 export type RegionBoardState =
   | { status: "loading"; storedUnavailable: boolean }
-  | { status: "ready"; grid: LandscapeGrid; source: "stored" | "live" }
+  | { status: "ready"; grid: LandscapeGrid; source: "stored" | "cached" | "live" }
   | { status: "error"; message: string };
 
 export function findRegion(id: string): LandscapeRegion | null {
@@ -71,7 +91,7 @@ export function gridCoversScenario(grid: LandscapeGrid, scenario: StudioScenario
   return enabled.length > 0 && enabled.every((ignition) => cellAt(grid, ignition.location) >= 0);
 }
 
-export function useRegionBoard(regionId: string, attempt: number) {
+export function useRegionBoard(regionId: string, attempt: number, radiusMeters: number | null = null) {
   const [catalog, setCatalog] = useState<RegionCatalogState>({ status: "loading" });
   const [board, setBoard] = useState<RegionBoardState>({
     status: "loading",
@@ -99,7 +119,19 @@ export function useRegionBoard(regionId: string, attempt: number) {
     const stale = () => controller.signal.aborted || request !== requestRef.current;
     setBoard({ status: "loading", storedUnavailable: false });
 
-    fetchRegionLandscape(region.id, controller.signal)
+    // A chosen size always loads live around the region centre (cached server-side after the first time).
+    const custom = radiusMeters !== null
+      ? loadLandscapeCached(
+          region.center.longitude,
+          region.center.latitude,
+          radiusMeters,
+          controller.signal,
+          { cellMeters: boardCellMetersFor(radiusMeters) },
+        ).then(({ grid, source }) => {
+          if (!stale()) setBoard({ status: "ready", grid, source: source === "cache" ? "cached" : "live" });
+        })
+      : null;
+    (custom ?? fetchRegionLandscape(region.id, controller.signal)
       .then(
         ({ grid }) => {
           if (!stale()) setBoard({ status: "ready", grid, source: "stored" });
@@ -111,17 +143,17 @@ export function useRegionBoard(regionId: string, attempt: number) {
             throw cause;
           }
           setBoard({ status: "loading", storedUnavailable: true });
-          return loadLandscape(
+          return loadLandscapeCached(
             region.center.longitude,
             region.center.latitude,
             region.radiusMeters,
             controller.signal,
             { cellMeters: region.cellMeters },
-          ).then((grid) => {
-            if (!stale()) setBoard({ status: "ready", grid, source: "live" });
+          ).then(({ grid, source }) => {
+            if (!stale()) setBoard({ status: "ready", grid, source: source === "cache" ? "cached" : "live" });
           });
         },
-      )
+      ))
       .catch((cause: unknown) => {
         if (stale()) return;
         setBoard({
@@ -130,7 +162,7 @@ export function useRegionBoard(regionId: string, attempt: number) {
         });
       });
     return () => controller.abort();
-  }, [regionId, attempt]);
+  }, [regionId, attempt, radiusMeters]);
 
   return { catalog, board };
 }

@@ -26,6 +26,8 @@ import {
 import type { Selection } from "./DemoMap";
 import { zoneSnapshotItems } from "../live/ScenarioResources";
 import type { ScenarioSnapshot } from "../live/scenarioSnapshot";
+import { fireResponse, fireTimeline, reachText, reportText, unitAccessText, wallClock } from "./boardResponse";
+import { TACTIC_LABEL } from "../response/containment";
 import { ORDER_COMPLIANCE, SHADOW_SHARE, holdsFlameFeet, kindLabel } from "./realism";
 
 const SAFETY: Record<RouteOption["safety"], string> = {
@@ -95,6 +97,29 @@ function AttackPositions({ board, fire, actions }: { board: Board; fire: Fire; a
   );
 }
 
+const DISPATCH_LEVEL: Record<string, string> = { low: "Low", medium: "Medium", high: "High" };
+const IA_STATE: Record<string, string> = { in_progress: "In progress", contained: "Caught", failed: "Failed, extended attack" };
+const TIER_LABEL: Record<string, string> = { closest: "Closest resource", mutual_aid: "Mutual aid", state: "State resource" };
+
+/** The rule-based response on this fire (boardResponse.ts): run card level, tactic, initial attack, aircraft. */
+function responseFacts(board: Board, fire: Fire): { label: string; value: string }[] {
+  const fr = fireResponse(board, fire);
+  if (!fr) return [];
+  const air = board.response.aircraft.filter((a) => a.fireId === fire.id);
+  const orders = board.response.orders.filter((o) => o.fireId === fire.id && o.status === "pending");
+  return [
+    { label: "Dispatch level", value: `${DISPATCH_LEVEL[fr.level] ?? fr.level} run card${fr.dispatched ? "" : " (not dispatched yet)"}` },
+    { label: "Tactic", value: TACTIC_LABEL[fr.tactic] },
+    { label: "Initial attack", value: IA_STATE[fr.ia] ?? fr.ia },
+    ...(air.length
+      ? [{ label: "Aircraft", value: air.map((a) => `${a.id} (${a.status.replace(/_/g, " ")}, ${a.drops} drops)`).join(", ") }]
+      : []),
+    ...(orders.length
+      ? [{ label: "On order", value: orders.map((o) => `${o.resource.replace(/_/g, " ")} (${o.tier.replace(/_/g, " ")}, ready ${wallClock(board, o.readyAt)})`).join(", ") }]
+      : []),
+  ];
+}
+
 function FireDetail({ board, id, actions }: { board: Board; id: string; actions: PanelActions }) {
   const fire = board.fires.find((f) => f.id === id);
   if (!fire) return <p className="lc-dim">This fire has left the board.</p>;
@@ -111,6 +136,10 @@ function FireDetail({ board, id, actions }: { board: Board; id: string; actions:
         <Tag tone={FIRE_STATUS[fire.status].tone}>{FIRE_STATUS[fire.status].label}</Tag>
         <Tag>{SOURCE_LABEL[fire.source]}</Tag>
       </div>
+      <p className="dm-note">
+        {fireTimeline(board, fire)}
+        {reportText(board, fire) ? <><br />{reportText(board, fire)}</> : null}
+      </p>
       <Facts
         items={[
           { label: "Started", value: simClock(fire.ignitedAt) },
@@ -141,6 +170,12 @@ function FireDetail({ board, id, actions }: { board: Board; id: string; actions:
           },
         ]}
       />
+      {fire.status !== "out" && responseFacts(board, fire).length ? (
+        <>
+          <p className="dm-subhead">Response (rule-based, simulated)</p>
+          <Facts items={responseFacts(board, fire)} />
+        </>
+      ) : null}
       {teams.length ? (
         <ul className="dm-mini-list">
           {teams.map((t) => (
@@ -150,6 +185,7 @@ function FireDetail({ board, id, actions }: { board: Board; id: string; actions:
                 {t.lineId ? `, line at ${board.lines.find((l) => l.id === t.lineId)?.plan.id ?? "a position"}` : ""}
                 {t.travel === "pending" ? ", waiting for its road route" : ""}
                 {t.status === "en_route" && t.arriveAt !== null ? `, ${Math.ceil(t.arriveAt - board.minute)} min` : ""}
+                {t.status === "on_scene" && t.workMode !== null ? <span className="lc-dim"> {unitAccessText(board, t)}</span> : null}
               </span>
               <Button size="sm" variant="ghost" onClick={() => actions.releaseTeam(t.id)}>
                 Release
@@ -186,11 +222,13 @@ function FireDetail({ board, id, actions }: { board: Board; id: string; actions:
           fire out resolves {fire.reportIds.length === 1 ? "it" : "them"} on Live command.
         </p>
       ) : null}
+      {reachText(board, fire) ? <Notice tone="warning">{reachText(board, fire)}</Notice> : null}
       <p className="dm-note">
         Spread from the simulator's cell solver (as /fire and Simulation Studio); head figures are its Rothermel values at the
         fire's leading front cell{fire.noSpread ? `. This fire cannot spread: ${fire.noSpread}` : ""}. Units build line at their sourced rate for this
-        fuel; the fire is contained when the line reaches its perimeter (the footprint's edge facing unburned fuel) and the head
-        flame is within what their line holds{holds > 0 ? ` (${holds} ft now)` : ""}{fire.rates.crowning ? "; the head is crowning, so no line holds it" : ""}.
+        fuel once they reach the edge from where their road ends (hose within reach, otherwise on foot); the fire is contained
+        when the line reaches its perimeter (the footprint's edge facing unburned fuel) and the head flame is within what their
+        line holds{holds > 0 ? ` (${holds} ft now)` : ""}{fire.rates.crowning ? "; the head is crowning, so no line holds it" : ""}. Simulated.
       </p>
     </>
   );
@@ -317,9 +355,20 @@ function TeamDetail({ board, id, actions }: { board: Board; id: string; actions:
           { label: "Fire", value: team.fireId ?? "None" },
           { label: "Type", value: kindLabel(team.kind) },
           { label: "Home base", value: station ? `${station.name}${station.type === "synthetic" ? " (synthetic)" : ""}` : "None" },
+          { label: "Department", value: `${board.response.departments.find((d) => d.id === team.department)?.name ?? team.department} (${TIER_LABEL[team.tier] ?? team.tier})` },
+          ...(team.coverStation
+            ? [{ label: "Covering", value: board.stations.find((s) => s.id === team.coverStation)?.name ?? team.coverStation }]
+            : []),
+          ...(team.waterGallons !== null ? [{ label: "Water on board", value: `${nf(team.waterGallons)} gal` }] : []),
+          ...((team.status === "resting" || team.status === "refilling") && team.restUntil !== null
+            ? [{ label: team.status === "resting" ? "Rested at" : "Refilled at", value: wallClock(board, team.restUntil) }]
+            : []),
+          ...(team.status === "out_of_service" && team.outOfServiceUntil !== null
+            ? [{ label: "Back in service", value: wallClock(board, team.outOfServiceUntil) }]
+            : []),
           { label: "Line", value: `${unitLineOn(board, team, fire).toFixed(1)} m/min here` },
           { label: "Holds flames up to", value: `${holdsFlameFeet(team.kind)} ft` },
-          ...(team.status === "en_route" || team.status === "returning"
+          ...(team.status === "en_route" || team.status === "returning" || team.status === "moving_up"
             ? [
                 {
                   label: "Travel",
@@ -327,17 +376,21 @@ function TeamDetail({ board, id, actions }: { board: Board; id: string; actions:
                     team.travel === "pending"
                       ? team.status === "returning"
                         ? "Waiting where it is for its road route home"
-                        : "Waiting for its road route"
+                        : team.status === "moving_up"
+                          ? "Waiting where it is for its road route to the station it covers"
+                          : "Waiting for its road route"
                       : team.travel === "road_offboard"
                         ? "Road network, with an off-road leg"
-                        : "Road network",
+                        : team.travel === "straight_line"
+                          ? "Time estimated from straight-line distance (no road route)"
+                          : "Road network",
                 },
               ]
             : []),
-          ...(team.status === "returning"
+          ...(team.status === "returning" || team.status === "moving_up"
             ? [
                 {
-                  label: "Back at station",
+                  label: team.status === "moving_up" ? "At the covered station" : "Back at station",
                   value:
                     team.travel === "pending" || team.arriveAt === null
                       ? "Not known yet (no road route yet)"
@@ -347,7 +400,7 @@ function TeamDetail({ board, id, actions }: { board: Board; id: string; actions:
             : []),
         ]}
       />
-      {team.status === "en_route" || team.status === "on_scene" ? (
+      {team.status === "en_route" || team.status === "on_scene" || team.status === "refilling" ? (
         <div className="dm-actions">
           <Button size="sm" variant="secondary" onClick={() => actions.releaseTeam(team.id)}>
             Release {team.id}

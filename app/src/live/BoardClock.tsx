@@ -1,6 +1,8 @@
-import { useState } from "react";
-import { Button } from "../ui";
+import { useEffect, useState } from "react";
+import { Button, SegmentedControl } from "../ui";
 import { simClock } from "../demo/format";
+import { boardCellMetersFor } from "../fire/boardSize";
+import { readinessLabel, useCachedBoards } from "../fire/useCachedBoards";
 import { BOARD_SPEED_STEPS, type CommandBoard } from "../demo/useCommandBoard";
 
 /** "60×" plus what it means in simulated time. */
@@ -33,8 +35,72 @@ export function BoardSpeedSlider({ board: cb }: { board: CommandBoard }) {
   );
 }
 
+const BOARD_SIZES = [15, 30, 45, 60].map((km) => ({
+  value: String(km),
+  label: `${km} km`,
+  title: `Board about ${km * 2} \u00d7 ${km * 2} km (${km} km from the centre to each edge)`,
+}));
+
+/** The drill environment's centre (GET /api/demo/environment), read once; null until known. */
+let drillCentre: Promise<[number, number] | null> | null = null;
+function useDrillCentre(): [number, number] | null {
+  const [centre, setCentre] = useState<[number, number] | null>(null);
+  useEffect(() => {
+    drillCentre ??= fetch("/api/demo/environment")
+      .then((r) => (r.ok ? (r.json() as Promise<{ center?: [number, number] }>) : null))
+      .then((body) => body?.center ?? null)
+      .catch(() => null);
+    let live = true;
+    void drillCentre.then((c) => live && setCentre(c));
+    return () => {
+      live = false;
+    };
+  }, []);
+  return centre;
+}
+
 /**
- * The simulated board's clock in the sidebar: board time, pause, and a speed-up slider. Faster
+ * The board's area size (km from the centre to each edge, stored in the shared world), with
+ * whether each size's landscape is already cached. Used in the sidebar's board clock and in
+ * BoardControls' Conditions popover.
+ */
+export function BoardSizeControl({ board: cb }: { board: CommandBoard }) {
+  const centre = useDrillCentre();
+  const request = (km: number) => ({
+    longitude: centre?.[0] ?? 0,
+    latitude: centre?.[1] ?? 0,
+    radiusMeters: km * 1000,
+    cellMeters: boardCellMetersFor(km * 1000),
+  });
+  const sizeReady = useCachedBoards(centre ? BOARD_SIZES.map((s) => request(Number(s.value))) : [], cb.boardLoading);
+  const ready = (km: number) => centre !== null && sizeReady(request(km));
+  return (
+    <div className="lc-board-size" role="group" aria-label="Board size">
+      <span className="lc-board-label">Board size</span>
+      <SegmentedControl
+        label="Board size, km from the centre to each edge"
+        options={BOARD_SIZES.map((s) => ({
+          ...s,
+          title: `${s.title}. ${readinessLabel(ready(Number(s.value)), Number(s.value) * 1000, boardCellMetersFor(Number(s.value) * 1000))}`,
+        }))}
+        value={String(cb.boardRadius / 1000)}
+        onChange={(value) => cb.setBoardRadius(Number(value) * 1000)}
+      />
+      <span className="lc-dim">
+        {cb.boardLoading
+          ? "Loading the board\u2026"
+          : `About ${cb.boardRadius / 500} \u00d7 ${cb.boardRadius / 500} km, ${boardCellMetersFor(cb.boardRadius)} m cells. ${readinessLabel(
+              ready(cb.boardRadius / 1000),
+              cb.boardRadius,
+              boardCellMetersFor(cb.boardRadius),
+            )}.`}
+      </span>
+    </div>
+  );
+}
+
+/**
+ * The simulated board's clock in the sidebar: board time, pause, a speed-up slider and the board size. Faster
  * playback only shows simulated minutes sooner; the clock still lands on every fire re-solve and
  * ignition, so the fire model's results do not change with speed.
  */
@@ -54,6 +120,7 @@ export default function BoardClock({ board: cb }: { board: CommandBoard }) {
         </Button>
       </div>
       <BoardSpeedSlider board={cb} />
+      <BoardSizeControl board={cb} />
       {confirming ? (
         <div className="lc-board-reset" role="group" aria-label="Confirm reset">
           <span className="lc-board-reset-text">

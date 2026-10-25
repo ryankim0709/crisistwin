@@ -15,6 +15,11 @@ import { describeImprovement } from "./evacuationAdvice";
 import type { EvacuationOptimization } from "./evacuationOptimizer";
 import type { EvacuationOptimizerState } from "./useEvacuationOptimizer";
 import type { SimStatePublishStatus } from "./useSimStatePublisher";
+import {
+  HOUSEHOLD_BEHAVIOR_OPTIONS,
+  householdBehaviorText,
+  type HouseholdBehaviorMode,
+} from "./householdBehavior";
 
 /** Which plan the 3D view plays: the default policy or the optimiser's best. */
 export type PlayPlan = "fastest" | "optimized";
@@ -51,6 +56,9 @@ export interface EvacuationPanelProps {
   publish: boolean;
   onPublish: (on: boolean) => void;
   publishStatus: SimStatePublishStatus;
+  /** How households respond to the order (studio/householdBehavior.ts); hidden when absent. */
+  behavior?: HouseholdBehaviorMode;
+  onBehavior?: (mode: HouseholdBehaviorMode) => void;
 }
 
 function publishText(status: SimStatePublishStatus): string {
@@ -85,7 +93,8 @@ function rows(summary: EvacuationSummary) {
   return {
     safe: final.safe,
     caught: final.caught,
-    out: final.waiting + final.onRoad,
+    out: final.waiting - (final.staying ?? 0) + final.onRoad,
+    staying: final.staying ?? 0,
     cutOff: summary.cutOffHomes,
     hours: summary.householdHoursEvacuating,
   };
@@ -93,7 +102,8 @@ function rows(summary: EvacuationSummary) {
 
 function liveLine(totals: Totals | undefined, minute: number): string | null {
   if (!totals) return null;
-  return `At ${formatElapsed(minute)}: ${totals.waiting} waiting, ${totals.onRoad} on the road, ${totals.safe} out, ${totals.caught} caught.`;
+  const staying = totals.staying ?? 0;
+  return `At ${formatElapsed(minute)}: ${totals.waiting - staying} waiting, ${totals.onRoad} on the road, ${totals.safe} out, ${totals.caught} caught${staying ? `, ${staying} staying home` : ""}.`;
 }
 
 function OptimizedPlan({
@@ -277,6 +287,8 @@ export default function EvacuationPanel(props: EvacuationPanelProps) {
     publish,
     onPublish,
     publishStatus,
+    behavior,
+    onBehavior,
   } = props;
   const ready = streets.status === "ready";
   const playingOptimized = playPlan === "optimized" && optimizer.status === "ready";
@@ -332,6 +344,22 @@ export default function EvacuationPanel(props: EvacuationPanelProps) {
               ))}
             </select>
           </Field>
+
+          {behavior && onBehavior && (
+            <Field label="Households" hint={householdBehaviorText(behavior)}>
+              <select
+                className="ui-input"
+                value={behavior}
+                onChange={(event) => onBehavior(event.target.value as HouseholdBehaviorMode)}
+              >
+                {HOUSEHOLD_BEHAVIOR_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </Field>
+          )}
 
           <div className="studio-evac__tool">
             <Button
@@ -409,10 +437,18 @@ export default function EvacuationPanel(props: EvacuationPanelProps) {
                         ["Reached an exit", "safe", 0],
                         ["Caught by the fire", "caught", 0],
                         ["Still evacuating", "out", 0],
+                        ["Stayed home (did not leave)", "staying", 0],
                         ["Cut off (no open exit)", "cutOff", 0],
                         ["Household-hours evacuating", "hours", 1],
                       ] as const
-                    ).map(([label, key, digits]) => {
+                    )
+                      .filter(
+                        ([, key]) =>
+                          key !== "staying" ||
+                          rows(baseline).staying > 0 ||
+                          (withClosures !== null && rows(withClosures).staying > 0),
+                      )
+                      .map(([label, key, digits]) => {
                       const base = rows(baseline)[key];
                       const change = withClosures
                         ? delta(rows(withClosures)[key], base, digits)

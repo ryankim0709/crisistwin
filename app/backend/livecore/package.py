@@ -34,6 +34,7 @@ from typing import Any
 
 from .drill import Drill, load_drill, parse_time
 from .geo import to_geojson, to_multipolygon
+from .road_attrs import ATTR_TAG_KEYS
 
 RUN_KIND = "crisistwin_studio_run"
 RUN_SCHEMA_VERSION = 1
@@ -486,6 +487,7 @@ def _roads(area: Mapping[str, Any]) -> list[dict[str, Any]]:
     names = area.get("names") or []
     per_lane = dict((area.get("assumptions") or {}).get("capacityPerLaneVph") or {})
     default_lane = float(per_lane.get("other") or 600)
+    tag_sets = [t for t in (area.get("tagSets") or []) if isinstance(t, Mapping)]
     out = []
     for i, edge in enumerate(area["edges"]):
         a, b, length, cls, kph, cap, oneway, name_i, geom = edge[:9]
@@ -502,6 +504,12 @@ def _roads(area: Mapping[str, Any]) -> list[dict[str, Any]]:
             "speed_kph": float(kph), "capacity_veh_per_hour": float(cap), "length_m": float(length),
             "bridge": bridge,
         }
+        # dispatch-area/4: index 10 is the way's OSM tag set; keep what the road access rules read.
+        tag_i = edge[10] if len(edge) > 10 else None
+        if isinstance(tag_i, int) and 0 <= tag_i < len(tag_sets):
+            tags = {k: str(v) for k, v in tag_sets[tag_i].items() if k in ATTR_TAG_KEYS}
+            if tags:
+                base["tags"] = tags
         out.append({"id": f"e{i}f", "from_node": f"n{a}", "to_node": f"n{b}", **base, "coords": coords})
         if not oneway:
             out.append({"id": f"e{i}r", "from_node": f"n{b}", "to_node": f"n{a}", **base, "coords": coords[::-1]})

@@ -4,7 +4,10 @@
  * what that does to the evacuation. The fire is the studio run's arrival field; closures never
  * change it. See docs/adr/0018-road-closures.md.
  *
- * Policy (deterministic, no randomness):
+ * Households leave on the engine's uniform departure spread, or, with `departureDelays`
+ * (studio/householdBehavior.ts, seeded per home), each after its own delay; some stay home.
+ *
+ * Policy (deterministic; the only randomness is the seeded household draw):
  * - At `orderMinute` every zone the fire has not overrun is ordered to the exit it can reach
  *   fastest at free flow, avoiding closed edges and edges the fire reaches within the engine's
  *   routing lookahead.
@@ -77,6 +80,11 @@ export interface EvacuationInputs {
   crews?: readonly EvacuationCrew[];
   /** Planned exits and waves; the default policy when omitted. */
   plan?: EvacuationPlan;
+  /**
+   * Minutes from a zone's order to each home leaving, Infinity for a household that stays
+   * (studio/householdBehavior.ts); the engine's uniform departure spread when omitted.
+   */
+  departureDelays?: Float32Array;
 }
 
 export interface EvacuationSummary {
@@ -131,6 +139,7 @@ export class EvacuationPolicyRun {
       [],
       inputs.closedEdges,
     );
+    if (inputs.departureDelays) this.engine.setDepartureDelays(inputs.departureDelays);
     this.applyPolicy();
   }
 
@@ -270,7 +279,7 @@ export class EvacuationPolicyRun {
       const done =
         unit.status === "on_scene" &&
         unit.zone !== null &&
-        (engine.zones[unit.zone].status !== "ordered" || engine.zones[unit.zone].atHome === 0);
+        (engine.zones[unit.zone].status !== "ordered" || leavingAtHome(engine, unit.zone) === 0);
       if (unit.status === "available" || unit.status === "returning" || done) idle.push(unit);
     }
     return idle;
@@ -337,7 +346,7 @@ export class EvacuationPolicyRun {
         .filter(
           (zone) =>
             zone.status === "ordered" &&
-            zone.atHome > 0 &&
+            leavingAtHome(engine, zone.index) > 0 &&
             zone.index !== unit.zone &&
             zoneCore[zone.index] > engine.minute + CREW_ZONE_MARGIN_MINUTES,
         )
@@ -345,7 +354,7 @@ export class EvacuationPolicyRun {
           (a, b) =>
             (helpers.get(a.index) ?? 0) - (helpers.get(b.index) ?? 0) ||
             zoneContact[a.index] - zoneContact[b.index] ||
-            b.atHome - a.atHome ||
+            leavingAtHome(engine, b.index) - leavingAtHome(engine, a.index) ||
             a.index - b.index,
         )
         .slice(0, CREW_ZONE_TRIES);
@@ -394,6 +403,11 @@ export class EvacuationPolicyRun {
       else this.stranded.add(zone.index);
     }
   }
+}
+
+/** Households of a zone still at home that will leave (those staying home excluded). */
+function leavingAtHome(engine: DispatchEngine, zone: number): number {
+  return engine.zones[zone].atHome - engine.stayingHomes(zone);
 }
 
 /** Households of zones waiting for their wave (staged, no order yet). */
@@ -479,6 +493,11 @@ export class EvacuationPlayer {
 
   get engine(): DispatchEngine {
     return this.run.engine;
+  }
+
+  /** Zones the policy found no exit for at the order minute. */
+  get cutOff(): ReadonlySet<number> {
+    return this.run.cutOff;
   }
 
   /** Position at whole minute `minute`; true when the engine state changed. */

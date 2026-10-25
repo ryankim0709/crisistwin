@@ -26,6 +26,8 @@ import { NO_SNAPSHOT_LABEL } from "./realism";
 import type { PanelActions } from "./SelectedPanel";
 import { useCrewRoutes } from "./useCrewRoutes";
 import { useDemoAgent } from "./useDemoAgent";
+import { DEFAULT_BOARD_RADIUS_METERS, boardCellMetersFor } from "../fire/boardSize";
+import { useWorld } from "../world/useWorld";
 import { WEATHER_PRESETS, useDemoEnvironmentState, zonesCenter, zonesExtent } from "./useDemoEnvironment";
 import { useDemoRoutes } from "./useDemoRoutes";
 import { useArrivalField } from "./useArrivalField";
@@ -137,11 +139,32 @@ export function useCommandBoard({ token, incidentId, data: commandData }: Comman
   const [weather, setWeather] = useState<string>(WEATHER_PRESETS[0].value);
   const preset = WEATHER_PRESETS.find((p) => p.value === weather) ?? WEATHER_PRESETS[0];
   const zoneCentre = useMemo(() => (data ? zonesCenter(data.zones) : null), [data]);
+  // Board size is the shared world's region radius (docs/shared-world.md); the live board never goes below 15 km.
+  const { world, update: updateWorld } = useWorld();
+  const boardRadius = Math.max(DEFAULT_BOARD_RADIUS_METERS, world.region.radiusMeters);
+  const setBoardRadius = useCallback(
+    (radiusMeters: number) => {
+      void updateWorld({ region: { radiusMeters, cellMeters: boardCellMetersFor(radiusMeters) } }, "live");
+    },
+    [updateWorld],
+  );
   // The zones' half-width sizes the live LANDFIRE landscape when no prebuilt region covers the drill.
   const zonesHalfWidth = useMemo(() => (data ? (zonesExtent(data.zones)?.halfWidthMeters ?? null) : null), [data]);
   const [envAttempt, setEnvAttempt] = useState(0);
-  const environment = useDemoEnvironmentState(preset, incidentId, zoneCentre, zonesHalfWidth, envAttempt);
+  const environment = useDemoEnvironmentState(preset, incidentId, zoneCentre, zonesHalfWidth, envAttempt, boardRadius);
   const env = environment.env;
+
+  // A new board size loads a new landscape: rebuild the board on it once it arrives.
+  const lastRadius = useRef(boardRadius);
+  useEffect(() => {
+    if (lastRadius.current === boardRadius) return;
+    lastRadius.current = boardRadius;
+    boardRef.current = null;
+    setBoard(null);
+    setSelection(null);
+    bump();
+  }, [boardRadius, bump]);
+
   // Simulation Studio's published runs for this incident: the board's only fire source.
   const studio = useStudioFires(data ? token : null, incidentId);
   const studioRef = useRef(studio.data);
@@ -344,6 +367,16 @@ export function useCommandBoard({ token, incidentId, data: commandData }: Comman
       act((b) => applyOrder(b, { type: "order_evacuation", zone_id: zoneId, destination_id: destinationId }, routesRef.current, "you")),
   };
 
+  /** Rule-based response (run cards on new fires, extended-attack orders on IA failure); on by default. */
+  const ruleResponse = board?.response.autoDispatch ?? true;
+  const setRuleResponse = (on: boolean) => {
+    const b = boardRef.current;
+    if (!b) return;
+    b.response.autoDispatch = on;
+    b.response.autoEscalate = on;
+    bump();
+  };
+
   const names = useMemo(() => {
     const m = new Map<string, string>();
     for (const z of data?.zones ?? []) m.set(z.id, z.name);
@@ -380,6 +413,10 @@ export function useCommandBoard({ token, incidentId, data: commandData }: Comman
     // picks the station wind series, which only matters before any Studio fire.
     weather,
     setWeather,
+    boardRadius,
+    setBoardRadius,
+    /** True while the landscape for a new board size is still loading. */
+    boardLoading: env === null,
     windNow,
     // AI commander (monitoring is off by default; Claude is only called while it is on)
     autopilot,
@@ -387,6 +424,11 @@ export function useCommandBoard({ token, incidentId, data: commandData }: Comman
     agent,
     /** The Simulation Studio feed: its last error (404 until the server has the endpoint), whether it has answered. */
     studio: { error: studio.error, loaded: studio.data !== null },
+    /** Alias of fireSolver (one solver hook; why a solve is running, last solve time, last error). */
+    solver: fireSolver,
+    // Rule-based dispatch and escalation (demo/boardResponse.ts)
+    ruleResponse,
+    setRuleResponse,
     // Map interaction
     selection,
     setSelection,

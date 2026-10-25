@@ -725,13 +725,24 @@ needs a shared `coord` (else `400`) and creates a task `{ "kind": "assist", "che
 `done`. `409` when the request is resolved or the check-in is no longer `need_help`. Each
 action is logged in `live_decisions` as `help_<action>` with `checkin_id`.
 
-## Responder location (opt-in)
+## Phone location, name and kind (opt-in)
 
-`POST me/location` (responder only): `{ "coord": [-121.6, 39.76], "accuracy_m": 15, "at": "2026-10-24T18:06:00Z" }`
--> `204`. Upserts the one latest position per responder, expiring after
-`RESPONDER_LOCATION_TTL_S` (900) s. `DELETE me/location` -> `204` removes it at once
-(the phone calls it when sharing is turned off). Phones send at most one update per
-`RESPONDER_LOCATION_MIN_INTERVAL_S` (30) s, foreground only. Civilian tokens get `403`.
+`POST me/location` (civilian or responder): `{ "coord": [-121.6, 39.76], "accuracy_m": 15, "at": "2026-10-24T18:06:00Z" }`
+(`{ "lon", "lat" }` is accepted in place of `coord`) -> `204`. Stores the one latest position on the
+device document (`location`, with `last_seen_at`); a responder's also upserts `live_responder_locations`
+for task routing, expiring after `RESPONDER_LOCATION_TTL_S` (900) s. `DELETE me/location` -> `204`
+removes both at once (the phone calls it when sharing is turned off). The phone shares only while its
+"Share my location" setting is on (default) and location is allowed, foreground only: one post per 45 s,
+sooner after moving 150 m (never under 10 s apart); offline posts are dropped, not queued.
+
+`POST me/profile` (civilian or responder): `{ "name": "Ana", "kind": "resident" }` -> `204`. `name` is an
+optional nickname of at most 24 characters (`""` or null clears it); `kind` is `resident`, `firefighter`
+or `observer` (default resident, firefighter for a responder token). Both keys are optional.
+
+`GET participants` (controller): `{ "participants": [{ party_key, role, kind, name, incident_id,
+simulated, last_seen_at, location: { coord, accuracy_m, at, stale } | null }], "as_of" }` for every
+device seen in the last hour; `location.stale` is true after 900 s. Civilian devices carry
+`incident_id: null` (they follow the active incident).
 
 ## Tasks (v2 additions)
 
@@ -864,7 +875,8 @@ fetches again without `zones=0`.
   "checkins": {
     "by_zone": [ { "zone_id": "bg:060070009011", "out": 12, "need_help": 1, "staying": 3 } ],
     "need_help": [ { "id": "chk_01J...", "zone_id": "bg:060070009011", "coord": [-121.6012, 39.7593], "at": "...Z",
-                     "help": { "status": "open", "assignee": null, "task_id": null, "updated_at": "...Z" } } ] },
+                     "help": { "status": "open", "assignee": null, "task_id": null, "updated_at": "...Z" },
+                     "simulated": false } ] },  // true: a simulated resident (live_run_scenario, virtual people)
                                             // need_help counts and list exclude resolved requests
   "destination_preferences": [ { "zone_id": "bg:060070009011", "destination_id": "exit:osm-node:86546172", "count": 4 } ],
   "responders": [ { "party_key": "rsp_7c1...", "coord": [-121.6, 39.76], "accuracy_m": 15, "at": "...Z" } ],
@@ -1810,7 +1822,8 @@ moisture, horizon_minutes, outside_drill}], evidence_class: "simulated"}`, newes
 | `POST /api/live/active` | controller |
 | `GET incidents/{id}/situation[?zones=0]` | any |
 | `POST incidents/{id}/checkins` | any |
-| `POST me/location`, `DELETE me/location` | responder |
+| `POST me/location`, `DELETE me/location`, `POST me/profile` | civilian, responder |
+| `GET participants` | controller |
 | `POST me/destination` | civilian, responder |
 | `POST tasks/{id}` with `accepted` | responder |
 | `POST tasks/{id}` with `done` (assist tasks) | responder, controller |
@@ -1824,6 +1837,7 @@ moisture, horizon_minutes, outside_drill}], evidence_class: "simulated"}`, newes
 | `PATCH`, `DELETE me/reports/{id}` | any, owner ([Edit or withdraw](#edit-or-withdraw-your-own-report)) |
 | `GET incidents/{id}/twin` | controller ([twin-api.md](twin-api.md#http-adapter-live-drill-appbackendapilivetwin_servicepy)) |
 | `POST incidents/{id}/twin/whatif` | controller |
+| `GET`, `POST`, `DELETE incidents/{id}/virtual-people` | controller ([app-integration.md, Simulated people](app-integration.md#simulated-people)) |
 | `POST incidents/{id}/impact` | controller ([Impact analysis](#impact-analysis)) |
 | `GET incidents/{id}/aar` | controller ([After-action report](#after-action-report)) |
 | `POST /api/live/studio-fires` | controller ([Studio fires](#studio-fires)) |

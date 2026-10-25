@@ -1,0 +1,88 @@
+# Single-VM stack: Caddy (HTTPS + static web app) -> Django API (one gunicorn worker) -> local
+# mongod for caches; app data stays on MongoDB Atlas. Run from this directory:
+#   cp .env.example .env && $EDITOR .env && docker compose up -d --build
+# See docs/deploy.md.
+name: crisistwin-prod
+
+services:
+  web:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.web
+    restart: unless-stopped
+    environment:
+      SITE_ADDRESS: ${SITE_ADDRESS:?Set SITE_ADDRESS in deploy/.env}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      api:
+        condition: service_healthy
+
+  api:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.api
+    restart: unless-stopped
+    environment:
+      DJANGO_DEBUG: "false"
+      DJANGO_BEHIND_PROXY: "true"
+      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:?Set DJANGO_SECRET_KEY}
+      DJANGO_ALLOWED_HOSTS: ${SITE_ADDRESS},localhost,127.0.0.1
+      DJANGO_CSRF_TRUSTED_ORIGINS: https://${SITE_ADDRESS}
+      MONGODB_URI: ${MONGODB_URI:?Set MONGODB_URI (Atlas)}
+      MONGODB_DATABASE: ${MONGODB_DATABASE:-crisistwin}
+      CACHE_MONGODB_URI: mongodb://cachedb:27017
+      CACHE_MONGODB_DATABASE: ${CACHE_MONGODB_DATABASE:-crisistwin_cache}
+      LIVE_CONTROLLER_TOKEN: ${LIVE_CONTROLLER_TOKEN:?Set LIVE_CONTROLLER_TOKEN (multi-phone needs it)}
+      LIVE_INVITE_CODE: ${LIVE_INVITE_CODE:?Set LIVE_INVITE_CODE}
+      LIVE_ACTIVE_INCIDENT_ID: ${LIVE_ACTIVE_INCIDENT_ID:-}
+      LIVE_PACKAGES_DIR: /data/packages
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      CARTESIA_API_KEY: ${CARTESIA_API_KEY:-}
+      CARTESIA_VOICE_ID: ${CARTESIA_VOICE_ID:-}
+      CARTESIA_TTS_MODEL: ${CARTESIA_TTS_MODEL:-}
+      VOICE_MODEL: ${VOICE_MODEL:-}
+      APIFY_TOKEN: ${APIFY_TOKEN:-}
+      APIFY_ACTOR_ID: ${APIFY_ACTOR_ID:-}
+      INTEL_FEEDS_CONTACT: ${INTEL_FEEDS_CONTACT:-}
+    volumes:
+      - api_data:/data
+    depends_on:
+      cachedb:
+        condition: service_healthy
+    expose:
+      - "8000"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=4)"
+      interval: 15s
+      timeout: 6s
+      retries: 6
+      start_period: 30s
+
+  cachedb:
+    image: mongo:7
+    restart: unless-stopped
+    command: ["mongod", "--bind_ip", "0.0.0.0", "--wiredTigerCacheSizeGB", "0.5"]
+    # No published port and no auth: reachable only on this compose network.
+    volumes:
+      - cache_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  caddy_data:
+  caddy_config:
+  api_data:
+  cache_data:

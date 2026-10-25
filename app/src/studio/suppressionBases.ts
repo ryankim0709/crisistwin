@@ -20,6 +20,8 @@ export interface SuppressionBase {
   type: string;
   agency: string;
   unit: string | null;
+  /** Layer staffing: P paid, C combination, V volunteer; absent from older endpoints. */
+  staffing?: string | null;
   lon: number;
   lat: number;
   distanceKm: number;
@@ -55,6 +57,7 @@ export function parseBases(json: unknown): SuppressionBases {
         type: b.type,
         agency: String(b.agency ?? ""),
         unit: typeof b.unit === "string" ? b.unit : null,
+        staffing: typeof b.staffing === "string" ? b.staffing : null,
         lon: b.lon,
         lat: b.lat,
         distanceKm: Number(b.distanceKm ?? 0),

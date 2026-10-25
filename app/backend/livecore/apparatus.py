@@ -11,11 +11,12 @@ What the drill road graph gives the rules: its ``highway`` class (``*_link`` tak
 class and ``living_street`` is residential, the same ASSUMPTION as app/src/studio/roadAccess.ts),
 the bundle's ``bridge`` flag, the edge speed as ``maxspeed`` (the bundle's OSM maxspeed or its
 class default), and any OSM ``tags`` an edge carries. The camp-2018 bundle carries no surface,
-tracktype, smoothness, width, maxweight or maxheight tags, so its roads are judged on the
-highway class alone with the documented defaults (paved, default width by class). Grade is 0%
-(ASSUMPTION: the bundle has no elevation per edge) and the dead-end rule R10 is not applied
-(the bundle has no turning-circle nodes). Speeds are km/h, distances metres, coordinates WGS84
-``(lon, lat)``.
+tracktype, smoothness, width, maxweight or maxheight tags; a ``livecore.road_attrs.RoadAttrs``
+(OSM tags fetched by way id, grade per segment from the 3DEP DEM; ``api.drill_road_attrs``)
+fills them in. Without one, roads are judged on the highway class alone with the documented
+defaults (paved, default width by class) and grade 0% (ASSUMPTION). The dead-end rule R10 is not
+applied (the bundle has no turning-circle nodes). Speeds are km/h, distances metres, coordinates
+WGS84 ``(lon, lat)``.
 """
 
 from __future__ import annotations
@@ -32,6 +33,7 @@ from typing import Any
 
 from .drill import Drill
 from .geo import LonLat, haversine_m
+from .road_attrs import RoadAttrs
 
 log = logging.getLogger(__name__)
 
@@ -47,6 +49,16 @@ BASIS_HIGHWAY_ONLY = (
     "documented defaults by class), grade 0% assumed, dead-end rule R10 not applied"
 )
 BASIS_TAGGED = "road access: OSM tags of the drill bundle where present, else defaults by class; grade 0% assumed"
+
+CLASS_SHORT = {
+    "engine_t1_t2": "Type 1 engine",
+    "engine_t3": "Type 3 engine",
+    "engine_t4_t7": "Type 6 engine",
+    "tender_support": "support tender or dozer transport",
+    "tender_tactical": "tactical water tender",
+}
+"""Plain names for reasons shown to a commander (the board's dozers ride on a lowboy judged as a
+support tender, app/src/studio/apparatus.ts)."""
 
 _lock = threading.Lock()
 _loaded: dict[str, Any] = {}
@@ -92,6 +104,10 @@ class EdgeAccess:
     """R01-R12 of docs/suppression-data.md."""
     note: str
     """The deciding reason (last note of ``road_access``)."""
+    grade_pct: float | None = None
+    """Grade the rules used (None: unknown, 0% assumed)."""
+    unpaved: bool = False
+    """The way's surface (tag or class default) is unpaved."""
 
 
 @dataclass(frozen=True)
@@ -113,7 +129,7 @@ class AccessProfile:
         return acc.speed_kph if acc is not None and acc.speed_kph else fallback
 
 
-_profiles: dict[tuple[int, str], tuple[Drill, AccessProfile]] = {}
+_profiles: dict[tuple[int, str, int], tuple[Drill, AccessProfile, RoadAttrs | None]] = {}
 
 
 def class_label(vehicle: str) -> str:
@@ -123,14 +139,22 @@ def class_label(vehicle: str) -> str:
     return str(loaded[0]["road_access"]["vehicle_classes"][vehicle].get("label") or vehicle)
 
 
-def access_profile(drill: Drill, vehicle: str = DEFAULT_CLASS) -> AccessProfile | None:
-    """Access of every drill edge for ``vehicle`` (cached per drill and class); None without data.
+def _surface_unpaved(data: dict, tags: Mapping[str, str]) -> bool:
+    ra = data["road_access"]
+    surface = tags.get("surface") or ra["default_surface_by_highway"]["value"].get(tags.get("highway", ""), "paved")
+    return not (surface in set(ra["paved_surfaces"]["value"]) or surface == "paved")
+
+
+def access_profile(drill: Drill, vehicle: str = DEFAULT_CLASS, attrs: RoadAttrs | None = None) -> AccessProfile | None:
+    """Access of every drill edge for ``vehicle`` (cached per drill, class and ``attrs``); None
+    without data. ``attrs`` adds OSM tags and grade per segment (``livecore.road_attrs``).
 
     Raises ``ValueError`` for an unknown class."""
     if vehicle not in ACCESS_CLASSES:
         raise ValueError(f"unknown apparatus class {vehicle!r}; one of {', '.join(ACCESS_CLASSES)}")
-    hit = _profiles.get((id(drill), vehicle))
-    if hit is not None and hit[0] is drill:
+    key = (id(drill), vehicle, id(attrs) if attrs is not None else 0)
+    hit = _profiles.get(key)
+    if hit is not None and hit[0] is drill and hit[2] is attrs:
         return hit[1]
     loaded = suppression()
     if loaded is None:
@@ -138,22 +162,56 @@ def access_profile(drill: Drill, vehicle: str = DEFAULT_CLASS) -> AccessProfile 
     data, road_access = loaded
     edges: dict[str, EdgeAccess] = {}
     tagged = False
+    seg_tags = attrs.tags if attrs is not None else {}
+    seg_grade = attrs.grade_pct if attrs is not None else {}
     for eid, edge in drill.roads.edges.items():
         tags = dict(edge.tags)
+        extra = seg_tags.get(edge.segment_id)
+        if extra:
+            for k, v in extra.items():
+                tags.setdefault(k, v)
         tagged = tagged or bool(tags)
         tags["highway"] = normalise_highway(tags.get("highway") or edge.highway)
         if edge.bridge and "bridge" not in tags:
             tags["bridge"] = "yes"
         tags.setdefault("maxspeed", str(max(1, round(edge.speed_kph))))
-        result = road_access(data, tags, 0.0, vehicle)
+        grade = seg_grade.get(edge.segment_id)
+        result = road_access(data, tags, grade or 0.0, vehicle)
         notes = result.get("notes") or []
         edges[eid] = EdgeAccess(bool(result["passable"]), result.get("speed_kph"), str(result["rule"]),
-                                str(notes[-1]) if notes else str(result["rule"]))
-    profile = AccessProfile(vehicle, class_label(vehicle), edges, BASIS_TAGGED if tagged else BASIS_HIGHWAY_ONLY)
+                                str(notes[-1]) if notes else str(result["rule"]), grade,
+                                _surface_unpaved(data, tags))
+    if attrs is not None and attrs.basis:
+        basis = attrs.basis
+    else:
+        basis = BASIS_TAGGED if tagged else BASIS_HIGHWAY_ONLY
+    profile = AccessProfile(vehicle, class_label(vehicle), edges, basis)
     if len(_profiles) > 16:
         _profiles.clear()
-    _profiles[(id(drill), vehicle)] = (drill, profile)
+    _profiles[key] = (drill, profile, attrs)
     return profile
+
+
+def plain_reason(vehicle: str, acc: EdgeAccess, road: str | None = None) -> str:
+    """Why ``acc`` closes a road to ``vehicle``, for a commander, ending with the rule:
+    e.g. ``"Unpaved road too steep (22%) for a Type 1 engine on Pentz Road (R06)"``."""
+    who = CLASS_SHORT.get(vehicle, vehicle)
+    kind = "unpaved road" if acc.unpaved else "paved road"
+    grade = f" ({acc.grade_pct:.0f}%)" if acc.grade_pct is not None else ""
+    text = {
+        "R01": "Not a drivable road",
+        "R02": "Closed to motor vehicles",
+        "R03": f"Road surface too rough for a {who}",
+        "R04": f"Unpaved road too rough for a {who}",
+        "R05": f"Paved road too steep{grade} for a {who}",
+        "R06": f"Unpaved road too steep{grade} for a {who}",
+        "R07": f"Road too narrow for a {who}",
+        "R08": f"Clearance too low for a {who}",
+        "R09": f"Weight limit too low for a {who}" if "maxweight" in acc.note else f"Unrated bridge on an {kind} too weak for a {who}",
+        "R10": f"Dead end with no turnaround for a {who}",
+    }.get(acc.rule, f"Closed to a {who}")
+    where = f" on {road}" if road else ""
+    return f"{text}{where} ({acc.rule})"
 
 
 # --- station apparatus -------------------------------------------------------------------

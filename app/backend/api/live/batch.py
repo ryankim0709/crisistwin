@@ -298,6 +298,9 @@ def resident_params(spec: ScenarioSpec, seed: int) -> Any:
     gen_residents = _sim()[3]
     overrides = {k: v for k, v in spec.residents.items() if k != "enabled"}
     overrides.setdefault("noncompliant_share", round(1.0 - people_behavior(spec).order_compliance, 6))
+    people = spec.twin.get("people")
+    if people == "grounded" or (isinstance(people, dict) and people.get("preset") == "grounded"):
+        overrides.setdefault("behavior_profile", "grounded")  # per-household draws (sim.behavior) to match the twin
     return gen_residents.ResidentParams(seed=seed, **overrides)
 
 

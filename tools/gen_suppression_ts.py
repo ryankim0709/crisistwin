@@ -25,10 +25,14 @@ OUT = ROOT / "app" / "src" / "studio" / "suppressionData.generated.ts"
 # Leaf path prefixes the simulator reads. A prefix ending in "." takes the whole section.
 PREFIXES = (
     "hand_crews.production_sustained_2011_direct",
+    "hand_crews.production_sustained_2011_indirect",
+    "hand_crews.production_initial_attack_1996",
     "hand_crews.flame_length_limits_ft",
     "hand_crews.walking_pace_m_per_min",
     "engine_production.initial_attack_by_crew_size",
     "engines.typing.1.personnel_min",
+    "engines.typing.1.tank_min_gal",
+    "engines.typing.3.tank_min_gal",
     "engines.typing.3.personnel_min",
     "engines.typing.6.personnel_min",
     "dozers.production_single_pass",
@@ -54,6 +58,9 @@ PREFIXES = (
     "aviation_constraints.dip_or_reload_distance",
     "deployment.calfire_initial_aircraft_response",
     "deployment.initial_attack_ground_first_alarm_sra_high",
+    "deployment.strike_team_composition",
+    "deployment.engines_per_station_estimate",
+    "deployment.calfire_initial_attack_goal",
     "response_times.",
 )
 

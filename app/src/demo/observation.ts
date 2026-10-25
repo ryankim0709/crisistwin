@@ -27,8 +27,8 @@ import {
   FORECAST_MINUTES,
   activeFires,
   attackPositions,
+  boardMoistureClass,
   crewTarget,
-  dispatchable,
   positionDestKey,
   unreachableClasses,
   positionEta,
@@ -59,13 +59,16 @@ import {
 } from "./model";
 import { LOOKAHEAD_MINUTES } from "./fireField";
 import { ORDER_COMPLIANCE, SHADOW_SHARE, accessClassOf, holdsFlameFeet, kindLabel } from "./realism";
+import { departmentStatus, dispatchable, isReported, reachFraction } from "./boardResponse";
+import { TANK_GALLONS } from "../response/units";
+import { MAX_ORDER_COUNT, ORDERABLE, dispatchLevel } from "../response/runCards";
+import { fuelLabel } from "../fire/fuelModels";
 import type { LonLat } from "../live/types";
 
 /** Access classes that cannot drive to a target (model.unreachableClasses), for the wire. */
 function unreachableObs(board: Board, destKey: string, to: LonLat): UnreachableClassObservation[] {
   return unreachableClasses(board, destKey, to).map((u) => ({ access_class: u.access, kinds: u.kinds, reason: u.reason }));
 }
-import { fuelLabel } from "../fire/fuelModels";
 
 /** Attack positions of a burning fire for the wire (model.attackPositions; numbers from the solver and the travel model). */
 function attackPositionObs(board: Board, fire: Fire): AttackPositionObservation[] {
@@ -96,11 +99,82 @@ function attackPositionObs(board: Board, fire: Fire): AttackPositionObservation[
   }));
 }
 
+
+/** The response model's per-fire record for the observation (docs/response-model.md). */
+function fireResponseObservation(board: Board, fire: Fire): Pick<
+  FireObservation,
+  | "tactic"
+  | "dispatch_level"
+  | "ia_status"
+  | "escalation_stage"
+  | "first_arrival_min"
+  | "line_breaches"
+  | "air_line_m"
+  | "aircraft"
+  | "reported_after_min"
+  | "reported_by"
+  | "reported_reason"
+  | "edge_in_reach_pct"
+> {
+  const fr = board.response.fires.get(fire.id);
+  return {
+    tactic: fr?.tactic ?? null,
+    dispatch_level: fr ? (fr.structure ? "structure" : fr.level) : null,
+    ia_status: fr?.ia ?? null,
+    escalation_stage: fr?.stage ?? 0,
+    first_arrival_min: fr?.firstArrivalAt == null ? null : Math.round(fr.firstArrivalAt - fire.ignitedAt),
+    line_breaches: fr?.breaches ?? 0,
+    air_line_m: Math.round(fr?.airLineM ?? 0),
+    aircraft: board.response.aircraft.filter((a) => a.fireId === fire.id).map((a) => a.id),
+    reported_after_min: fr ? Math.round(fr.reportAt - fire.ignitedAt) : null,
+    reported_by: fr?.report.by ?? null,
+    reported_reason: fr?.report.reason ?? null,
+    edge_in_reach_pct: (() => {
+      const f = reachFraction(board, fire);
+      return f === null ? null : Math.round(f * 100);
+    })(),
+  };
+}
+
+/** Most aircraft and orders listed in one observation (the decide body is capped at 200 kB). */
+const MAX_LISTED = 24;
+
+/** Resource picture for the commander: departments, aircraft, orders, initial-attack record. */
+function responseObservation(board: Board): DemoObservation["response"] {
+  const r = board.response;
+  const wind = boardWind(board);
+  const firsts = r.stats.firstArrivalMinutes;
+  return {
+    auto_dispatch: r.autoDispatch,
+    auto_escalate: r.autoEscalate,
+    dispatch_level_now: dispatchLevel(boardMoistureClass(board), wind.speedMetersPerSecond),
+    departments: departmentStatus(board),
+    mutual_aid_pool_units: r.pool.length,
+    // Bounded for the 200 kB decide body: assigned aircraft first, at most MAX_LISTED.
+    aircraft: [...r.aircraft]
+      .sort((a, b) => Number(a.fireId === null) - Number(b.fireId === null))
+      .slice(0, MAX_LISTED)
+      .map((a) => ({ id: a.id, kind: a.kind, base: a.baseName, status: a.status, fire_id: a.fireId, drops: a.drops })),
+    orders: r.orders
+      .flatMap((o) => (o.status === "pending" || o.status === "unable_to_fill" ? [{ ...o, status: o.status }] : []))
+      .slice(0, MAX_LISTED)
+      .map((o) => ({ id: o.id, fire_id: o.fireId, resource: o.resource, tier: o.tier, status: o.status, eta_min: Math.max(0, Math.round(o.readyAt - board.minute)) })),
+    orderable: ORDERABLE.map((resource) => ({ resource, max_count: MAX_ORDER_COUNT[resource] })),
+    initial_attack: {
+      fires: r.stats.fires,
+      contained_in_ia: r.stats.iaContained,
+      failed_ia: r.stats.iaFailed,
+      line_breaches: r.stats.breaches,
+      median_first_arrival_min: firsts.length ? Math.round([...firsts].sort((a, b) => a - b)[Math.floor(firsts.length / 2)]) : null,
+    },
+  };
+}
+
 /** Shown to the agent as inputs.travel and inputs.congestion. */
 export const TRAVEL_LABEL =
-  "Road network per apparatus class (POST /api/demo/crew_routes), units always drive a road line (with a straight off-road leg to a point off the network); a dispatched unit waits at its base until its road route is known. Options list only crews that can reach the fire or position: a class whose road legs there fail (unreachable_classes) is left out. Options with route \"estimate\" use straight line x 1.3 at 60 km/h (assumption) for a crew whose road time is not known yet";
+  "Road network per apparatus class (POST /api/demo/crew_routes), units always drive a road line (with a straight off-road leg to a point off the network); a dispatched unit waits at its base until its road route is known. Options list only crews that can reach the fire or position: a class whose road legs there fail (unreachable_classes) is left out. Options with route \"estimate\" use straight line x 1.3 at 60 km/h (assumption) for a crew whose road time is not known yet. Drive times carry a seeded +/-20% variation (assumption); a road cut by fire forces a reroute";
 export const CONGESTION_LABEL =
-  "Evacuation traffic simulated on the board: each minute's departures load their route's road segments; moving time follows the BPR volume-delay function (Bureau of Public Roads 1964, alpha 0.15, beta 4) and demand above capacity waits in a point queue, on the drill roads' assumed capacities (lanes x 600-2,000 veh/h per lane by road class). Arrival is fixed at departure. Fire units drive at free-flow times";
+  "Evacuation traffic simulated on the board: each minute's departures load their route's road segments; moving time follows the BPR volume-delay function (Bureau of Public Roads 1964, alpha 0.15, beta 4) and demand above capacity waits in a point queue, on the drill roads' assumed capacities (lanes x 600-2,000 veh/h per lane by road class). Arrival is fixed at departure. Fire units: BPR (1964) delay from the board's own evacuation flows on shared roads (1,700 veh/h per direction, HCM 2010; against-flow weight 0.5 assumed)";
 /** How the board's wind reaches the fire model; appended to observation.wind.source. */
 export const WIND_APPROACH_LABEL = `the wind is held constant, as Simulation Studio runs it; each solve looks ${LOOKAHEAD_MINUTES / 60} h ahead and the fire model re-solves on a new, contained or closed fire and as fire line is built (line is a barrier in the model), continuing from the burned ground`;
 
@@ -125,7 +199,15 @@ export function studioMoistureLabel(board: Board): string | null {
 /** "Model inputs" line for fire spread: the simulator's solver on the board's landscape, with its wind and moisture. */
 export function fireModelLabel(board: Board): string {
   const r = board.env.landscapeRegion;
-  const where = board.env.landscapeSource === "stored" ? `the prebuilt landscape "${r.name}"` : `${r.name}, loaded live from LANDFIRE`;
+  const source = board.env.landscapeSource;
+  // The cache date is only in the ground labels (useDemoEnvironment groundOf), not on DemoEnvironment.
+  const storedOn = board.env.spread.ground.fuelLabel.match(/stored (\d{4}-\d{2}-\d{2})/)?.[1];
+  const where =
+    source === "stored"
+      ? `the prebuilt landscape "${r.name}"`
+      : source === "cached"
+      ? `${r.name}, a cached copy of LANDFIRE${storedOn ? ` (stored ${storedOn})` : ""}`
+      : `${r.name}, loaded live from LANDFIRE`;
   const c = board.conditions;
   const conditions = c
     ? `wind and fuel moisture assumed in Simulation Studio ('${c.name}', ${c.tag}): ${Math.round(c.windSpeedMph * 10) / 10} mph from ${Math.round(c.windFromDegrees)}°, ${c.moistureLabel} fuel moisture`
@@ -188,7 +270,8 @@ export function buildObservation(
   previous: DemoObservation["previous"],
 ): DemoObservation {
   const minute = board.minute;
-  const fires = activeFires(board);
+  // The commander sees only fires the dispatch centre knows about (response/report.ts).
+  const fires = activeFires(board).filter((f) => isReported(board, f));
 
   const listed = board.zones.filter((zone) => {
     const f = forecasts.get(zone.id);
@@ -293,6 +376,7 @@ export function buildObservation(
       })),
       unreachable_classes: fire.status === "burning" ? unreachableObs(board, fire.id, crewTarget(fire)) : [],
       threatens_zone_ids: listed.filter((zone) => fireReachesZone(board, fire, zone, limit)).map((zone) => zone.id),
+      ...fireResponseObservation(board, fire),
       head_m_per_min: round1(fire.rates.headMetersPerMinute),
       head_flame_ft: round1(fire.rates.headFlameFeet),
       heading_deg: Math.round(fire.rates.headingDegrees),
@@ -326,6 +410,13 @@ export function buildObservation(
           ? Math.max(0, Math.ceil(team.arriveAt - minute))
           : null,
       position_id: team.lineId ? (board.lines.find((l) => l.id === team.lineId)?.plan.id ?? null) : null,
+      department: board.response.departments.find((d) => d.id === team.department)?.name ?? team.department,
+      tier: team.tier,
+      water_pct: team.waterGallons === null ? null : Math.round((team.waterGallons / (TANK_GALLONS[team.kind] ?? team.waterGallons)) * 100),
+      work_h: round1(team.workMinutes / 60),
+      parked_m: team.parkedM === null || !team.accessKnown ? null : Math.round(team.parkedM),
+      work_mode: team.workMode,
+      working_in_min: team.workStartAt === null ? null : Math.max(0, Math.ceil(team.workStartAt - minute)),
     };
   });
 
@@ -358,6 +449,7 @@ export function buildObservation(
       demand: demandLabel(board),
       travel: TRAVEL_LABEL,
       congestion: CONGESTION_LABEL,
+      response: board.response.label,
     },
     fires: fireObs,
     crews,
@@ -391,9 +483,10 @@ export function buildObservation(
       needs_transport_people_at_risk: boardTotals.people.needsTransportAtRisk,
       fires_burning: fires.filter((f) => f.status === "burning").length,
       fires_out_total: board.firesOutTotal,
-      crews_available: board.teams.filter((t) => t.status === "available").length,
+      crews_available: board.teams.filter((t) => dispatchable(t) && t.fireId === null && t.status !== "returning").length,
       crews_returning: board.teams.filter((t) => t.status === "returning").length,
     },
+    response: responseObservation(board),
     monitor: { woke_because: wokeBecause },
     previous,
   };
@@ -409,7 +502,7 @@ export interface MonitorMemory {
   minute: number;
   /** Fires on the board (not out). */
   fireIds: string[];
-  /** Crews en route or on scene (not returning: a returning crew can be sent). */
+  /** Crews that cannot take an order now (not dispatchable: en route, on scene, refilling, resting, out of service). */
   busyCrewIds: string[];
   /** Burning fires their assigned crews could not contain. */
   outrunFireIds: string[];
@@ -420,7 +513,11 @@ export interface MonitorMemory {
 function outrunFires(board: Board): Fire[] {
   // A fire whose crews are building line ahead of it is fought through the fire model, not the perimeter race.
   return board.fires.filter(
-    (f) => f.status === "burning" && currentContainment(board, f) === null && !board.teams.some((t) => t.fireId === f.id && t.lineId !== null),
+    (f) =>
+      f.status === "burning" &&
+      isReported(board, f) &&
+      currentContainment(board, f) === null &&
+      !board.teams.some((t) => t.fireId === f.id && t.lineId !== null),
   );
 }
 
@@ -439,8 +536,8 @@ function slackTiers(board: Board, forecasts: Map<string, ZoneForecast>): Record<
 export function rememberDecision(board: Board, forecasts: Map<string, ZoneForecast> = zoneForecasts(board)): MonitorMemory {
   return {
     minute: board.minute,
-    fireIds: activeFires(board).map((f) => f.id),
-    busyCrewIds: board.teams.filter((t) => t.status === "en_route" || t.status === "on_scene").map((t) => t.id),
+    fireIds: activeFires(board).filter((f) => isReported(board, f)).map((f) => f.id),
+    busyCrewIds: board.teams.filter((t) => !dispatchable(t)).map((t) => t.id),
     outrunFireIds: outrunFires(board).map((f) => f.id),
     slackTiers: slackTiers(board, forecasts),
   };
@@ -456,7 +553,7 @@ export function wakeReasons(
   memory: MonitorMemory | null,
 ): string[] {
   const reasons: string[] = [];
-  const active = activeFires(board);
+  const active = activeFires(board).filter((f) => isReported(board, f));
   const known = new Set(memory?.fireIds ?? []);
 
   const fresh = active.filter((f) => !known.has(f.id));

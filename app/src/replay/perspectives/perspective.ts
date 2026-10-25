@@ -3,6 +3,7 @@
 // (sources, layers, terrain, sky, animation frames, listeners) is owned by this module and
 // removed when returning to observer or on clearPerspective.
 import type { LngLat as MapLngLat, Map as MapLibreMap } from "maplibre-gl";
+import { IMAGERY_TILES_URL, TERRAIN_TILES_URL } from "../../maps/basemap";
 import { closedEdgesAt, simulatedFrontIndexAt } from "../timeline";
 import type { AreaGeometry, LngLat, ReplayModel } from "../types";
 import {
@@ -19,11 +20,9 @@ import {
 export type PerspectiveMode = "observer" | "oblique" | "ground";
 
 /** AWS Terrain Tiles (public dataset, terrarium encoding). */
-export const TERRAIN_TILES_URL =
-  "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png";
+export { TERRAIN_TILES_URL };
 export const TERRAIN_ATTRIBUTION = "Terrain: AWS Terrain Tiles / Mapzen";
-export const IMAGERY_TILES_URL =
-  "https://basemap.nationalmap.gov/arcgis/rest/services/USGSImageryOnly/MapServer/tile/{z}/{y}/{x}";
+export { IMAGERY_TILES_URL };
 // Same credit as maps/basemap.ts, plus a warning that the imagery is not from the incident.
 export const IMAGERY_ATTRIBUTION =
   '<a href="https://www.usgs.gov/programs/national-geospatial-program/national-map">USDA / USGS The National Map</a> · Historical imagery · imagery dates vary — not Nov 2018';

@@ -344,6 +344,10 @@ struct LiveAPIClient {
         _ = try await send(["me", "location"], method: "POST", token: token, body: update)
     }
 
+    func updateProfile(_ profile: ProfileUpdate, token: String) async throws {
+        _ = try await send(["me", "profile"], method: "POST", token: token, body: profile)
+    }
+
     func clearLocation(token: String) async throws {
         _ = try await send(["me", "location"], method: "DELETE", token: token)
     }

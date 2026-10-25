@@ -1,0 +1,102 @@
+{
+ "schema": "crisistwin.historical_fires/1",
+ "generated_by": "tools/build_historical_fires.py",
+ "fires": [
+  {
+   "id": "camp-2018",
+   "name": "Camp Fire (2018)",
+   "place": "Paradise, Butte County, California",
+   "file": "camp-2018.json",
+   "t0": "2018-11-08T14:20:00Z",
+   "last_snapshot_at": "2018-11-20T08:00:00Z",
+   "final_area_km2": 607.383,
+   "bbox": [
+    -121.77181,
+    39.60008,
+    -121.3474,
+    39.89831
+   ],
+   "board": {
+    "center": [
+     -121.55961,
+     39.7492
+    ],
+    "radius_m": 22500,
+    "cell_m": 60
+   },
+   "has_simulated": true
+  },
+  {
+   "id": "kincade-2019",
+   "name": "Kincade Fire (2019)",
+   "place": "Geyserville, Healdsburg and Windsor, Sonoma County, California",
+   "file": "kincade-2019.json",
+   "t0": "2019-10-24T04:27:00Z",
+   "last_snapshot_at": "2019-10-30T07:00:00Z",
+   "final_area_km2": 338.89,
+   "bbox": [
+    -122.89649,
+    38.52788,
+    -122.65455,
+    38.81589
+   ],
+   "board": {
+    "center": [
+     -122.77552,
+     38.67189
+    ],
+    "radius_m": 20000,
+    "cell_m": 60
+   },
+   "has_simulated": true
+  },
+  {
+   "id": "woolsey-2018",
+   "name": "Woolsey Fire (2018)",
+   "place": "Malibu, Thousand Oaks and Agoura Hills, Los Angeles and Ventura Counties, California",
+   "file": "woolsey-2018.json",
+   "t0": "2018-11-08T22:24:00Z",
+   "last_snapshot_at": "2018-11-14T08:00:00Z",
+   "final_area_km2": 407.228,
+   "bbox": [
+    -118.98714,
+    34.013,
+    -118.64618,
+    34.28041
+   ],
+   "board": {
+    "center": [
+     -118.81666,
+     34.1467
+    ],
+    "radius_m": 20000,
+    "cell_m": 60
+   },
+   "has_simulated": true
+  },
+  {
+   "id": "marshall-2021",
+   "name": "Marshall Fire (2021)",
+   "place": "Superior and Louisville, Boulder County, Colorado",
+   "file": "marshall-2021.json",
+   "t0": "2021-12-30T18:05:00Z",
+   "last_snapshot_at": "2021-12-31T07:00:00Z",
+   "final_area_km2": 25.264,
+   "bbox": [
+    -105.23707,
+    39.93065,
+    -105.14644,
+    39.98235
+   ],
+   "board": {
+    "center": [
+     -105.19176,
+     39.9565
+    ],
+    "radius_m": 6000,
+    "cell_m": 30
+   },
+   "has_simulated": true
+  }
+ ]
+}

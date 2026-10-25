@@ -233,3 +233,125 @@ def _search(drill: Drill, src: str, dst: str, cost: Callable[[str], float | None
         at = roads.edges[eid].from_node
     path.reverse()
     return path
+
+
+# --- reach: where a vehicle class must stop short of its target ------------------------
+
+STOP_SHORT_MAX_M = 3000.0
+"""ASSUMPTION (not sourced): a class that cannot drive to its target stops at the reachable road
+node nearest the target only when that node is at most this many metres (straight line) from
+it; farther, the leg has no route. About a long hose lay or a short hike in."""
+
+ReachStatus = Literal["reached", "detour", "stopped_short"]
+
+
+@dataclass(frozen=True)
+class ReachResult:
+    """An inbound route for one vehicle class that may end short of the target.
+
+    ``result`` is the drive (to the target's road node, or to ``stop_node``). ``status`` is None
+    exactly when ``result.route`` is None."""
+
+    result: InboundResult
+    status: ReachStatus | None
+    stop_node: str | None
+    """``stopped_short`` only: the road node where the vehicle stops (the route's last node)."""
+    off_road_m: float | None
+    """Straight-line metres from the route's end to the target (the target snap distance when
+    ``reached``); None without a route."""
+    blocked_edge: str | None
+    """First edge closed to the class on the route an unrestricted vehicle would take, when that
+    route is faster than the class's (``detour``), or the class cannot get there."""
+    unrestricted_s: float | None
+    """Drive seconds of that unrestricted route (None when there is none)."""
+
+
+def _reachable(drill: Drill, src: str, cost: Callable[[str], float | None],
+               factors: Mapping[str, float]) -> tuple[dict[str, float], dict[str, str]]:
+    """Full forward Dijkstra from ``src``: (node -> cost, node -> incoming edge id)."""
+    roads = drill.roads
+    dist: dict[str, float] = {src: 0.0}
+    prev: dict[str, str] = {}
+    heap: list[tuple[float, str]] = [(0.0, src)]
+    done: set[str] = set()
+    while heap:
+        d, node = heapq.heappop(heap)
+        if node in done:
+            continue
+        done.add(node)
+        for eid in roads.out_edges.get(node, ()):
+            c = cost(eid)
+            if c is None:
+                continue
+            nxt = roads.edges[eid].to_node
+            nd = d + c * factors.get(eid, 1.0)
+            if nd < dist.get(nxt, math.inf):
+                dist[nxt] = nd
+                prev[nxt] = eid
+                heapq.heappush(heap, (nd, nxt))
+    return dist, prev
+
+
+def reach_route(
+    drill: Drill,
+    origin: LonLat,
+    target: LonLat,
+    blocked: frozenset[str],
+    fire: MultiPolygon | None,
+    access: AccessProfile,
+    congestion: Mapping[str, float] | None = None,
+    stop_short_max_m: float = STOP_SHORT_MAX_M,
+) -> ReachResult:
+    """``inbound_route`` for one vehicle class, stopping short when the target is not reachable.
+
+    1. The class's route to the target (``inbound_route`` with ``access``): ``reached``; or
+       ``detour`` when an unrestricted vehicle's route (same fire, blocks and congestion, every
+       edge at its own speed) is faster and uses an edge closed to the class.
+    2. Otherwise (target off the network, inside the fire, cut off, or closed to the class): the
+       class drives to the road node it can reach that is nearest the target in a straight line
+       (inside-fire and blocked edges never used), if within ``stop_short_max_m``:
+       ``stopped_short``. ``blocked_edge`` is the first closed edge on the unrestricted route to
+       the target, if there is one.
+    An origin off the network or inside the fire gives no route (``status`` None)."""
+    res = inbound_route(drill, origin, target, blocked, fire, congestion, access)
+    if res.reason in ("origin_off_network", "origin_in_fire"):
+        return ReachResult(res, None, None, None, None, None)
+    free = inbound_route(drill, origin, target, blocked, fire, congestion, None)
+    blocked_edge = None
+    if free.route is not None:
+        blocked_edge = next((e for e in free.route.edge_ids if not access.passable(e)), None)
+    free_s = free.travel_time_s
+    if res.route is not None and res.travel_time_s is not None:
+        detour = blocked_edge is not None and free_s is not None and free_s < res.travel_time_s
+        return ReachResult(res, "detour" if detour else "reached", None, res.target_snap_m,
+                           blocked_edge if detour else None, free_s)
+
+    # Stop short: the reachable node nearest the target.
+    factors = validate_congestion(congestion)
+    index = _index(drill)
+    roads = drill.roads
+    origin_ok, _ = _end_nodes(drill)
+    src = _nearest_node(index.grid, roads.node_coords, origin, origin_ok)
+    if src is None:
+        return ReachResult(res, None, None, None, blocked_edge, free_s)
+    _, near_cost, _ = _edge_costs(drill, index, frozenset(blocked), _fire_classes(drill, fire))
+
+    def class_cost(eid: str) -> float | None:
+        if not access.passable(eid):
+            return None
+        c = near_cost(eid)
+        if c is None:
+            return None
+        edge = roads.edges[eid]
+        return c * edge.speed_kph / access.speed_kph(eid, edge.speed_kph)
+
+    dist, _ = _reachable(drill, src, class_cost, factors)
+    best = min(((haversine_m(roads.node_coords[n], target), d, n) for n, d in dist.items()), default=None)
+    if best is None or best[0] > stop_short_max_m:
+        return ReachResult(res, None, None, None, blocked_edge, free_s)
+    stop = best[2]
+    leg = inbound_route(drill, origin, roads.node_coords[stop], blocked, fire, congestion, access)
+    if leg.route is None:
+        return ReachResult(res, None, None, None, blocked_edge, free_s)
+    end = leg.route.destination_id  # the stop node (an inbound route's destination is its road node)
+    return ReachResult(leg, "stopped_short", end, haversine_m(roads.node_coords[end], target), blocked_edge, free_s)

@@ -219,6 +219,8 @@ export type IgnitionDisplayState =
   | "invalid"; // has a ScenarioIssue or IgnitionProblem
 
 export interface StudioMapProps {
+  /** When this changes, the camera frames the current ignitions (a random scenario moved the board). */
+  recenterKey?: string | null;
   ignitions: ScheduledIgnition[];
   /** Per ignition id. Ids missing here render as "draft". */
   ignitionStates: Record<string, IgnitionDisplayState>;
@@ -277,6 +279,8 @@ export interface ConfigPanelProps {
   /** Replace the scenario. The page decides whether the edit invalidates the result. */
   onScenarioChange: (scenario: StudioScenario) => void;
   onRun: () => void;
+  /** The "Random scenario" button, "Keep this area" box and seed field (the page owns them). */
+  randomScenario?: ReactNode;
   onCancel: () => void;
   onClear: () => void;
   onExport: () => void;

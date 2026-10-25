@@ -76,12 +76,41 @@ final class LiveStore {
     private(set) var lastCheckIn: CheckIn?
     /// "Still there?" items answered or set aside on this phone.
     private(set) var answeredStillThere: Set<String> = []
-    /// Responder opt-in to share live location (latest position only, foreground only). Persisted
-    /// on the device. Turning it off calls `DELETE me/location`. Ignored for civilians.
-    var shareResponderLocation: Bool = UserDefaults.standard.bool(forKey: "live.shareResponderLocation") {
+    /// Share this phone's position with the drill (latest position only, foreground only; needs
+    /// location permission). Off until the person agrees in the first-join sheet; off calls `DELETE me/location`. Persisted on the device.
+    var shareResponderLocation: Bool = (UserDefaults.standard.object(forKey: "live.shareLocation") as? Bool) ?? false {
         didSet {
-            UserDefaults.standard.set(shareResponderLocation, forKey: "live.shareResponderLocation")
+            UserDefaults.standard.set(shareResponderLocation, forKey: "live.shareLocation")
             shareSettingChanged()
+        }
+    }
+    /// The first-join sheet (name, kind, location consent) was answered or skipped once.
+    private(set) var profileOnboarded: Bool = UserDefaults.standard.bool(forKey: "live.profileOnboarded")
+    /// True until the first-join sheet has been seen, once this phone is joined (has a credential).
+    var needsProfileSetup: Bool { !profileOnboarded && credential != nil }
+
+    /// Finishes the first-join sheet: stores name and kind, sets location sharing, sends the profile.
+    func completeProfileSetup(name: String, kind: ParticipantKind, shareLocation: Bool) {
+        displayName = String(name.trimmingCharacters(in: .whitespacesAndNewlines).prefix(24))
+        participantKind = kind
+        shareResponderLocation = shareLocation
+        profileOnboarded = true
+        UserDefaults.standard.set(true, forKey: "live.profileOnboarded")
+        syncProfile()
+    }
+
+    /// Optional short nickname shown to the controller. Sent with `syncProfile()`.
+    var displayName: String = UserDefaults.standard.string(forKey: "live.displayName") ?? "" {
+        didSet {
+            UserDefaults.standard.set(displayName, forKey: "live.displayName")
+            profileSynced = false
+        }
+    }
+    /// What this person is. nil means automatic: firefighter after joining as a responder, else resident.
+    var participantKind: ParticipantKind? = UserDefaults.standard.string(forKey: "live.kind").flatMap(ParticipantKind.init(rawValue:)) {
+        didSet {
+            UserDefaults.standard.set(participantKind?.rawValue, forKey: "live.kind")
+            profileSynced = false
         }
     }
 
@@ -126,6 +155,8 @@ final class LiveStore {
     @ObservationIgnored private var lastLocationSend: Date?
     @ObservationIgnored private(set) var lastCoord: LonLat?
     @ObservationIgnored private var locationWasShared = false
+    @ObservationIgnored private var lastSentCoord: LonLat?
+    @ObservationIgnored private var profileSynced = false
     @ObservationIgnored private var seenGuidance = false
     @ObservationIgnored private var lastSeenGuidance: ZoneGuidance?
     @ObservationIgnored private var routeFetchedAt: [String: Date] = [:]
@@ -133,7 +164,12 @@ final class LiveStore {
 
     // Matches the /live console's 3 s poll so an approval reaches the phone within seconds.
     private static let pollInterval: Duration = .seconds(3)
-    private static let locationInterval: TimeInterval = 30
+    /// Position heartbeat: at most one post this often, or sooner after moving `locationMoveM`.
+    private static let locationInterval: TimeInterval = 45
+    private static let locationMinInterval: TimeInterval = 10
+    private static let locationMoveM: Double = 150
+    /// After a failed post (offline), try again after this long. Only the latest fix is ever sent.
+    private static let locationRetry: TimeInterval = 15
     /// A task's route is refetched with the poll, at most this often.
     private static let routeInterval: TimeInterval = 15
     /// How often the poll loop re-reads which incident the server runs.
@@ -341,6 +377,7 @@ final class LiveStore {
         guard issued.role != .civilian else { throw JoinError.invalidCode }
         CredentialStore.save(issued, slot: .responder)
         credential = issued
+        profileSynced = false
         resetResponderData()
         Task { await refresh() }
     }
@@ -415,6 +452,7 @@ final class LiveStore {
 
     /// Drops the responder credential and returns to a civilian device credential.
     func leaveResponderRole() {
+        profileSynced = false
         CredentialStore.delete(.responder)
         credential = CredentialStore.load(.device)
         resetResponderData()
@@ -428,27 +466,48 @@ final class LiveStore {
     }
 
     /// Feeds the device position from `LocationProvider`. Updates `myZone` on the device and, for
-    /// a responder with `shareResponderLocation` on, posts `me/location` at most every 30 s.
-    /// Civilian positions are never sent from here.
+    /// `shareResponderLocation` on, posts `me/location`: every 45 s, or after moving 150 m (never
+    /// more than every 10 s). Only the latest fix is sent; a failed post is not queued.
     func updateLocation(_ coord: LonLat?, accuracyM: Double? = nil) {
         lastCoord = coord
         if let coord, let last = boardComputedAt, BoardGeo.distance(last, coord) > 50 { recomputeBoard() }
         if coord != nil, boardComputedAt == nil { recomputeBoard() }
         let zone = coord.flatMap { c in situation?.zones.flatMap { ZoneLocator.zone(containing: c, in: $0) } }
         setZone(zone)
-        guard let coord, role == .responder, shareResponderLocation else { return }
+        guard let coord, shareResponderLocation else { return }
         let now = Date()
-        if let last = lastLocationSend, now.timeIntervalSince(last) < Self.locationInterval { return }
+        if let last = lastLocationSend {
+            let age = now.timeIntervalSince(last)
+            let moved = lastSentCoord.map { BoardGeo.distance($0, coord) > Self.locationMoveM } ?? true
+            if age < Self.locationMinInterval || (age < Self.locationInterval && !moved) { return }
+        }
         lastLocationSend = now
         locationWasShared = true
         Task {
             do {
+                try await syncProfileIfNeeded()
                 let update = ResponderLocationUpdate(coord: coord, accuracyM: accuracyM, at: now)
                 try await authorized { try await $0.updateLocation(update, token: $1) }
+                lastSentCoord = coord
             } catch {
-                lastLocationSend = nil  // retry on the next fix
+                // Offline: no queue. The next fix after a short wait is the one that goes.
+                lastLocationSend = Date().addingTimeInterval(Self.locationRetry - Self.locationInterval)
             }
         }
+    }
+
+    /// Sends the nickname and kind when they changed (or were never sent on this credential).
+    func syncProfile() {
+        profileSynced = false
+        Task { try? await syncProfileIfNeeded() }
+    }
+
+    private func syncProfileIfNeeded() async throws {
+        guard !profileSynced else { return }
+        let profile = ProfileUpdate(name: displayName.trimmingCharacters(in: .whitespacesAndNewlines),
+                                    kind: participantKind?.rawValue ?? (role == .responder ? "firefighter" : "resident"))
+        try await authorized { try await $0.updateProfile(profile, token: $1) }
+        profileSynced = true
     }
 
     /// Public hazards within 500 m of the device that this phone has not answered and did not
@@ -745,6 +804,7 @@ final class LiveStore {
         guard !shareResponderLocation, locationWasShared else { return }
         locationWasShared = false
         lastLocationSend = nil
+        lastSentCoord = nil
         Task { try? await authorized { try await $0.clearLocation(token: $1) } }
     }
 
@@ -836,6 +896,7 @@ final class LiveStore {
             defer { registration = nil }
             let issued = try await LiveAPIClient.configured().registerDevice()
             CredentialStore.save(issued, slot: .device)
+            profileSynced = false
             if credential == nil { credential = issued }
             return credential ?? issued
         }

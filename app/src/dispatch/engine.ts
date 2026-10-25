@@ -9,7 +9,8 @@
  * - Every synthetic home is one household with the zone's average vehicles per home. Homes
  *   leave only on an evacuation order for their zone, one at a time in the area's departure
  *   order, spread uniformly over DEPARTURE_SPREAD_MINUTES (shorter while an engine supports
- *   the zone).
+ *   the zone). Optionally (`setDepartureDelays`, the Studio's household behaviour) each home
+ *   instead leaves its own drawn delay after the order, and a home with no finite delay stays.
  * - Households that have left queue at the zone's loading node and enter their route at most
  *   at the route's bottleneck capacity; zones whose routes share an edge split its capacity.
  *   Downstream queues are not modelled: once released, a group drives at free-flow speed.
@@ -305,6 +306,11 @@ export interface Totals {
   notOrdered: number;
   /** Ordered, at home or queued at the loading point. */
   waiting: number;
+  /**
+   * Of `waiting`, households at home that will not leave (only with per-household departure
+   * delays; 0 otherwise). Always set by `totals()`.
+   */
+  staying?: number;
   onRoad: number;
   safe: number;
   caught: number;
@@ -332,6 +338,31 @@ export interface IgnitionEvent {
   name: string;
 }
 
+/** Households that reached an exit in one minute (read-only bookkeeping for the people view). */
+export interface ExitArrival {
+  minute: number;
+  exitId: string;
+  zone: number;
+  homes: number;
+}
+
+/** A group of households on the road: where it is on its route, for the people view. */
+export interface PacketState {
+  id: number;
+  zone: number;
+  /** Edge it is on, or null when its route has no steps left. */
+  edge: number | null;
+  /** Travelling the edge from `from` to `to`. */
+  forward: boolean;
+  /** Fraction of the edge driven, 0..1. */
+  fraction: number;
+  homes: number;
+  vehicles: number;
+  exitId: string;
+  /** No route to any exit avoiding fire and closures: held where it is. */
+  stuck: boolean;
+}
+
 export interface VehicleGroup {
   id: number;
   zone: number;
@@ -355,6 +386,17 @@ export class DispatchEngine {
   units: UnitState[];
   /** Per home (index into `area.homes`). */
   readonly homeStatus: Uint8Array;
+  /** Per home, the minute it joined its zone's loading queue, or -1. Bookkeeping only. */
+  private readonly queuedMinute: Int32Array;
+  /** Households that reached each exit, oldest first. Bookkeeping only; never read by the model. */
+  readonly exitArrivals: ExitArrival[] = [];
+  /**
+   * Per home, minutes from its zone's order to leaving home (non-finite: it stays), or null for
+   * the uniform DEPARTURE_SPREAD_MINUTES model. Set by `setDepartureDelays`.
+   */
+  private departureDelays: Float32Array | null = null;
+  /** Per zone, households still at home that will not leave (only with departure delays). */
+  private stayingAtHome: Int32Array;
   alerts: Alert[] = [];
   notices: ResidentNotice[] = [];
   private nextNoticeId = 1;
@@ -399,6 +441,8 @@ export class DispatchEngine {
     this.zoneIndex = new Map(area.zones.map((zone, i) => [zone.id, i]));
     this.stationIndex = new Map(area.stations.map((station, i) => [station.id, i]));
     this.homeStatus = new Uint8Array(area.homes.length);
+    this.queuedMinute = new Int32Array(area.homes.length).fill(-1);
+    this.stayingAtHome = new Int32Array(area.zones.length);
     this.zones = area.zones.map((zone, index) => ({
       index,
       status: "no_order",
@@ -717,6 +761,42 @@ export class DispatchEngine {
 
   get closedEdges(): ReadonlySet<number> {
     return this.closed;
+  }
+
+  /**
+   * Per-household departure behaviour (the Studio's, studio/householdBehavior.ts): `delays[h]`
+   * is the minutes from home h's zone order to the household leaving home; a non-finite value
+   * means it stays. While evacuation support is on scene the wait is scaled by SUPPORTED /
+   * DEPARTURE spread. Call before any order; null restores the uniform spread. Households that
+   * stay do not hold up a zone's clearing or a staged wave's release.
+   */
+  setDepartureDelays(delays: Float32Array | null): void {
+    this.departureDelays = delays && delays.length === this.area.homes.length ? delays : null;
+    this.stayingAtHome.fill(0);
+    const set = this.departureDelays;
+    if (!set) return;
+    this.area.zones.forEach((zone, index) => {
+      for (let h = zone.firstHome; h < zone.firstHome + zone.homes; h += 1) {
+        const status = this.homeStatus[h];
+        if ((status === HomeStatus.idle || status === HomeStatus.ordered) && !Number.isFinite(set[h]))
+          this.stayingAtHome[index] += 1;
+      }
+    });
+  }
+
+  /** True when departure delays are set and home `h` will not leave. */
+  staysHome(home: number): boolean {
+    return this.departureDelays !== null && !Number.isFinite(this.departureDelays[home]);
+  }
+
+  /** Households of a zone still at home that will not leave (0 without departure delays). */
+  stayingHomes(zone: number): number {
+    return this.stayingAtHome[zone];
+  }
+
+  /** Minute home `h` joined its loading queue, or -1 if it never has. */
+  queuedSince(home: number): number {
+    return this.queuedMinute[home];
   }
 
   /**
@@ -1222,7 +1302,8 @@ export class DispatchEngine {
         const predecessorGone =
           before.status === "cleared" ||
           before.status === "overrun" ||
-          (before.status === "ordered" && before.atHome + before.queued === 0) ||
+          (before.status === "ordered" &&
+            before.atHome - this.stayingAtHome[before.index] + before.queued === 0) ||
           (before.status === "no_order" && !before.stage);
         const slack = this.orderSlackMinutes(zone.index);
         const deadline = slack !== null && slack <= STAGE_RELEASE_SLACK_MINUTES;
@@ -1411,8 +1492,10 @@ export class DispatchEngine {
 
   private catchHome(zone: ZoneState, home: number): void {
     const status = this.homeStatus[home];
-    if (status === HomeStatus.idle || status === HomeStatus.ordered) zone.atHome -= 1;
-    else if (status === HomeStatus.queued) zone.queued -= 1;
+    if (status === HomeStatus.idle || status === HomeStatus.ordered) {
+      zone.atHome -= 1;
+      if (this.staysHome(home)) this.stayingAtHome[zone.index] -= 1;
+    } else if (status === HomeStatus.queued) zone.queued -= 1;
     else return;
     this.homeStatus[home] = HomeStatus.caught;
     zone.caught += 1;
@@ -1518,17 +1601,40 @@ export class DispatchEngine {
       const spread = supported.has(zone.index)
         ? SUPPORTED_DEPARTURE_SPREAD_MINUTES
         : DEPARTURE_SPREAD_MINUTES;
+      if (this.departureDelays) {
+        this.delayedDepartures(zone, spread / DEPARTURE_SPREAD_MINUTES);
+        continue;
+      }
       work.departBudget += homes / spread;
       while (work.departBudget >= 1 && work.nextDeparture < homes) {
         const home = firstHome + work.nextDeparture++;
         if (this.homeStatus[home] !== HomeStatus.ordered) continue;
         this.homeStatus[home] = HomeStatus.queued;
+        this.queuedMinute[home] = this.minute;
         work.queue.push(home);
         zone.atHome -= 1;
         zone.queued += 1;
         work.departBudget -= 1;
       }
       if (work.nextDeparture >= homes) work.departBudget = 0;
+    }
+  }
+
+  /** Departures with per-household delays: every home whose (scaled) delay has passed leaves. */
+  private delayedDepartures(zone: ZoneState, scale: number): void {
+    const delays = this.departureDelays!;
+    const elapsed = this.minute - (zone.orderedMinute ?? this.minute);
+    const { firstHome, homes } = this.area.zones[zone.index];
+    const work = this.work[zone.index];
+    for (let home = firstHome; home < firstHome + homes; home += 1) {
+      if (this.homeStatus[home] !== HomeStatus.ordered) continue;
+      // Non-finite delays (households that stay) never pass this test.
+      if (!(delays[home] * scale <= elapsed)) continue;
+      this.homeStatus[home] = HomeStatus.queued;
+      this.queuedMinute[home] = this.minute;
+      work.queue.push(home);
+      zone.atHome -= 1;
+      zone.queued += 1;
     }
   }
 
@@ -1567,6 +1673,7 @@ export class DispatchEngine {
       if (zone.route!.steps.length === 0) {
         for (const home of homes) this.homeStatus[home] = HomeStatus.safe;
         zone.safe += count;
+        this.exitArrivals.push({ minute: this.minute, exitId: zone.exitId!, zone: index, homes: count });
         continue;
       }
       for (const home of homes) this.homeStatus[home] = HomeStatus.driving;
@@ -1652,6 +1759,12 @@ export class DispatchEngine {
         for (const home of packet.homes) this.homeStatus[home] = HomeStatus.safe;
         zone.onRoad -= packet.homes.length;
         zone.safe += packet.homes.length;
+        this.exitArrivals.push({
+          minute: now,
+          exitId: packet.exitId,
+          zone: packet.zone,
+          homes: packet.homes.length,
+        });
       } else remaining.push(packet);
     }
     this.packets = remaining;
@@ -1764,7 +1877,7 @@ export class DispatchEngine {
   private checkCleared(): void {
     for (const zone of this.zones) {
       if (zone.status !== "ordered") continue;
-      if (zone.atHome + zone.queued + zone.onRoad === 0) {
+      if (zone.atHome - this.stayingAtHome[zone.index] + zone.queued + zone.onRoad === 0) {
         zone.status = "cleared";
         zone.clearedMinute = this.minute;
         this.alert(
@@ -1784,26 +1897,52 @@ export class DispatchEngine {
       vehicles: 0,
       notOrdered: 0,
       waiting: 0,
+      staying: 0,
       onRoad: 0,
       safe: 0,
       caught: 0,
     };
+    let staying = 0;
     for (const zone of this.zones) {
       const area = this.area.zones[zone.index];
       totals.homes += area.homes;
       totals.vehicles += area.vehicles;
       if (zone.status === "no_order") totals.notOrdered += zone.atHome;
-      else totals.waiting += zone.atHome + zone.queued;
+      else {
+        totals.waiting += zone.atHome + zone.queued;
+        staying += this.stayingAtHome[zone.index];
+      }
       totals.onRoad += zone.onRoad;
       totals.safe += zone.safe;
       totals.caught += zone.caught;
     }
+    totals.staying = staying;
     return totals;
   }
 
   /** Households queued at a zone's loading point, as vehicles. */
   queuedVehicles(zone: number): number {
     return this.zones[zone].queued * this.work[zone].vehiclesPerHome;
+  }
+
+  /** Households on the road by group, with the edge each is on (read-only). */
+  packetStates(): PacketState[] {
+    return this.packets.map((packet) => {
+      const step = packet.steps[packet.stepIndex];
+      return {
+        id: packet.id,
+        zone: packet.zone,
+        edge: step ? step.edge : null,
+        forward: step ? step.forward : true,
+        fraction: step
+          ? Math.min(1, packet.stepElapsedSeconds / edgeSeconds(this.area, step.edge))
+          : 0,
+        homes: packet.homes.length,
+        vehicles: packet.vehicles,
+        exitId: packet.exitId,
+        stuck: packet.stuck,
+      };
+    });
   }
 
   /** Groups on the road, for the 3D view. */

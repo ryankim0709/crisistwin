@@ -6,11 +6,14 @@
   package, ``sim.terrain``) and carless households per drill zone (the replay bundle's ACS
   demand table).
 - ``POST /api/demo/crew_routes``: drive times for firefighting units over the drill roads
-  their apparatus class may use (``tools.suppression_data.road_access``, the R01-R12 table),
-  routed by ``livecore.inbound.inbound_route``.
+  their apparatus class may use (``tools.suppression_data.road_access``, the R01-R12 table, on
+  OSM tags and DEM grade from ``api.drill_road_attrs``), routed by ``livecore.inbound.reach_route``:
+  a unit no allowed road brings to its target stops short at the nearest reachable road point.
+- ``GET /api/demo/road_access``: drill road km open and closed per class, and the closed roads.
 
 Every endpoint takes an optional ``?incident=`` (default Camp; Camp or the active incident, else
-404). The terrain package and carless households are Camp-only. Nothing is stored. Units: WGS84 [lon, lat]; metres; minutes; wind m/s, direction FROM in
+404). The terrain package and carless households are Camp-only. Nothing is stored here (the OSM
+tag cache lives in ``api.drill_road_attrs``). Units: WGS84 [lon, lat]; metres; minutes; wind m/s, direction FROM in
 degrees true. Wire contract: app/src/demo/contracts.ts.
 """
 
@@ -38,7 +41,7 @@ from rest_framework.throttling import AnonRateThrottle
 from livecore.drill import INCIDENT_ID as CAMP_INCIDENT_ID
 from livecore.geo import haversine_m, simplify_line, to_multipolygon
 from livecore.inbound import inbound_route
-from livecore.routing import CONGESTION_MAX_FACTOR, _index
+from livecore.routing import _index
 
 from .demo import drill_center, resolve_incident
 from .live import incidents
@@ -89,8 +92,6 @@ cap for secondary roads (suppression_resources.json road_access.heavy_apparatus_
 ROUTE_TOLERANCE_M = 25.0
 ROUTE_MAX_POINTS = 120
 
-_access_cache: dict[tuple[int, str], tuple[object, tuple[frozenset[str], dict[str, float]]]] = {}
-_access_lock = threading.Lock()
 
 
 class DemoInputsThrottle(AnonRateThrottle):
@@ -189,7 +190,13 @@ def demo_wind(request):
             "samples": [
                 {"t_utc": s["t_utc"], "speed_ms": s["speed_ms"], "from_deg": s["from_deg"]} for s in hit["samples"]
             ],
-            "provenance": {k: v for k, v in (hit.get("provenance") or {}).items() if k in ("analog", "candidates", "terms")},
+            "evidence_label": hit.get("evidence_label", hit["evidence_class"]),
+            "warnings": hit.get("warnings", []),
+            "provenance": {
+                k: v
+                for k, v in (hit.get("provenance") or {}).items()
+                if k in ("analog", "candidates", "terms", "station_selection", "grid")
+            },
             "summary": hit.get("summary"),
         },
         headers={"Cache-Control": "public, max-age=3600"},
@@ -331,47 +338,14 @@ def demo_environment(request):
 # ---------------------------------------------------------------- crew routes
 
 
-def _class_access(drill, access_class: str) -> tuple[frozenset[str], dict[str, float]]:
-    """(blocked segment ids, edge id -> travel-time factor >= 1) for one apparatus class.
+def _profile(incident: str, drill, access_class: str):
+    """(class AccessProfile or None, RoadAttrs) with the drill's OSM tags and grade (api.drill_road_attrs)."""
+    from livecore.apparatus import access_profile
 
-    Each drill edge is run through ``tools.suppression_data.road_access`` with the tags the drill
-    keeps (``highway``, ``bridge``). ASSUMPTIONS: grade 0 (the drill graph has no per-edge grade),
-    ``lanes`` not passed (the drill's lanes are per direction, OSM's are per way), no dead-end
-    test (R10). The class speed is capped by the drill's free-flow speed; the factor is drill
-    free-flow time over class time, clamped to the router's [1, CONGESTION_MAX_FACTOR].
-    """
-    key = (id(drill), access_class)
-    with _access_lock:
-        hit = _access_cache.get(key)
-        if hit is not None and hit[0] is drill:  # an evicted package drill's id can be reused
-            return hit[1]
-    _repo_on_path()
-    from tools.suppression_data import load_resources, road_access
+    from .drill_road_attrs import get_road_attrs
 
-    data = load_resources()
-    blocked: set[str] = set()
-    factors: dict[str, float] = {}
-    for eid, edge in drill.roads.edges.items():
-        tags = {"highway": edge.highway}
-        if edge.highway.endswith("_link"):
-            tags["highway"] = edge.highway[: -len("_link")]
-        if edge.highway == "living_street":
-            tags["highway"] = "residential"
-        if getattr(edge, "bridge", False):
-            tags["bridge"] = "yes"
-        result = road_access(data, tags, 0.0, access_class)
-        if not result["passable"]:
-            blocked.add(edge.segment_id)
-            continue
-        speed = min(float(result["speed_kmh"]), edge.speed_kph)
-        if speed > 0 and edge.speed_kph > 0:
-            factor = edge.speed_kph / speed
-            if factor > 1.0:
-                factors[eid] = min(CONGESTION_MAX_FACTOR, factor)
-    value = (frozenset(blocked), factors)
-    with _access_lock:
-        _access_cache[key] = (drill, value)
-    return value
+    attrs = get_road_attrs(incident, drill)
+    return access_profile(drill, access_class, attrs), attrs
 
 
 def _offboard_kmh() -> float:
@@ -407,13 +381,38 @@ def _point(value) -> list[float] | None:
     return None
 
 
-def crew_route(drill, fire, request: dict, offboard_kmh: float) -> dict:
+def _blocked_fields(drill, access, edge_id: str | None) -> dict:
+    if access is None or edge_id is None:
+        return {"blocked_rule": None, "blocked_reason": None}
+    from livecore.apparatus import plain_reason
+
+    acc = access.edges.get(edge_id)
+    if acc is None or acc.passable:
+        return {"blocked_rule": None, "blocked_reason": None}
+    edge = drill.roads.edges[edge_id]
+    return {"blocked_rule": acc.rule, "blocked_reason": plain_reason(access.vehicle, acc, edge.name)}
+
+
+def crew_route(drill, fire, request: dict, offboard_kmh: float, access=None) -> dict:
     """One unit's drive: optional off-board leg to the network, the class's road route, then an
     optional off-board leg from the network to a target off it (both straight line x
-    OFFBOARD_CIRCUITY at the off-board speed, summed in ``offboard_m``)."""
-    blocked, factors = _class_access(drill, request["access_class"])
+    OFFBOARD_CIRCUITY at the off-board speed, summed in ``offboard_m``).
+
+    With ``access`` (the class's ``AccessProfile``) the leg may stop short of the target at the
+    nearest road node the class can reach (``livecore.inbound.reach_route``); without it every
+    road is open at its own speed (suppression data missing; labelled by the caller)."""
+    from livecore.inbound import reach_route
+
     origin, target = request["from"], request["to"]
-    result = inbound_route(drill, tuple(origin), tuple(target), blocked, fire, factors)
+
+    def drive(start, goal):
+        if access is None:
+            res = inbound_route(drill, start, tuple(goal), frozenset(), fire)
+            return res, ("reached" if res.route is not None else None), None, res.target_snap_m if res.route else None, None, None
+        r = reach_route(drill, start, tuple(goal), frozenset(), fire, access)
+        return r.result, r.status, r.stop_node, r.off_road_m, r.blocked_edge, r.unrestricted_s
+
+    result, status, stop_node, off_road_m, blocked_edge, free_s = drive(tuple(origin), tuple(target))
     offboard_m = 0.0
     offboard_min = 0.0
     line_head: list[list[float]] = []
@@ -426,7 +425,7 @@ def crew_route(drill, fire, request: dict, offboard_kmh: float) -> dict:
             offboard_min = metres * OFFBOARD_CIRCUITY / (offboard_kmh * 1000 / 60)
             line_head = [list(origin)]
             start = entry
-            result = inbound_route(drill, entry, tuple(target), blocked, fire, factors)
+            result, status, stop_node, off_road_m, blocked_edge, free_s = drive(entry, tuple(target))
     line_tail: list[list[float]] = []
     if result.reason == "target_off_network":
         # A target off the network (an attack position in the wildland): drive to the main-road
@@ -437,15 +436,17 @@ def crew_route(drill, fire, request: dict, offboard_kmh: float) -> dict:
             offboard_m += metres
             offboard_min += metres * OFFBOARD_CIRCUITY / (offboard_kmh * 1000 / 60)
             line_tail = [list(target)]
-            result = inbound_route(drill, start, exit_node, blocked, fire, factors)
-    out = {"id": request["id"], "offboard_m": round(offboard_m)}
+            result, status, stop_node, off_road_m, blocked_edge, free_s = drive(start, exit_node)
+    out = {"id": request["id"], "offboard_m": round(offboard_m), **_blocked_fields(drill, access, blocked_edge)}
     if result.route is None or result.travel_time_s is None:
-        return {**out, "drive_min": None, "distance_m": None, "basis": None, "reason": result.reason, "line": []}
+        return {**out, "drive_min": None, "distance_m": None, "basis": None, "reason": result.reason, "line": [],
+                "access_status": None, "stop_point": None, "off_road_m_to_target": None, "unrestricted_drive_min": None}
     line = (
         line_head
         + [list(p) for p in simplify_line(result.route.line, ROUTE_TOLERANCE_M, ROUTE_MAX_POINTS)]
         + line_tail
     )
+    stop = drill.roads.node_coords[stop_node] if stop_node else None
     return {
         **out,
         "drive_min": round(offboard_min + result.travel_time_s / 60, 1),
@@ -453,6 +454,10 @@ def crew_route(drill, fire, request: dict, offboard_kmh: float) -> dict:
         "basis": "road_offboard" if offboard_m > 0 else "road",
         "reason": None,
         "line": line,
+        "access_status": status,
+        "stop_point": [round(stop[0], 6), round(stop[1], 6)] if stop else None,
+        "off_road_m_to_target": round(off_road_m) if off_road_m is not None else None,
+        "unrestricted_drive_min": round(offboard_min + free_s / 60, 1) if free_s is not None and status == "detour" else None,
     }
 
 
@@ -497,11 +502,113 @@ def demo_crew_routes(request):
         return _error(exc.status, exc.code, exc.detail)
     fire = to_multipolygon({"type": "MultiPolygon", "coordinates": [[r] for r in rings]}) if rings else None
     offboard_kmh = _offboard_kmh()
+    profiles: dict[str, object] = {}
+    attrs = None
+    for cls in sorted({r["access_class"] for r in requests}):
+        profiles[cls], attrs = _profile(incident, drill, cls)
+    basis = (attrs.basis if attrs is not None and any(profiles.values())
+             else "road access rules unavailable (tools/suppression_resources.json missing): every road open at its own speed")
     return Response(
         {
-            "routes": [crew_route(drill, fire, r, offboard_kmh) for r in requests],
+            "routes": [crew_route(drill, fire, r, offboard_kmh, profiles.get(r["access_class"])) for r in requests],
             "congestion": "not_modelled",
             "evidence_class": "simulated",
+            "road_access": {"status": attrs.status if attrs is not None else "none", "basis": basis},
         },
         headers={"Cache-Control": "no-store"},
     )
+
+
+# ---------------------------------------------------------------- road access map
+
+ROAD_ACCESS_TOLERANCE_M = 15.0
+ROAD_ACCESS_MAX_POINTS = 60
+_road_access_cache: dict[str, tuple[object, object, dict]] = {}
+
+
+def road_access_summary(incident: str, drill) -> dict:
+    """Per class: drill road km open and closed, the top closing rules, and the closed segments as
+    GeoJSON (``closed`` maps class -> rule). Cached per drill and RoadAttrs."""
+    from livecore.apparatus import ACCESS_CLASSES as CLASSES
+    from livecore.apparatus import class_label, plain_reason
+
+    from .drill_road_attrs import get_road_attrs
+
+    attrs = get_road_attrs(incident, drill)
+    hit = _road_access_cache.get(incident)
+    if hit is not None and hit[0] is drill and hit[1] is attrs:
+        return hit[2]
+    roads = drill.roads
+    seg_edge = {seg: ids[0] for seg, ids in roads.segment_edges.items()}
+    closed: dict[str, dict[str, str]] = {}
+    reasons: dict[str, str] = {}
+    classes = []
+    basis = attrs.basis
+    for cls in CLASSES:
+        profile, _ = _profile(incident, drill, cls)
+        if profile is None:
+            basis = "road access rules unavailable (tools/suppression_resources.json missing)"
+            break
+        open_m = closed_m = 0.0
+        by_rule: dict[str, list] = {}
+        for seg, eid in seg_edge.items():
+            edge = roads.edges[eid]
+            acc = profile.edges.get(eid)
+            if acc is None or acc.passable:
+                open_m += edge.length_m
+                continue
+            closed_m += edge.length_m
+            closed.setdefault(seg, {})[cls] = acc.rule
+            reasons.setdefault(seg, plain_reason(cls, acc, edge.name))
+            row = by_rule.setdefault(acc.rule, [0.0, plain_reason(cls, acc)])
+            row[0] += edge.length_m
+        top = sorted(by_rule.items(), key=lambda kv: -kv[1][0])[:4]
+        classes.append({
+            "access_class": cls,
+            "label": class_label(cls),
+            "open_km": round(open_m / 1000, 1),
+            "closed_km": round(closed_m / 1000, 1),
+            "top_rules": [{"rule": r, "km": round(v[0] / 1000, 1), "example": v[1]} for r, v in top],
+        })
+    features = []
+    for seg in sorted(closed):
+        edge = roads.edges[seg_edge[seg]]
+        line = simplify_line(edge.coords, ROAD_ACCESS_TOLERANCE_M, ROAD_ACCESS_MAX_POINTS)
+        features.append({
+            "type": "Feature",
+            "geometry": {"type": "LineString", "coordinates": [[round(x, 5), round(y, 5)] for x, y in line]},
+            "properties": {
+                "segment_id": seg,
+                "name": edge.name,
+                "closed": closed[seg],
+                "reason": reasons[seg],
+                "grade_pct": attrs.grade_pct.get(seg),
+            },
+        })
+    value = {
+        "status": attrs.status,
+        "basis": basis,
+        "classes": classes,
+        "closed_roads": {"type": "FeatureCollection", "features": features},
+        "evidence_class": "derived",
+    }
+    _road_access_cache[incident] = (drill, attrs, value)
+    return value
+
+
+@api_view(["GET"])
+@authentication_classes([])
+@permission_classes([AllowAny])
+@throttle_classes([DemoInputsThrottle])
+def demo_road_access(request):
+    """Drill roads closed to each apparatus class (R01-R12 with OSM tags and DEM grade)."""
+    incident = resolve_incident(request)
+    if isinstance(incident, Response):
+        return incident
+    try:
+        drill = get_index(incident).drill
+    except ApiError as exc:
+        return _error(exc.status, exc.code, exc.detail)
+    value = road_access_summary(incident, drill)
+    cache = "public, max-age=3600" if value["status"] == "ready" else "no-store"
+    return Response(value, headers={"Cache-Control": cache})

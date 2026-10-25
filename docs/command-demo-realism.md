@@ -8,8 +8,8 @@ commander, with its evidence class.
 
 ## Fires come from Simulation Studio
 
-The board (now run inside Live command, `/live`) starts no fires itself: no scheduled ignitions,
-no activity levels, no "Add fire", and a `fire_seen` field report no longer creates a fire (it
+The board (now run inside Live command, `/live`) starts no fires itself: no random or hand-placed fires,
+no activity setting, no "Add fire", and a `fire_seen` field report no longer creates a fire (it
 only joins a fire already there, so closing that fire resolves the report). Fires arrive when
 Simulation Studio runs a simulation and publishes it (`POST /api/live/studio-fires`); the page
 polls `GET /api/live/incidents/<id>/studio-fires` every 5 s (`app/src/demo/useStudioFires.ts`) and
@@ -35,13 +35,17 @@ Code: `app/src/demo/realism.ts` (inputs and data), `app/src/demo/model.ts` (boar
 `app/src/demo/fireSolver.worker.ts` + `useFireSolver.ts` (solves off the main thread),
 `app/src/demo/fireFootprint.ts` (map polygons), `app/src/demo/useDemoEnvironment.ts`,
 `app/src/demo/useCrewRoutes.ts`, `app/backend/api/demo_realism.py`. Contract:
-`app/src/demo/contracts.ts`.
+`app/src/demo/contracts.ts`. The response model (run cards, departments and fleet, tactics, holding
+test, escalation, unit states) is `app/src/demo/boardResponse.ts` over `app/src/response/`, documented
+in [response-model.md](response-model.md); road access per drill road is under "Road access" below.
+The /live map's People layer (`app/src/live/people/`) is documented in [twin-api.md](twin-api.md) and
+[app-integration.md](app-integration.md); this document covers the board's own households.
 
 ## Realism
 
 | Element | Before | Now | Evidence |
 | --- | --- | --- | --- |
-| Fire spread | Constant head rate 8-32 m/min drawn at random per fire; fixed L:B 2.5; wind fixed from 45°, later one Rothermel ellipse per fire | The simulator's cell solver, the same as `/fire` and Simulation Studio (`fire/spread.ts` `simulateScheduledFireSpread`): Rothermel (1972) per cell with per-cell midflame wind from canopy (Albini & Baughman 1979), crown fire (Van Wagner, Cruz, Scott & Reinhardt), ember spotting and structure-to-structure spread at their defaults (`DEFAULT_SPOTTING`, `DEFAULT_STRUCTURE_SPREAD`). Every board fire is a solver source; spot fires belong to the fire that threw them (the board's own random spot rule is gone). No ellipse fallback | Model |
+| Fire spread | Constant head rate 8-32 m/min drawn at random per fire; fixed L:B 2.5; wind fixed from 45°, later one Rothermel ellipse per fire | The simulator's cell solver, the same as `/fire` and Simulation Studio (`fire/spread.ts` `simulateScheduledFireSpread`): Rothermel (1972) per cell with per-cell midflame wind from canopy (Albini & Baughman 1979), crown fire (Van Wagner, Cruz, Scott & Reinhardt), ember spotting and structure-to-structure spread at their defaults (`DEFAULT_SPOTTING`, `DEFAULT_STRUCTURE_SPREAD`). Every board fire is a solver source; spot fires belong to the fire that threw them (the board's own random spot rule is gone). No ellipse fallback. The board asks the solver for seeded natural variation (`stochastic: {enabled, seed: board seed}` in `buildFireSolveRequest`, on by default, the same seed for every solve of a board so a resumed solve repeats its draws; [response-model.md](response-model.md)) | Model |
 | Fuel and terrain | SH5 assumed everywhere; Camp 3DEP slope at 200 m | LANDFIRE FBFM40 fuel, canopy and terrain of the prebuilt region covering the drill (`GET /api/landscapes`, e.g. Berkeley Hills & Tilden, Pacific Palisades). With no covering region (Camp) or the store down, the same layers are loaded live from LANDFIRE for a square around the drill zones (half-width + 1.5 km ignition ring + 3 km margin, cell size as `/fire` picks for that radius), as Simulation Studio does when its stored board is unavailable. The board waits while it loads and shows an error, not a fallback, if it fails | Observed (mapped product) |
 | Moisture | none | The Studio run's fuel moisture values (a Scott & Burgan 2005 scenario or custom), labelled "Assumed in Simulation Studio". Earlier: one scenario per activity level (removed with the activity levels) | Assumption (Studio scenario) |
 | Wind (Studio fire on the board) | none | The Studio run's wind (speed mph, direction FROM), held constant as Studio runs it, labelled "Assumed in Simulation Studio" with Studio's own source (assumed, historical, worst case, forecast). A newer publish's wind and moisture apply to every fire on the board (the solver runs one wind) | Assumption (Studio scenario) |
@@ -49,14 +53,15 @@ Code: `app/src/demo/realism.ts` (inputs and data), `app/src/demo/model.ts` (boar
 | Wind in the solver | n/a | The solver takes one wind per run. With a Studio fire that is the Studio wind, constant. Without one (no fires, so nothing is solved) each solve would use the current hour's sample for its whole 6 h lookahead. When the sample (or the moisture) changes, the board re-solves from that minute, continuing from the burned ground with the solver's progress-preserving resume (`ResumeFrom` in `fire/spread.ts`): burned cells keep their times, and a step in progress keeps the share it covered at the old rate and finishes at the new one. So the footprint follows the hourly wind; **forecasts (zone ETAs, containment estimates) assume the current hour's wind persists** | Model (stated approximation) |
 | Re-solves | n/a | On a new fire, a contained or closed fire (it stops spreading from that minute), a wind or moisture change (a newer Studio publish with other conditions), and when fewer than 120 min of lookahead remain. The board clock holds while a required solve runs, so results do not depend on machine speed; with unchanged weather a resumed solve reproduces an uninterrupted one exactly | Model |
 | Fire shape and numbers | Analytic ellipse | The fire's own footprint in the arrival field. Area = its cells. Perimeter = its cell edges facing ground that can still burn (not rock, water, other fires' burned ground) x cell size x π/4 (mean staircase-to-smooth ratio, Cauchy-Crofton). Head figures = the solver's Rothermel rate, flame, heading and L:B at the leading front cell (the burned cell farthest from the ignition that still faces unburned fuel); a crowning or torching leading cell holds against no line (as `studio/initialAttack.ts`). Zone contact and overrun read the field over each zone's cells and at its core cell | Model |
-| Units | 6 synthetic strike teams of 5 engines at 5× the Studio engine rate (about 50 m/min each) | One unit per engine the drill's resource snapshot lists as available at T+0 (Camp 8, Berkeley Hills 25, Palisades 12; synthetic engines, see "Resource snapshot" below), plus 2 Type 1 hand crews and 1 Type 2 dozer labelled "assumed (not in the snapshot)". Without a snapshot: 6 Type 3 engines, 3 Type 1 engines, 2 Type 1 hand crews, 1 Type 2 dozer (**ASSUMPTION** roster, labelled "No resource snapshot for this drill — using assumed roster"). Line from the sourced tables for the fuel and slope: about 2.7, 5.0, 2.2 and 10.7 m/min in SH5 (`studio/apparatus.ts`: PMS 465 p.164, Broyles 2011, PMS 465 p.140). Turnout 1.3 min (engines), mobilisation 30 min (crews) and 60 min (dozers) | Sourced rates; assumed counts |
-| Holding | Any line held | Contained only when line reaches the perimeter and the head flame is within the unit's limit (Hauling chart, PMS 465 p.12: 4 ft hand tools, 8 ft engines and dozers) | Sourced |
-| Bases | 3 synthetic stations | With a snapshot: its stations (OSM / NIST locations, observed; Camp's four Chico points synthetic), all of them, also those with no available engine. Without one: real CAL FIRE facilities from `GET /api/suppression/bases`: Type 3 engines and the dozer at the nearest CAL FIRE state stations (Paradise, Jarbo Gap, Stirling City, Forest Ranch, Cohasset, Harts Mill), Type 1 engines at the nearest Schedule A stations (Paradise FD 81 and 82, Upper Ridge), crews from Table Mountain Fire Center. Without the local-only bases file: synthetic stations, labelled | Observed locations |
-| Travel | Straight line × 1.3 at 50 km/h | `POST /api/demo/crew_routes`: `livecore.inbound.inbound_route` over the drill roads, per apparatus class (`tools.suppression_data.road_access`, rules R01-R12), avoiding fire. A base (or a target, such as an attack position in the wildland) off the network gets a straight-line × 1.3 leg at the heavy-apparatus secondary-road cap to (from) the nearest road node. Units only move along that road line: a unit dispatched before its road time is known waits at its base (travel `pending`) and sets off, timed from its dispatch, when the leg arrives; a trip with no road route releases the unit with the router's reason. **ASSUMPTION** straight line × 1.3 at 60 km/h only for options and ETAs shown before a road time is known | Model |
+| Units | 6 synthetic strike teams of 5 engines at 5× the Studio engine rate (about 50 m/min each) | Departments built by `response/fleet.ts` `buildFleet` from the CAL FIRE facilities layer (agency, unit code, staffing) with **ASSUMED** counts per facility, aircraft at helitack and air attack bases, and a mutual-aid pool of the off-board stations ([response-model.md](response-model.md)). When the drill has a scenario resource snapshot (`model.ts` `buildBoardUnits`), its engines available at T+0 are the board's engine units, one department per snapshot station (Camp 8, Berkeley Hills 25, Palisades 12; synthetic engines, see "Resource snapshot" below); the layer supplies the hand crews, dozers, aircraft and the mutual-aid and state pool. Layer engines within `SAME_STATION_M` (300 m, **ASSUMPTION**: the same station) of a snapshot station are dropped; other on-board layer engines join the pool and answer as closest resources. Without the layer, the fixed roster (6 Type 3, 3 Type 1 engines, 2 crews, 1 dozer) stands in, and hand crews and dozers are the assumed extras labelled "assumed (not in the snapshot)". With no snapshot the units come from the layer, labelled `NO_SNAPSHOT_FLEET_LABEL` ("No resource snapshot for this drill — units from the CAL FIRE facilities layer (assumed counts per facility)"), or from the roster when the layer is also missing ("No resource snapshot for this drill — using assumed roster"). The board clock starts at the snapshot's `scenario_time`. Line from the sourced tables for the fuel and slope: about 2.7, 5.0, 2.2 and 10.7 m/min in SH5 (`studio/apparatus.ts`: PMS 465 p.164, Broyles 2011, PMS 465 p.140). Turnout 80 s (paid) or 120 s (other) for engines (an engine of unknown staffing, as every snapshot engine, uses `engineTurnoutMinutes(null)`), mobilisation 30 min (crews) and 60 min (dozers) | Sourced rates; assumed counts |
+| Response | The AI commander or a person sent every unit | Rule-based initial attack on every new fire (run card by dispatch level, closest resource, skipping units whose apparatus class cannot reach the target), tactic by flame length, seeded line holding, escalation and resource orders, unit states (resting, refilling, out of service, moving up, returning), work/rest, water, move-up and cover, aircraft, off-road reach: [response-model.md](response-model.md). The dispatch level comes from the Studio run's fuel moisture class (`boardMoistureClass`) and wind (`boardWind`); order fill odds from `FILL_ACTIVITY_BY_MOISTURE` (wet and moderate quiet, dry active, critical severe; **ASSUMPTION**). The commander's orders (`send_crew`, `order_resources`) use the same dispatch path and override or add to the run card's assignments; a resting, refilling or out-of-service unit is refused | Sourced structure, assumed counts |
+| Holding | Any line held | Contained only when the tactic's line is complete and holds the head flame (units building a line at an attack position do not count toward a direct attack's containment): direct attack within the unit's limit (Hauling chart, PMS 465 p.12: 4 ft hand tools, 8 ft engines and dozers), parallel or indirect up to 11 ft, none above; the holding test draws the flame with a seeded **ASSUMED** spread ([response-model.md](response-model.md)). A fire that its built control lines hold (the solver forecasts no further spread) is contained by the same handling | Sourced limits, assumed spread |
+| Bases | 3 synthetic stations | With a snapshot: its stations (OSM / NIST locations, observed; Camp's four Chico points synthetic), all of them, also those with no available engine. Without one: real CAL FIRE facilities from `GET /api/suppression/bases`: Type 3 engines and the dozer at the nearest CAL FIRE state stations (Paradise, Jarbo Gap, Stirling City, Forest Ranch, Cohasset, Harts Mill), Type 1 engines at the nearest Schedule A stations (Paradise FD 81 and 82, Upper Ridge), crews from Table Mountain Fire Center. Without the local-only bases file: synthetic stations, labelled. The map marks each station | Observed locations |
+| Travel | Straight line × 1.3 at 50 km/h | `POST /api/demo/crew_routes`: `livecore.inbound.reach_route` over the drill roads, per apparatus class (`tools.suppression_data.road_access`, rules R01-R12, on each road's OSM tags and DEM grade: "Road access" below), avoiding fire. A unit no allowed road brings to its fire stops at the nearest point it can reach. A base (or a target, such as an attack position in the wildland) off the network gets a straight-line × 1.3 leg at the heavy-apparatus secondary-road cap to (from) the nearest road node. Units only move along that road line: a unit dispatched before its road time is known waits at its base (travel `pending`) and sets off, timed from its dispatch, when the leg arrives; a trip with no road route releases the unit with the router's reason. **ASSUMPTION** straight line × 1.3 at 60 km/h only for options and ETAs shown before a road time is known. On top of the leg the board applies the unit's turnout (from rest only), the congestion factor and a seeded trip variation (`model.ts` `dispatch`, `travelMinutesTo`), and reroutes a unit whose road fire cuts (`rerouteTeam`: it waits where it stands for a new road leg; the straight-line fallback is never a trip). Sending a unit home, moving it up and covering a station are road trips too (`driveHome`, `startRoadTrip`) ([response-model.md](response-model.md)) | Model |
 | Departure | Uniform over 45 min after an order, everyone leaves | Exponential delay, mean 93 min (Camp awareness-to-departure, Grajdura 2022; the exponential shape is an **ASSUMPTION**). 92% of households with a vehicle leave on an order (**ASSUMPTION** inside the sourced 0.87-0.97) | Sourced mean and range |
 | Shadow evacuation | none | With no order, 30% of households with a vehicle leave once fire touches the zone (**ASSUMPTION** inside the sourced 0.29-0.75), on the zone's best route | Sourced range |
 | No vehicle | none | The snapshot's `needs_transport_households` per zone (Camp: ACS, 1,172 over 43 zones, the replay bundle's demand table; packages: synthetic, 1,586 Berkeley, 672 Palisades); without a snapshot the environment's ACS count (Camp) or none. They stay home and are shown as "No vehicle, at risk" when a fire touches or is forecast to reach their zone | Observed (ACS) |
-| Congestion | not modelled | Evacuating vehicles load their route's road segments each minute; BPR volume-delay on the flow that passes plus a point queue where demand exceeds capacity, on the drill roads' assumed capacities (see "Evacuation traffic" below). Fire units still drive free-flow times | Model on assumed capacities |
+| Congestion | not modelled | One traffic state. Households: evacuating vehicles load their route's road segments each minute; BPR volume-delay on the flow that passes plus a point queue where demand exceeds capacity, on the drill roads' per-segment assumed capacities (see "Evacuation traffic" below). Fire units read the same evacuees' flows (`board.traffic.zoneFlow`, the zones' departure flow in veh/h, `boardResponse.ts` `flowIndex`): `response/travel.ts` slows a responder's road leg where it runs within `SHARED_ROAD_M` (60 m) of a route in use by a leaving zone, by a BPR factor against a fixed `CAPACITY_VEH_PER_HOUR` of 1,700 veh/h per direction (**ASSUMPTION**, HCM 2010 two-lane highway; opposing flow weighted `OPPOSING_FLOW_WEIGHT` 0.5, **ASSUMPTION**), not the segment's own capacity and not the evacuees' queues ([response-model.md](response-model.md)) | Model on assumed capacities |
 
 ## Resource snapshot
 
@@ -78,16 +83,19 @@ snapshot re-seeded while a board runs is picked up at the next Reset board.
   snapshot gives zone sums). Caught persons are frozen at the overrun. Unknown occupants (`null`,
   or `unknown_households > 0`) stay `null` (shown as unknown), never 0, with `known_occupants`
   and the unknown households alongside.
-- **Units** (`snapshotTeams`): one per engine with `status_at_start: "available"`, id = its
+- **Units** (`snapshotTeams`, `buildBoardUnits`): one per engine with `status_at_start: "available"`, id = its
   `engine_id` (`S04-E2`, `ST81-E1`), at its station; `type3_engine` runs as `engine_t3`,
   `type1_engine` as `engine_t1` (`realism.ts` `SNAPSHOT_ENGINE_KIND`, sourced rates in
   `studio/apparatus.ts`). Committed and out-of-service engines are on the station records
   (`board.stations[].engines`, `stationRecords`) but never units, so a station with no available
   engine has no unit. The snapshot has no hand crews or dozers, so `realism.ts`
-  `ASSUMED_EXTRA_UNITS` keeps the fallback roster's 2 Type 1 hand crews (C1, C2) and Type 2
+  hand crews and dozers come from the CAL FIRE facilities layer (`buildFleet`) when it loaded. Without the
+  layer, `realism.ts` `ASSUMED_EXTRA_UNITS` keeps the fallback roster's 2 Type 1 hand crews (C1, C2) and Type 2
   dozer (D1), labelled "assumed (not in the snapshot)", at the nearest CAL FIRE crew camp /
-  state station when the CAL FIRE bases layer loaded, else at the snapshot station nearest the
-  drill centre (Camp ST81, Berkeley S03, Palisades S09).
+  state station when the bases layer loaded, else at the snapshot station nearest the
+  drill centre (Camp ST81, Berkeley S03, Palisades S09). One department per snapshot station with an
+  available engine; layer engines within `SAME_STATION_M` of a snapshot station are dropped (see the
+  Units row above). The T+0 out-of-service draw skips snapshot engines.
 - **No snapshot** (404 `no_snapshot`, network error, timeout): the board still runs, on the
   assumed roster and the drill file's counts, with `board.resources.label` "No resource snapshot
   for this drill — using assumed roster" and the reason (`board.resources.problem`,
@@ -113,7 +121,7 @@ snapshot re-seeded while a board runs is picked up at the next Reset board.
   monitor treats a unit leaving its assignment as freed. `checkBoardInvariants`: a returning
   unit is on no fire or line and has a trip home. `checkBoardInvariants` (run after every step in dev builds,
   `console.error` once per message) checks that no unit is in two fires' crew lists, a line's
-  units are on its fire, engine units are available snapshot engines, and households and
+  units are on its fire, engine units are available snapshot engines, no unit is on a straight-line trip, and households and
   persons balance (home + on the road + out + caught = total, nothing negative).
 - **Commander** (`observation.ts`): crews carry `engine_id`, `station_id`, `assumed`; zones
   `occupants`, `known_occupants`, `unknown_occupant_households`, `people_home` / `_en_route` /
@@ -297,8 +305,72 @@ active incident, not only the Camp map.
   slope is sent as rise/run × 1000 integers, aspect as whole degrees.
 - `POST /api/demo/crew_routes`, body `{fires: rings, requests: [{id, access_class, from, to}]}`
   (at most 40): per request `drive_min` (no turnout), `distance_m`, `basis` (`road`,
-  `road_offboard`), `offboard_m` (off-network legs at the start and the end, summed), `reason`
-  when there is no route, and the line (ending at `to` when `to` is off the network).
+  `road_offboard`), `offboard_m` (off-network legs at the start and the end, summed), `reason` when there is no route, and the line (ending at `to` when `to` is off the network). Road access
+  fields (additive; older clients ignore them):
+  - `access_status`: `reached` (drives to the road node nearest `to`), `detour` (gets there, but a
+    faster road is closed to the class), `stopped_short` (no allowed road gets there), or null
+    when there is no route.
+  - `stop_point`: `[lon, lat]` where the vehicle must stop, `stopped_short` only. Then
+    `drive_min`, `distance_m` and `line` end there, and `reason` is null.
+  - `off_road_m_to_target`: straight-line metres from the end of `line` to `to` (the road snap
+    distance when `reached`): the walk in or hose lay a consumer may add.
+  - `blocked_rule` (`R01`-`R10`) and `blocked_reason` (plain language, e.g. "Paved road too steep
+    (19%) for a Type 1 engine on Apple Lane (R05)"): the first road closed to the class on the
+    route an unrestricted vehicle would take. Set for `detour`, `stopped_short`, and a no-route
+    leg whose better road is closed; else null.
+  - `unrestricted_drive_min`: `detour` only, that unrestricted vehicle's drive minutes.
+  - Top level `road_access: {status, basis}`: `ready` (OSM tags and grade), `grade_only` (tags
+    still loading), `none` (highway class only); `basis` says what was used.
+
+  A stop short is taken only within 3 km of `to` (`livecore.inbound.STOP_SHORT_MAX_M`,
+  **ASSUMPTION**); farther, the leg has no route and keeps its `reason` (`no_access`,
+  `target_in_fire`, `no_open_road`, `target_off_network`). A target inside the fire also stops
+  short, at the nearest reachable road outside it. Consumers (the response model) should read
+  `access_status`, `stop_point`, `off_road_m_to_target` and `blocked_reason`; an older server
+  omits them, which means `reached`.
+- `GET /api/demo/road_access`: `{status, basis, classes: [{access_class, label, open_km,
+  closed_km, top_rules: [{rule, km, example}]}], closed_roads: FeatureCollection, evidence_class:
+  "derived"}`. `closed_roads` holds each drill segment closed to at least one class, with
+  `closed` (class -> rule), `reason` and `grade_pct`. Cached for an hour once `status` is
+  `ready`; the /live map draws it ("Roads trucks can't use" layer, and for a selected unit).
+
+## Road access
+
+The drill bundle keeps only `highway`, `lanes`, `bridge` and speed per edge, so without more
+the rules R01-R12 ([suppression-data.md](suppression-data.md)) closed nothing on Camp.
+`api/drill_road_attrs.py` adds, per drill segment (`livecore/road_attrs.py`):
+
+- **OSM tags** (observed): surface, tracktype, smoothness, width, maxweight, maxheight, bridge,
+  access, emergency, motor_vehicle, 4wd_only, fetched from Overpass by the way id in each edge id
+  (`osm-way:<id>:...`), with `dispatch_area.overpass` (same mirrors). Today's tags; 308 of the
+  5,291 Camp ways no longer exist and take their tags as of 2018-11-08 (attic query). The drill's
+  own highway class and speed are kept. `4wd_only` is carried but no rule reads it. Cached in
+  MongoDB `dispatch_areas` (`builder: drill-road-tags/1`); the first fetch (about a minute) runs
+  in the background, and until then the rules see grade only (`status: grade_only`).
+- **Grade** (derived): the steepest 150 m least-squares slope of each segment's elevation
+  profile on the Camp package's USGS 3DEP 1 arc-second DEM, sampled every 10 m and
+  median-filtered over ±50 m; bridges unknown. **ASSUMPTION**: window and filter are not
+  sourced. Coarse 2018 OSM geometry on canyon rims cuts across slopes, so the estimate runs
+  high there (a few roads read above 40%). The endpoint difference over 100 m that Studio uses
+  (`studio/roadAccess.ts`) gave about 460 km above 16% on Camp; this gives about 340 km.
+  Other incidents get no grade (0% assumed, labelled); a Studio drill package built from now on
+  keeps its dispatch-area OSM tags per edge (`livecore/package.py`).
+
+Camp drill roads (3,083 km of segments, one direction each), closed per class with tags and
+grade (before: 0 km for every class):
+
+| Class | Open km | Closed km | Top rules |
+| --- | --- | --- | --- |
+| Type 1/2 engine (`engine_t1_t2`) | 2,672 | 411 (13%) | R05 paved grade > 16%: 299; R04 unpaved: 111; R03 smoothness: 2 |
+| Type 3 engine (`engine_t3`; hand crew carriers) | 2,957 | 126 (4%) | R05 paved > 25%: 101; R06 unpaved > 20%: 26 |
+| Type 4-7 engine (`engine_t4_t7`) | 2,974 | 109 (4%) | R05: 101; R06 unpaved > 25%: 9 |
+| Support tender / dozer transport (`tender_support`) | 2,468 | 615 (20%) | R05 paved > 12%: 502; R04: 111; R03: 2 |
+| Tactical tender (`tender_tactical`) | 2,746 | 336 (11%) | R05 > 16%: 299; R06 > 15%: 38; R09: 0.2 |
+
+Most closures are short canyon-side roads: from Paradise, Chico, Magalia or Oroville a Type 1
+engine still reaches 96% of the main road nodes, a support tender 90%, a Type 3 engine 99%.
+The evacuation planner and `POST /api/demo/routes` are unchanged (the rules are for apparatus,
+not cars).
 
 ## Measured
 
@@ -341,11 +413,10 @@ active incident, not only the Camp map.
 - A fire started where another fire will arrive first contributes nothing (the solver's
   "reached before start"); one started on burned ground, non-burnable ground or off the
   landscape is labelled and does not spread.
-- Road grade, dead ends (R10) and lane counts are not applied to apparatus routing; on the
-  drill's paved roads every class gets the same heavy-apparatus speeds.
-- No aircraft, no water supply, no fatigue or shift changes; engine counts and availability
-  per station are the snapshot's assumptions (synthetic), and the hand crews and dozer are not
-  in the snapshot at all. Committed engines never become available during a run.
+- Dead ends (R10) and lane counts are not applied to apparatus routing; road grade is a DEM
+  estimate that runs high on canyon-rim roads (see "Road access"). The response model does not
+  yet add a walk-in or hose-lay time for `off_road_m_to_target`.
+- Engine counts and availability per station are the snapshot's assumptions (synthetic) when a snapshot is used, and the snapshot has no hand crews or dozers (the facilities layer supplies them, at assumed counts, or the assumed extras without it); committed engines never become available during a run. The same-station match between layer and snapshot (`SAME_STATION_M`) is an assumption. Otherwise unit counts per facility are assumed. Aircraft, water, work/rest, move-up and escalation are modelled by the response model ([response-model.md](response-model.md), with its own list of gaps).
 - Persons are spread evenly over a zone's vehicle households (the snapshot's per-household
   occupants are not used household by household).
 - Under strong Studio winds, fires routinely escape initial attack. That is the model's answer,
@@ -353,10 +424,11 @@ active incident, not only the Camp map.
   until contained or closed.
 - Ingest timing is a wall-clock input (when the poll sees the publish); given the same publishes
   ingested at the same board minutes, a run replays exactly.
-- Evacuation traffic uses static loading (a vehicle loads its whole route at departure), point
+- Household evacuation traffic uses static loading (a vehicle loads its whole route at departure), point
   queues without spillback into upstream links, no intersections or signals, and assumed
   capacities; a zone redirected mid-evacuation moves its past departures to the new route in the
-  queue history. Fire units drive free-flow times and are not slowed by evacuees. Destination
+  queue history. Fire units read these households' zone flows (`board.traffic.zoneFlow`) but are slowed by a BPR factor
+  at a fixed 1,700 veh/h per direction on route lines near leaving zones, not by the per-segment capacities or queues ([response-model.md](response-model.md)). Destination
   capacity is reported, not enforced (exits have none). Carless households have no pickup model.
 - Fires that leave the board keep their burned ground in the field (no reburn) until restart.
 - `fire/rothermel.ts` and `sim/fire.py` disagree on SH5 at the replay's inputs (85 against

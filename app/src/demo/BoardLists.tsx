@@ -1,7 +1,8 @@
 import { Button, EvidenceTag, LoadingState, Notice, Tag } from "../ui";
 import type { Selection } from "./DemoMap";
-import { FIRE_STATUS, SOURCE_LABEL, TEAM_STATUS, simClock } from "./format";
+import { FIRE_STATUS, SOURCE_LABEL, TEAM_STATUS } from "./format";
 import { currentContainment, fireAreaHa } from "./model";
+import { fireTimeline } from "./boardResponse";
 import { kindShort } from "./realism";
 import type { CommandBoard } from "./useCommandBoard";
 
@@ -85,9 +86,9 @@ export default function BoardLists({
                     </span>
                     <span className="lc-q-meta lc-num">
                       {fireAreaHa(f).toFixed(1)} ha · {f.headRate} m/min · flame {Math.round(f.rates.headFlameFeet)} ft
-                      {f.noSpread ? ` · ${f.noSpread}` : f.status === "burning" && f.rates.crowning ? " · crown fire at head" : ""} · started{" "}
-                      {simClock(f.ignitedAt)}
+                      {f.noSpread ? ` · ${f.noSpread}` : f.status === "burning" && f.rates.crowning ? " · crown fire at head" : ""}
                     </span>
+                    <span className="lc-q-meta lc-num">{fireTimeline(board, f)}</span>
                     <span className={`lc-q-meta${f.status === "burning" && (crews.length === 0 || eta === null) ? " lc-error" : ""}`}>
                       {f.status !== "burning"
                         ? "Mopping up"

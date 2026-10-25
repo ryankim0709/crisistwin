@@ -1,7 +1,8 @@
 from django.urls import include, path, re_path
 
+from .conditions import conditions, conditions_presets
 from .demo import demo_decide, demo_routes
-from .demo_realism import demo_crew_routes, demo_environment, demo_wind
+from .demo_realism import demo_crew_routes, demo_environment, demo_road_access, demo_wind
 from .dispatch import decide
 from .dispatch_area import dispatch_area
 from .dispatch_runs import run_list, run_outcome
@@ -16,6 +17,8 @@ from .intel import (
     intel_runs,
 )
 from .intel_feeds_api import intel_feed_poll, intel_feeds
+from .geo_cache import imagery_tile, landfire_wcs, terrarium_tile
+from .landscape_cache import landscape_cache, landscape_cache_status
 from .landscapes import landscape_list, landscape_package
 from .live_active import live_active
 from .live_broadcast import live_broadcast, live_snapshot
@@ -27,7 +30,9 @@ from .sim_state import latest as sim_latest
 from .sim_state import publish_run, tick_run
 from .suppression_bases import suppression_bases
 from .views import health
+from .world import load_scenario, world_active, world_scenario, world_scenarios
 
+SCENARIO_ID = r"(?P<scenario_id>scn_[0-9a-f]{8,40})"
 FAMILY_ID = r"(?P<family_id>[0-9a-f]{24})"
 MOBILE_COLLECTION = r"(?P<collection>[a-z][a-z0-9_]{0,47})"
 MOBILE_DOCUMENT_ID = r"(?P<document_id>[0-9a-f]{24})"
@@ -38,10 +43,13 @@ urlpatterns = [
     path("dispatch/decide", decide, name="dispatch-decide"),
     path("dispatch/area", dispatch_area, name="dispatch-area"),
     path("weather/scenario", scenario_weather, name="weather-scenario"),
+    path("conditions", conditions, name="conditions"),
+    path("conditions/presets", conditions_presets, name="conditions-presets"),
     path("suppression/bases", suppression_bases, name="suppression-bases"),
     path("demo/routes", demo_routes, name="demo-routes"),
     path("demo/decide", demo_decide, name="demo-decide"),
     path("demo/crew_routes", demo_crew_routes, name="demo-crew-routes"),
+    path("demo/road_access", demo_road_access, name="demo-road-access"),
     path("demo/environment", demo_environment, name="demo-environment"),
     path("demo/wind", demo_wind, name="demo-wind"),
     path("dispatch/runs", run_list, name="dispatch-runs"),
@@ -87,6 +95,15 @@ urlpatterns = [
         intel_candidate_review,
         name="intel-candidate-review",
     ),
+    path("geo/landfire/wcs", landfire_wcs, name="geo-landfire-wcs"),
+    re_path(r"^geo/terrarium/(?P<z>\d{1,2})/(?P<x>\d{1,8})/(?P<y>\d{1,8})\.png$", terrarium_tile, name="geo-terrarium"),
+    re_path(r"^geo/imagery/(?P<z>\d{1,2})/(?P<y>\d{1,8})/(?P<x>\d{1,8})$", imagery_tile, name="geo-imagery"),
+    path("landscapes/cache", landscape_cache, name="landscape-cache"),
+    path("landscapes/cache/status", landscape_cache_status, name="landscape-cache-status"),
+    path("world/active", world_active, name="world-active"),
+    path("world/scenarios", world_scenarios, name="world-scenarios"),
+    re_path(rf"^world/scenarios/{SCENARIO_ID}$", world_scenario, name="world-scenario"),
+    re_path(rf"^world/scenarios/{SCENARIO_ID}/load$", load_scenario, name="world-scenario-load"),
     re_path(r"^landscapes/?$", landscape_list, name="landscape-list"),
     re_path(r"^landscapes/(?P<region_id>[^/]{1,64})/?$", landscape_package, name="landscape-package"),
 ]

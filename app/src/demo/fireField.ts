@@ -37,6 +37,7 @@ import {
   type ControlLines,
 } from "../fire/spread";
 import type { IgnitionSource } from "../fire/scheduledTypes";
+import type { StochasticRunSummary, StochasticSpreadOptions } from "../fire/stochastic";
 import type { LonLat } from "../live/types";
 import type { FuelMoisture } from "../fire/spread";
 import { METERS_PER_SECOND_PER_MPH } from "./realism";
@@ -120,6 +121,12 @@ export interface FireSolveRequest {
     earlierBehaviour: CellBehaviour;
     earlierWindSpeedMph: number;
   } | null;
+  /**
+   * Seeded stochastic spread (fire/stochastic.ts), off when absent. Keep the seed fixed for a
+   * board: draws are keyed on cells and simulation minutes, so resumed solves with one seed
+   * continue one realisation. Include it in `key` when a caller sets it.
+   */
+  stochastic?: StochasticSpreadOptions | null;
 }
 
 export interface FireSolveResult {
@@ -147,6 +154,8 @@ export interface FireSolveResult {
   perimeterStartMinute: number;
   /** Per source, metres of fire edge facing ground that can still burn, at each whole minute. */
   perimeterBySource: Float32Array[];
+  /** Present when the solve was stochastic: seed, applied options and what they did (simulated). */
+  stochastic?: StochasticRunSummary;
   computeMilliseconds: number;
 }
 
@@ -189,6 +198,7 @@ export function solveFireField(grid: LandscapeGrid, request: FireSolveRequest): 
         horizonMinutes: request.horizonMinutes,
         spotting: DEFAULT_SPOTTING,
         structureSpread: DEFAULT_STRUCTURE_SPREAD,
+        ...(request.stochastic ? { stochastic: request.stochastic } : {}),
       },
       sources,
       // No frames: the board reads the arrival field, and the map contours per fire.
@@ -282,6 +292,7 @@ export function solveFireField(grid: LandscapeGrid, request: FireSolveRequest): 
     arrivalBySource,
     perimeterStartMinute,
     perimeterBySource,
+    ...(run.stochastic ? { stochastic: run.stochastic } : {}),
     computeMilliseconds: performance.now() - started,
   };
 }

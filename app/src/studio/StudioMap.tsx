@@ -9,6 +9,7 @@ import {
   type MapOptions,
 } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
+import { AERIAL_STYLE } from "../maps/basemap";
 import type { Feature, FeatureCollection, Polygon, Position } from "geojson";
 import { ARRIVAL_COLORS, CURRENT_PERIMETER_COLOR } from "../fire/FireMap";
 import { mercatorToLonLat, type MercatorBox } from "../fire/landscape";
@@ -40,22 +41,10 @@ const STALE_DIM = 0.4;
 const LEGEND_BAND_COUNT = 4;
 const MARKER_CLASS = "studio-marker";
 
-// Same imagery as /fire (FireMap keeps its style private, so it is repeated here).
+/** Aerial imagery plus the OpenFreeMap glyphs the people layer's labels need (as on /live). */
 const SATELLITE_STYLE: MapOptions["style"] = {
-  version: 8,
-  sources: {
-    imagery: {
-      type: "raster",
-      tiles: [
-        "https://basemap.nationalmap.gov/arcgis/rest/services/USGSImageryOnly/MapServer/tile/{z}/{y}/{x}",
-      ],
-      tileSize: 256,
-      maxzoom: 16,
-      attribution:
-        '<a href="https://www.usgs.gov/programs/national-geospatial-program/national-map">USDA / USGS The National Map</a> · Aerial imagery',
-    },
-  },
-  layers: [{ id: "imagery", type: "raster", source: "imagery" }],
+  ...AERIAL_STYLE,
+  glyphs: "https://tiles.openfreemap.org/fonts/{fontstack}/{range}.pbf",
 };
 
 const ARRIVAL_EXPRESSION = [
@@ -348,6 +337,7 @@ export default function StudioMap({
   onMapReady,
   legendExtra,
   legendMode = "full",
+  recenterKey,
 }: StudioMapProps) {
   const compactLegend = legendMode === "compact";
   const [legendOpen, setLegendOpen] = useState(!compactLegend);
@@ -360,6 +350,19 @@ export default function StudioMap({
   const locatorMarkers = useRef(new Map<string, Marker>());
   // Bumped when the camera moves so screen-size checks are recomputed.
   const [viewTick, setViewTick] = useState(0);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!recenterKey || !map || !ready) return;
+    const bounds = new LngLatBounds();
+    let any = false;
+    for (const { location, enabled } of ignitionsRef.current) {
+      if (!enabled) continue;
+      bounds.extend([location.longitude, location.latitude]);
+      any = true;
+    }
+    if (any) map.fitBounds(bounds, { padding: FIT_PADDING, maxZoom: FIT_MAX_ZOOM, duration: 0 });
+  }, [recenterKey, ready]);
 
   // Handlers and mode are read through refs so the map is created once.
   const clickRef = useRef(onMapClick);

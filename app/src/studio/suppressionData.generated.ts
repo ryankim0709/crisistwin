@@ -27,6 +27,10 @@ export const SUPPRESSION_DATA: SuppressionDataModule = {
       "title": "14 CCR 1273.01-1273.07, State Minimum Fire Safe Regulations, Ingress and Egress (Cornell LII copy)",
       "url": "https://www.law.cornell.edu/regulations/california/14-CCR-1273.01"
     },
+    "calfire_house_2019": {
+      "title": "Written testimony of Dan Johnson, CAL FIRE Southern Region Chief, House Oversight Subcommittee on Environment, 20 Aug 2019",
+      "url": "https://docs.house.gov/meetings/GO/GO28/20190820/109883/HHRG-116-GO28-Wstate-JohnsonD-20190820.pdf"
+    },
     "calfirepilots_fire": {
       "title": "California Fire Pilots Association, 'Fire' page (trade association, not an agency)",
       "url": "https://www.calfirepilots.com/fire"
@@ -66,9 +70,21 @@ export const SUPPRESSION_DATA: SuppressionDataModule = {
     }
   },
   "leaves": {
+    "engines.typing.1.tank_min_gal": {
+      "value": 300,
+      "unit": "gal",
+      "source": "nwcg_pms200_equipment",
+      "page": "Engines > Engine Typing Standard table"
+    },
     "engines.typing.1.personnel_min": {
       "value": 4,
       "unit": "persons",
+      "source": "nwcg_pms200_equipment",
+      "page": "Engines > Engine Typing Standard table"
+    },
+    "engines.typing.3.tank_min_gal": {
+      "value": 500,
+      "unit": "gal",
       "source": "nwcg_pms200_equipment",
       "page": "Engines > Engine Typing Standard table"
     },
@@ -354,6 +370,137 @@ export const SUPPRESSION_DATA: SuppressionDataModule = {
       "unit": "chains/hour per 20-person crew",
       "source": "broyles_2011",
       "page": "p.6 Table 2 (feet/hour in Table 3, p.7). 95% confidence sustained rate over a shift; FM 3, 7, 11-13 not measured."
+    },
+    "hand_crews.production_sustained_2011_indirect": {
+      "value": {
+        "columns": [
+          "fm1_2_grass",
+          "fm4_chaparral",
+          "fm5_6_brush",
+          "fm8_9_10_timber"
+        ],
+        "type1": {
+          "chains_per_hour": [
+            9.5,
+            5,
+            4.9,
+            6.9
+          ],
+          "range": [
+            [
+              7.7,
+              11.3
+            ],
+            [
+              2.7,
+              7.3
+            ],
+            [
+              3.7,
+              6.1
+            ],
+            [
+              6.0,
+              7.8
+            ]
+          ]
+        },
+        "type2": {
+          "chains_per_hour": [
+            4.3,
+            4,
+            4.2,
+            5.7
+          ],
+          "range": [
+            [
+              3,
+              6
+            ],
+            [
+              3,
+              5
+            ],
+            [
+              2,
+              6
+            ],
+            [
+              4,
+              7
+            ]
+          ]
+        }
+      },
+      "unit": "chains/hour per 20-person crew",
+      "source": "broyles_2011",
+      "page": "p.6 Table 2"
+    },
+    "hand_crews.production_initial_attack_1996": {
+      "value": {
+        "columns": [
+          "fuel_model",
+          "chains_per_hour_per_person"
+        ],
+        "rows": [
+          [
+            1,
+            1.0
+          ],
+          [
+            2,
+            3.0
+          ],
+          [
+            3,
+            0.7
+          ],
+          [
+            4,
+            0.4
+          ],
+          [
+            5,
+            0.7
+          ],
+          [
+            6,
+            0.7
+          ],
+          [
+            7,
+            0.7
+          ],
+          [
+            8,
+            2.0
+          ],
+          [
+            9,
+            2.0
+          ],
+          [
+            10,
+            1.0
+          ],
+          [
+            11,
+            1.0
+          ],
+          [
+            12,
+            1.0
+          ],
+          [
+            13,
+            0.4
+          ]
+        ],
+        "note": "Conifer values where conifer and hardwood differ; hardwood FM8 is 10.0 and FM9 8.0 as printed."
+      },
+      "unit": "chains/hour/person",
+      "source": "pms465_tactics_1996",
+      "page": "p.39 Table 1 'Handcrew production, initial attack'"
     },
     "hand_crews.flame_length_limits_ft": {
       "value": {
@@ -1207,6 +1354,12 @@ export const SUPPRESSION_DATA: SuppressionDataModule = {
       "source": "pms465_tactics_1996",
       "page": "p.171, 174: retardant inappropriate for direct attack above 8 ft flames"
     },
+    "deployment.calfire_initial_attack_goal": {
+      "value": "Contain 95 percent of all fires at 10 acres or less.",
+      "unit": "text",
+      "source": "calfire_house_2019",
+      "page": "p.4"
+    },
     "deployment.calfire_initial_aircraft_response": {
       "value": {
         "air_attack": 1,
@@ -1227,6 +1380,21 @@ export const SUPPRESSION_DATA: SuppressionDataModule = {
       "unit": "resources",
       "assumption": true,
       "reason": "No public CAL FIRE unit preplan or ECC dispatch matrix was retrieved (they are not published; contract-county and unit plans differ). Shape follows the SRA response described by the calfirepilots page (engines, dozers, crews, chiefs, air); counts are a placeholder for the simulator."
+    },
+    "deployment.strike_team_composition": {
+      "value": {
+        "engines": 5,
+        "leader": 1
+      },
+      "unit": "resources",
+      "assumption": true,
+      "reason": "Common NWCG definition; not re-fetched here."
+    },
+    "deployment.engines_per_station_estimate": {
+      "value": 1.6,
+      "unit": "engines per CAL FIRE-owned station",
+      "assumption": true,
+      "reason": "Derived: 343 year-round engines (house testimony p.3) / 220 active state-owned stations of type FSA/FSB/FSAB in tools/ca_fire_bases.json (196 FSB + 22 FSAB + 2 FSA). Seasonal and local engines excluded; single-engine stations are common, so this is an average."
     },
     "response_times.turnout_s": {
       "value": 80,

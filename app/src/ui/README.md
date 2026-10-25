@@ -37,7 +37,7 @@ imports components from `../ui` (or `../../ui`), never from an individual file.
    (`--fr-ink: var(--ct-ink)`) but must not redefine what a button or panel looks like.
 4. **Prefix feature classes.** One prefix per feature so selectors never collide:
    `fr-` fire, `fdx-` fire diorama scene labels, `studio-` simulation studio, `dsp-`
-   dispatch, `dm-` demo, `rp-` replay, `dio-` diorama, `nav-`/`sidebar-` shell, `ws-` planning pages.
+   dispatch, `dm-` demo, `rp-` replay, `dio-` diorama, `wld-` shared-world menu, `ppl-` live people layer, `pmr-` app-integration phone mirror, `aix-` app integration, `nav-`/`sidebar-` shell, `ws-` planning pages.
    `ui-` is reserved for this kit.
 5. **Every async view has three states:** loading (`LoadingState`), empty (`EmptyState`),
    error (`Notice tone="danger"`). Never a blank panel.
@@ -65,7 +65,7 @@ values, so every kit component restyles itself.
 | Borders     | `--ct-border`, `-subtle`, `-strong`                                                                                                                         |                                                                            |
 | Brand       | `--ct-brand`, `-strong`, `-soft`, `-soft-hover`, `--ct-focus`                                                                                               | Primary actions, selected state, focus ring                                |
 | Status      | `--ct-{success,warning,danger,info}` plus `-soft` and `-border`                                                                                             | Text, background and border for each tone                                  |
-| Hazard data | `--ct-fire`, `-fire-hot`, `-ember`, `-ember-core`, `-burned`, `-smoke`, `-water`, `-route`, `-evacuee`, `-responder`, `-shelter`, `-closure`, `-vegetation` | Legends and overlays; the same meaning everywhere                          |
+| Hazard data | `--ct-fire`, `-fire-hot`, `-ember`, `-ember-core`, `-burned`, `-smoke`, `-water`, `-route`, `-evacuee`, `-responder`, `-shelter`, `-closure`, `-app-user`, `-vegetation` | Legends and overlays; the same meaning everywhere                          |
 | Type        | `--ct-font-sans`, `-mono`, `-display`; `--ct-text-2xs`…`-3xl`, `-metric`; `--ct-weight-*`; `--ct-leading-*`; `--ct-tracking-*`                              | 10/11/12/13/14/16/18/23 px plus a fluid display size                       |
 | Space       | `--ct-space-1`…`-12`                                                                                                                                        | 4 px grid: 4, 8, 12, 16, 20, 24, 28, 32, 40, 48                            |
 | Shape       | `--ct-radius-xs`…`-xl`, `-pill`; `--ct-control-height`, `-sm`                                                                                               | Buttons are pills, inputs 8 px, panels 12 px; controls 40 px (32 px small) |

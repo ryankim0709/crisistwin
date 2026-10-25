@@ -52,6 +52,7 @@ CLOSE_ROAD_WINDOW_S = FIRE_CLOSURE_CHECK_EVERY_S  # close_road: at most FIRE_CLO
 DEFAULT_RADIUS_M = 300.0
 MAX_RADIUS_M = 5000.0
 RECENT_ARRIVALS_S = 600  # destinations: arrived_last_10_min_veh
+LONG_QUEUE_S = 900  # vehicle_states: waiting this long past free-flow time on one edge = a long queue ("stuck")
 
 ACTION_TYPES = ("order_zone", "warn_zone", "close_road", "reopen_road", "capacity_changed", "contraflow",
                 "end_contraflow", "hold_inbound", "open_refuge", "fill_destination", "reroute_zone")
@@ -1103,6 +1104,72 @@ class Twin:
             snap["exposed"] = sorted(e.exposed_edges)
             snap["contraflow"] = sorted([i, j] for i, j in e.contraflow_out.items())
         return snap
+
+    def vehicle_states(self, long_queue_s: float = LONG_QUEUE_S) -> dict:
+        """Where every departed, not yet arrived vehicle is at `now`, by state (docs/twin-api.md "Vehicle states").
+
+        Read-only. Edges (occupied only, ascending index) split their vehicles by zone into:
+        - `moving_veh`: before their free-flow exit time on the edge;
+        - `queued_veh`: past it and waiting to leave, for less than `long_queue_s`;
+        - `long_queue_veh`: waiting to leave for `long_queue_s` or longer.
+        An edge with a `block` holds every vehicle on it in that state instead: `road_closed` (hard-closed
+        edge, vehicles stopped), `fire` (fire-exposed, no route or escape from its end) or `no_route`.
+        `origins` are departed vehicles not yet on their first edge (`block` `no_route` when the node has
+        no route); `returning` are agents driving back after turning around (behaviour on only).
+        The parts add up to the engine's `en_route_veh` (checked)."""
+        e, s = self.engine, self.engine.s
+        now_s = e.now_s or 0
+        zid = [z.id for z in s.zone_list]
+        rows = e.edge_rows(now_s)
+        fire_trapped = {i for i, _ in e.fire_trapped_rows(rows)}
+        edges, total = [], 0
+        for i, n, speed, stopped in rows:
+            dead_end = e.next_edge[s.e_to[i]] == -1 and e.open_dest_at(s.e_to[i]) is None
+            block = "road_closed" if stopped else "fire" if i in fire_trapped else "no_route" if dead_end else None
+            moving: dict[str, int] = {}
+            queued: dict[str, int] = {}
+            long_q: dict[str, int] = {}
+            oldest = 0.0
+            for count, ready, zone, _ in e.queue[i]:
+                age = now_s - ready
+                if block is None and age < 0:
+                    moving[zid[zone]] = moving.get(zid[zone], 0) + count
+                    continue
+                oldest = max(oldest, age)
+                into = long_q if block is None and age >= long_queue_s else queued
+                into[zid[zone]] = into.get(zid[zone], 0) + count
+            if block is not None:
+                for z, c in moving.items():
+                    queued[z] = queued.get(z, 0) + c
+                moving = {}
+            total += n
+            edges.append({"edge_index": i, "veh": n, "speed_kph": round(speed, 1), "block": block,
+                          "exposed": i in e.exposed_edges, "moving_veh": moving, "queued_veh": queued,
+                          "long_queue_veh": long_q, "max_wait_s": round(max(oldest, 0.0))})
+        origins = []
+        for node in sorted(e.waiting):
+            by_zone: dict[str, int] = {}
+            for count, zone, _ in e.waiting[node]:
+                by_zone[zid[zone]] = by_zone.get(zid[zone], 0) + count
+            if by_zone:
+                no_route = e.next_edge[node] == -1 and e.open_dest_at(node) is None
+                origins.append({"node_index": node, "coord": list(s.network.nodes[s.node_ids[node]]),
+                                "block": "no_route" if no_route else None, "veh": by_zone})
+                total += sum(by_zone.values())
+        returning: dict[int, dict[str, int]] = {}
+        for _, _, node, count, zone, _ in e.returning:
+            r = returning.setdefault(node, {})
+            r[zid[zone]] = r.get(zid[zone], 0) + count
+            total += count
+        en_route = s.total_veh - e.not_departed - e.arrived
+        if total != en_route:
+            raise AssertionError(f"vehicle states ({total}) do not add up to en_route_veh ({en_route}) at {self.now}")
+        return {
+            "now": self.now, "long_queue_s": long_queue_s, "en_route_veh": en_route, "edges": edges,
+            "origins": origins,
+            "returning": [{"node_index": n, "coord": list(s.network.nodes[s.node_ids[n]]), "veh": v}
+                          for n, v in sorted(returning.items())],
+        }
 
     # --- what-if
 

@@ -43,6 +43,10 @@ import {
   type GroundKind,
 } from "./apparatus";
 import { DROP_HOLDS_FLAME_FEET, planAircraft, type AircraftPlan, type AirBase } from "./aircraft";
+import { WILDLAND_RUN_CARDS } from "../response/runCards";
+import { lineOfSight, nearestDeveloped, reportDelay } from "../response/report";
+import { deriveStream } from "../response/rng";
+import { cellAt as gridCellAt } from "../fire/spread";
 
 /** A ground resource kind (studio/apparatus.ts). Kept as an alias for older imports. */
 export type ResourceKind = GroundKind;
@@ -93,9 +97,8 @@ const GROUND_FIRST_ALARM = dataValue<{
   hand_crews: number;
   chief_officers: number;
 }>("deployment.initial_attack_ground_first_alarm_sra_high");
-const AIR_FIRST_ALARM = dataValue<{ air_attack: number; airtankers: number; helicopters: number }>(
-  "deployment.calfire_initial_aircraft_response",
-);
+/** The shared response model's medium-level wildland run card (response/runCards.ts), the /live board's too. */
+const RUN_CARD = WILDLAND_RUN_CARDS.medium;
 
 /**
  * First-alarm package. Ground (ASSUMPTION in the data: no public CAL FIRE dispatch matrix):
@@ -103,14 +106,50 @@ const AIR_FIRST_ALARM = dataValue<{ air_attack: number; airtankers: number; heli
  * Type 2 crew. Air (California Fire Pilots Association, secondary source): air attack, two
  * airtankers (CAL FIRE's S-2T) and one helicopter (Type 2 here; ASSUMPTION on the type).
  */
+/**
+ * Minutes from an ignition to dispatch (call-in, answer, transfer, processing;
+ * response/report.ts), seeded per ignition from its place and minute so a rerun gives the
+ * same delay. Studio has no households: the nearest developed cell (FBFM40 91) stands in for the
+ * nearest home (assumption).
+ */
+export function ignitionReportDelayMinutes(
+  grid: LandscapeGrid | null,
+  location: { longitude: number; latitude: number },
+  startMinute: number,
+  settings: FirefightingSettings,
+): number {
+  const p: [number, number] = [location.longitude, location.latitude];
+  let developed = false;
+  let home: { meters: number; at: [number, number] } | null = null;
+  let homeInSight = true;
+  if (grid) {
+    const c0 = gridCellAt(grid, location);
+    developed = c0 >= 0 && grid.fuelCodes[c0] === DEVELOPED_FUEL_CODE;
+    home = nearestDeveloped(grid, p);
+    if (home) homeInSight = lineOfSight(grid, p, home.at);
+  }
+  const rng = deriveStream(0, `${location.longitude.toFixed(5)},${location.latitude.toFixed(5)},${startMinute}`);
+  // Studio has no road lines here, so remoteness comes from developed cells (homes) only.
+  return reportDelay(rng, {
+    ignitionEpochMs: startMsOf(settings) + startMinute * 60_000,
+    location: p,
+    nearestHomeM: home?.meters ?? null,
+    homeInSight,
+    nearestRoadM: null,
+    developed,
+    wildland: !developed,
+    alreadyReported: false,
+  }).totalMinutes;
+}
+
 export const FIRST_ALARM: ApparatusCounts = {
-  engine_t3: GROUND_FIRST_ALARM.engines,
-  dozer_t2: GROUND_FIRST_ALARM.dozers,
-  hand_crew_t2: GROUND_FIRST_ALARM.hand_crews,
+  engine_t3: RUN_CARD.engines,
+  dozer_t2: RUN_CARD.dozers,
+  hand_crew_t2: RUN_CARD.hand_crews,
   chief: GROUND_FIRST_ALARM.chief_officers,
-  air_attack: AIR_FIRST_ALARM.air_attack,
-  airtanker_s2t: AIR_FIRST_ALARM.airtankers,
-  helicopter_t2: AIR_FIRST_ALARM.helicopters,
+  air_attack: RUN_CARD.air_attack,
+  airtanker_s2t: RUN_CARD.airtankers,
+  helicopter_t2: RUN_CARD.helicopters,
 };
 
 export const DEFAULT_FIREFIGHTING: FirefightingSettings = {
@@ -663,7 +702,9 @@ export function planFirefighting(
 ): FirefightingResult {
   const horizon = input.settings.horizonMinutes;
   const resources = crewArrivals(settings, input, dispatched);
-  const reportMinute = Math.min(...input.sources.map((s) => s.startMinute));
+  // The first fire reaches dispatch after its call-in and processing delay (response/report.ts).
+  const first = [...input.sources].sort((a, b) => a.startMinute - b.startMinute)[0];
+  const reportMinute = first ? first.startMinute + ignitionReportDelayMinutes(grid, first.location, first.startMinute, settings) : 0;
   const counts = apparatusCounts(settings);
   const anyAir = AIR_KINDS.some((kind) => (counts[kind] ?? 0) > 0);
   const aircraft = anyAir

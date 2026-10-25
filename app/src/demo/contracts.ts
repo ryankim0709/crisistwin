@@ -17,9 +17,15 @@
  * POST /api/demo/decide: `{ observation: DemoObservation }` (at most 200 kB) ->
  * application/x-ndjson, `DecisionEvent` lines ending with one "orders" or "error" line, as
  * /api/dispatch/decide (dispatch/contracts.ts). Non-2xx responses carry `{ error, detail }`.
+ * Orders: send_crew, release_crew, order_evacuation, and order_resources (fire_id, resource,
+ * count; limits in response/runCards.ts ORDERABLE / MAX_ORDER_COUNT, mirrored in demo.py
+ * ORDERABLE_RESOURCES). The response model behind the observation's `response` block and the
+ * per-fire tactic fields is docs/response-model.md.
  *
  * POST /api/demo/crew_routes: `CrewRoutesRequest` -> `CrewRoutesResponse`. Road travel for
- * firefighting units over the drill roads their apparatus class may use (livecore.inbound).
+ * firefighting units over the drill roads their apparatus class may use (livecore.inbound), with
+ * OSM surface/width/weight tags and DEM grade per road (docs/command-demo-realism.md "Road access").
+ * GET /api/demo/road_access -> `RoadAccessResponse`: drill roads closed to each class.
  * GET /api/demo/wind?mode=historical_replay|climatology_percentile -> `WindResponse`.
  * GET /api/demo/environment -> `EnvironmentResponse` (drill centre, Camp terrain grid, carless households, package fire stations).
  * The page no longer uses `terrain`: slope comes from the LANDFIRE landscape the fire solver runs on.
@@ -51,6 +57,9 @@ import type { RouteOption, TeamStatus, FireSource, FireStatus, TravelBasis } fro
 import type { RouteSegment } from "./traffic";
 import type { DemoApparatusKind } from "./realism";
 import type { AccessClass } from "../studio/apparatus";
+import type { Tactic } from "../response/containment";
+import type { Tier } from "../response/fleet";
+import type { DispatchLevel, Orderable } from "../response/runCards";
 
 /**
  * How an option's arrival times were found: "road" = every crew's time is turnout plus its road
@@ -110,6 +119,7 @@ export const DECIDE_URL = "/api/demo/decide";
 export const CREW_ROUTES_URL = "/api/demo/crew_routes";
 export const WIND_URL = "/api/demo/wind";
 export const ENVIRONMENT_URL = "/api/demo/environment";
+export const ROAD_ACCESS_URL = "/api/demo/road_access";
 
 /** `url` for `incident`: Camp is the server default, so it is sent without the parameter. */
 export function demoUrl(url: string, incidentId: string): string {
@@ -159,6 +169,24 @@ export interface CrewRoute {
   offboard_m: number;
   reason: string | null;
   line: LonLat[];
+  /**
+   * Road access (optional; absent from older servers). `reached`: drives to the road nearest
+   * `to`. `detour`: reaches it, but a faster road is closed to the class (`blocked_*`).
+   * `stopped_short`: no road the class may use gets there; `drive_min`, `distance_m` and `line`
+   * end at `stop_point`, and the unit covers `off_road_m_to_target` on foot or by hose lay.
+   * null when there is no route (`reason`).
+   */
+  access_status?: "reached" | "detour" | "stopped_short" | null;
+  /** Where the vehicle must stop (the last accessible road point nearest `to`); stopped_short only. */
+  stop_point?: LonLat | null;
+  /** Straight-line metres from the end of `line` to `to` (the road snap distance when reached). */
+  off_road_m_to_target?: number | null;
+  /** R01-R12 rule closing the better road (detour, stopped_short, or no route), e.g. "R05". */
+  blocked_rule?: string | null;
+  /** Plain-language reason, e.g. "Paved road too steep (22%) for a Type 1 engine on Pentz Road (R05)". */
+  blocked_reason?: string | null;
+  /** detour only: drive minutes an unrestricted vehicle would take. */
+  unrestricted_drive_min?: number | null;
 }
 
 export interface CrewRoutesResponse {
@@ -166,6 +194,39 @@ export interface CrewRoutesResponse {
   /** Always "not_modelled": the demo's households are not in the traffic twin. */
   congestion: "not_modelled";
   evidence_class: "simulated";
+  /** `ready`: OSM tags + DEM grade; `grade_only`: tags still loading; `none`: highway class only. */
+  road_access?: { status: RoadAccessStatus; basis: string };
+}
+
+export type RoadAccessStatus = "ready" | "grade_only" | "none";
+
+/** Per apparatus class, drill road km closed by the road access rules (GET /api/demo/road_access). */
+export interface RoadAccessClass {
+  access_class: AccessClassWire;
+  label: string;
+  open_km: number;
+  closed_km: number;
+  top_rules: { rule: string; km: number; example: string }[];
+}
+
+export interface ClosedRoadProps {
+  segment_id: string;
+  name: string | null;
+  /** Class -> the rule (R01-R12) that closes this road to it. */
+  closed: Partial<Record<AccessClassWire, string>>;
+  /** Plain-language reason for the first class it is closed to. */
+  reason: string;
+  grade_pct: number | null;
+}
+
+export interface RoadAccessResponse {
+  status: RoadAccessStatus;
+  basis: string;
+  classes: RoadAccessClass[];
+  /** Drill road segments closed to at least one class. */
+  closed_roads: GeoJSON.FeatureCollection<GeoJSON.LineString, ClosedRoadProps>;
+  /** OSM tags are observed; grade is derived from the DEM; the access rules are assumptions. */
+  evidence_class: "derived";
 }
 
 export interface WindResponse {
@@ -246,6 +307,29 @@ export interface FireObservation {
   indirect_line_m: number;
   /** Where line ahead of this fire would go (predictive attack); [] unless burning. */
   attack_positions: AttackPositionObservation[];
+  /** Response model (docs/response-model.md): tactic chosen by flame length (Hauling chart). */
+  tactic: Tactic | null;
+  /** Dispatch level the run card was sized by, or "structure" for a fire on developed ground. */
+  dispatch_level: DispatchLevel | "structure" | null;
+  /** Initial attack: in progress, contained (at 10 acres or less, no escalation), or failed. */
+  ia_status: "in_progress" | "contained" | "failed" | null;
+  /** Extended-attack stages ordered (0 = initial attack only). */
+  escalation_stage: number;
+  /** Minutes from ignition to the first unit or aircraft on scene; null before any arrives. */
+  first_arrival_min: number | null;
+  /** Minutes from ignition until the dispatch centre had the fire (call-in, answer, transfer, processing; response/report.ts). */
+  reported_after_min: number | null;
+  reported_by: "911" | "camera" | "satellite" | "field_report" | null;
+  /** Why it took that long, plain language ("4 km from the nearest home, at night, found by an AI camera"). */
+  reported_reason: string | null;
+  /** Share of the fire's edge within reach of the ground units on scene, percent; null before any is there. */
+  edge_in_reach_pct: number | null;
+  /** Times a finished line failed its seeded holding test. */
+  line_breaches: number;
+  /** Line made by aircraft drops on this fire, metres. */
+  air_line_m: number;
+  /** Aircraft assigned to this fire. */
+  aircraft: string[];
 }
 
 /**
@@ -324,6 +408,19 @@ export interface CrewObservation {
   travel: TravelBasis | null;
   /** Attack position (FireObservation.attack_positions id) it is building line at; null = direct attack or free. */
   position_id: string | null;
+  /** Department name (response/fleet.ts) and the tier it came through (closest, mutual_aid, state). */
+  department: string;
+  tier: Tier;
+  /** Water left, percent of tank (engines); null for crews and dozers. */
+  water_pct: number | null;
+  /** Hours worked since its last rest (relieved at 16 h; rests half as long, work/rest 2:1). */
+  work_h: number;
+  /** Off-road reach on its fire: metres from where it parked to the edge (null: not on scene or road access unknown). */
+  parked_m: number | null;
+  /** hose (within hose reach), hand_line (hiked in), dozer (walked in), out_of_reach. */
+  work_mode: "hose" | "hand_line" | "dozer" | "out_of_reach" | null;
+  /** Minutes until it starts building line (the hike or walk in). */
+  working_in_min: number | null;
 }
 
 export interface ZoneObservation {
@@ -415,7 +512,7 @@ export interface DemoObservation {
   /** The current hourly wind; `source` is its provenance plus how the fire model uses it. */
   wind: { from_deg: number; speed_m_s: number; evidence: string; source: string };
   /** Provenance labels of the model inputs. */
-  inputs: { fuel: string; moisture: string; terrain: string; stations: string; travel: string; congestion: string; demand: string };
+  inputs: { fuel: string; moisture: string; terrain: string; stations: string; travel: string; congestion: string; demand: string; response: string };
   fires: FireObservation[];
   crews: CrewObservation[];
   /** Zones that are threatened (fire ETA within the forecast) or already ordered/overrun. */
@@ -452,6 +549,22 @@ export interface DemoObservation {
     crews_available: number;
     crews_returning: number;
   };
+  /** Resource picture from the response model (docs/response-model.md). */
+  response: {
+    auto_dispatch: boolean;
+    auto_escalate: boolean;
+    /** Level a new wildland fire would get now (fire danger: moisture scenario and wind). */
+    dispatch_level_now: DispatchLevel;
+    departments: { id: string; name: string; tier: Tier; engines: number; engines_available: number; keep_engines: number }[];
+    /** Units at off-board stations that mutual-aid orders can still draw. */
+    mutual_aid_pool_units: number;
+    aircraft: { id: string; kind: string; base: string; status: string; fire_id: string | null; drops: number }[];
+    /** Orders not yet on the board; eta_min until they arrive (or retry, when unable_to_fill). */
+    orders: { id: string; fire_id: string; resource: Orderable; tier: "mutual_aid" | "state"; status: "pending" | "unable_to_fill"; eta_min: number }[];
+    /** What order_resources accepts. */
+    orderable: { resource: Orderable; max_count: number }[];
+    initial_attack: { fires: number; contained_in_ia: number; failed_ia: number; line_breaches: number; median_first_arrival_min: number | null };
+  };
   monitor: { woke_because: string[] };
   previous: { minute: number; summary: string; rejected: string[] } | null;
 }
@@ -464,7 +577,9 @@ export type DemoOrder =
    */
   | { type: "send_crew"; crew_id: string; fire_id: string; position_id?: string | null; reason: string }
   | { type: "release_crew"; crew_id: string; reason: string }
-  | { type: "order_evacuation"; zone_id: string; destination_id: string; reason: string };
+  | { type: "order_evacuation"; zone_id: string; destination_id: string; reason: string }
+  /** Extended-attack order through mutual aid or the state system (response/runCards.ts ORDERABLE, MAX_ORDER_COUNT). */
+  | { type: "order_resources"; fire_id: string; resource: Orderable; count: number; reason: string };
 
 export type DecisionEvent =
   | { type: "thinking"; text: string }

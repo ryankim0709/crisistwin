@@ -11,8 +11,12 @@ import {
   type GeoPoint,
 } from "../fire/spread";
 import { recordMatchesWind, type ScenarioWindRecord } from "../fire/scenarioWeather";
+import { MAX_ROS_LOG_SIGMA } from "../fire/stochastic";
+import { weatherSeriesProblems, type FireWeatherSample } from "../fire/weatherSeries";
 import { spanProblem } from "./bounds";
 import {
+  DEFAULT_FIREFIGHTING,
+  FIRST_ALARM,
   MAX_RESOURCES_PER_KIND,
   RESPONSE_MINUTE_CHOICES,
   apparatusCounts,
@@ -63,6 +67,24 @@ export function emptyScenario(): StudioScenario {
       midflameAdjustment: DEFAULT_MIDFLAME_ADJUSTMENT,
       stepMinutes: DISPLAY_STEP_MINUTES,
       horizonMinutes: DEFAULT_HORIZON_MINUTES,
+    },
+  };
+}
+
+/**
+ * The scenario with firefighting on (the Studio's default): its own resource counts when it has
+ * any, else the first-alarm package (studio/firefighting.ts FIRST_ALARM, from the shared
+ * response model's run card), sent from real stations.
+ */
+export function withFirefightingOn(scenario: StudioScenario): StudioScenario {
+  const settings = scenario.firefighting ?? DEFAULT_FIREFIGHTING;
+  const empty = Object.values(apparatusCounts(settings)).every((count) => !count);
+  return {
+    ...scenario,
+    firefighting: {
+      ...settings,
+      enabled: true,
+      ...(empty ? { resources: { ...FIRST_ALARM } } : {}),
     },
   };
 }
@@ -132,6 +154,26 @@ function validateSettings(settings: FireSettings): ScenarioIssue[] {
     add(
       `Structure spread rate must be between 0 and ${MAX_STRUCTURE_RATE_METERS_PER_MINUTE} m/min.`,
     );
+  }
+  const { stochastic } = settings;
+  if (stochastic) {
+    if (typeof stochastic.enabled !== "boolean" || !isFiniteNumber(stochastic.seed)) {
+      add("Stochastic spread needs enabled true or false and a finite seed.");
+    }
+    if (
+      stochastic.rosSigma !== undefined &&
+      (!isFiniteNumber(stochastic.rosSigma) || !inRange(stochastic.rosSigma, 0, MAX_ROS_LOG_SIGMA))
+    ) {
+      add(`Rate-of-spread variability (log sigma) must be between 0 and ${MAX_ROS_LOG_SIGMA}.`);
+    }
+  }
+  const { weatherSeries, fireInducedWind } = settings;
+  if (weatherSeries) {
+    if (typeof weatherSeries.enabled !== "boolean") add("A weather series needs enabled true or false.");
+    else if (weatherSeries.enabled) for (const problem of weatherSeriesProblems(weatherSeries)) add(problem);
+  }
+  if (fireInducedWind && typeof fireInducedWind.enabled !== "boolean") {
+    add("Fire-induced wind needs enabled true or false.");
   }
   return issues;
 }
@@ -486,6 +528,77 @@ function parseSettings(
       );
     } else {
       settings.structureSpread = { enabled: s.enabled, rateMetersPerMinute: s.rateMetersPerMinute };
+    }
+  }
+  if (raw.stochastic !== undefined) {
+    // Seeded stochastic spread (fire/stochastic.ts). Optional numbers are kept only when
+    // finite; anything else falls back to the solver's documented defaults.
+    const s = raw.stochastic;
+    if (!isRecord(s) || typeof s.enabled !== "boolean" || !isFiniteNumber(s.seed)) {
+      fail("Stochastic spread must be { enabled, seed, ... } with a finite seed.", "settings");
+    } else {
+      const optionalNumber = (value: unknown) => (isFiniteNumber(value) ? value : undefined);
+      const optionalBoolean = (value: unknown) => (typeof value === "boolean" ? value : undefined);
+      settings.stochastic = {
+        enabled: s.enabled,
+        seed: s.seed,
+        rosSigma: optionalNumber(s.rosSigma),
+        rosCorrelationMeters: optionalNumber(s.rosCorrelationMeters),
+        spotting: optionalBoolean(s.spotting),
+        windWander: optionalBoolean(s.windWander),
+        gustFactor: optionalNumber(s.gustFactor) ?? null,
+        airTemperatureF: optionalNumber(s.airTemperatureF),
+      };
+    }
+  }
+  if (raw.weatherSeries !== undefined) {
+    // Time-varying weather (fire/weatherSeries.ts); the numbers are checked by validation.
+    const s = raw.weatherSeries;
+    if (!isRecord(s) || typeof s.enabled !== "boolean" || !Array.isArray(s.samples)) {
+      fail("A weather series must be { enabled, samples: [...] }.", "settings");
+    } else {
+      const samples: FireWeatherSample[] = [];
+      let bad = false;
+      for (const item of s.samples) {
+        if (!isRecord(item) || !isFiniteNumber(item.minute) || !isFiniteNumber(item.windSpeedMph) || !isFiniteNumber(item.windFromDegrees)) {
+          bad = true;
+          break;
+        }
+        const sample: FireWeatherSample = {
+          minute: item.minute,
+          windSpeedMph: item.windSpeedMph,
+          windFromDegrees: item.windFromDegrees,
+        };
+        if (isRecord(item.moisture)) {
+          const m = item.moisture;
+          if (!MOISTURE_KEYS.every((key) => isFiniteNumber(m[key]))) {
+            bad = true;
+            break;
+          }
+          sample.moisture = Object.fromEntries(MOISTURE_KEYS.map((key) => [key, m[key]])) as unknown as FuelMoisture;
+        }
+        if (isFiniteNumber(item.airTemperatureF)) sample.airTemperatureF = item.airTemperatureF;
+        samples.push(sample);
+      }
+      if (bad) fail("Every weather sample needs a finite minute, windSpeedMph and windFromDegrees.", "settings");
+      else {
+        settings.weatherSeries = {
+          enabled: s.enabled,
+          samples,
+          ...(typeof s.source === "string" ? { source: s.source } : {}),
+          ...(s.evidence === "observed" || s.evidence === "forecast" || s.evidence === "derived" || s.evidence === "assumed"
+            ? { evidence: s.evidence }
+            : {}),
+        };
+      }
+    }
+  }
+  if (raw.fireInducedWind !== undefined) {
+    const s = raw.fireInducedWind;
+    if (!isRecord(s) || typeof s.enabled !== "boolean") {
+      fail("Fire-induced wind must be { enabled, seed? }.", "settings");
+    } else {
+      settings.fireInducedWind = { enabled: s.enabled, ...(isFiniteNumber(s.seed) ? { seed: s.seed } : {}) };
     }
   }
   return settings;
