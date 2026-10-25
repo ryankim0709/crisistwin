@@ -15,7 +15,7 @@ import {
   type ZoneForecast,
 } from "./model";
 import type { Selection } from "./DemoMap";
-import { fireTimeline, reachText, unitAccessText } from "./boardResponse";
+import { fireTimeline, reachText, reportText, unitAccessText } from "./boardResponse";
 import { ORDER_COMPLIANCE, SHADOW_SHARE, holdsFlameFeet, kindLabel } from "./realism";
 
 const SAFETY: Record<RouteOption["safety"], string> = {
@@ -48,7 +48,10 @@ function FireDetail({ board, id, actions }: { board: Board; id: string; actions:
         <Tag tone={FIRE_STATUS[fire.status].tone}>{FIRE_STATUS[fire.status].label}</Tag>
         <Tag>{SOURCE_LABEL[fire.source]}</Tag>
       </div>
-      <p className="dm-note">{fireTimeline(board, fire)}</p>
+      <p className="dm-note">
+        {fireTimeline(board, fire)}
+        {reportText(board, fire) ? <><br />{reportText(board, fire)}</> : null}
+      </p>
       <Facts
         items={[
           { label: "Started", value: simClock(fire.ignitedAt) },

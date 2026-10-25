@@ -18,7 +18,7 @@ planning experiments, not operational dispatch guidance.
 | `app/src/response/orders.ts` | Mutual aid and state tiers, fill draws, lead times, state caps |
 | `app/src/response/travel.ts` | BPR congestion from evacuation flows on shared roads, seeded travel variation, fire-cut test |
 | `app/src/response/units.ts` | Work/rest, water, availability, move-up, mop-up release, aircraft cycles and flight gating |
-| `app/src/response/report.ts` | Time from ignition to dispatch: call-in by demand zone and night, AI camera alerts, 911 answering, transfer and processing (`reportDelay`) |
+| `app/src/response/report.ts` | Time from ignition to dispatch by remoteness (nearest home in sight, nearest road, night), AI camera and satellite detection, 911 answering, transfer and processing (`reportDelay`) |
 | `app/src/response/reach.ts` | Off-road reach from where a unit parks: hose reach, hiking in (Tobler), engine crews on foot, dozers walking in (`planWork`) |
 | `app/src/demo/boardResponse.ts` | The board adapter: applies the model each board step (`respondToNewFire`, `responseTick`, `advanceContainment`, `escalate`, `placeOrder`) |
 
@@ -78,27 +78,62 @@ full model. The dispatch agent still has its own engine (not changed; see Gaps).
 ## From ignition to dispatch
 
 `reportDelay` (`response/report.ts`) draws, per fire and seeded, the minutes from ignition until
-the dispatch centre has it. The board sends the run card then. The commander's observation lists
-only reported fires and gives `reported_after_min` and `reported_by`. Fire lists and the fire
-panel read "Started 14:02 · reported 14:11 · first engine 14:24" (Pacific time; the board clock
-starts at the wind series' T+0). Studio (`firefighting.ignitionReportDelayMinutes`) uses the same
-model, seeded by the ignition's place and minute. It sets the report minute for crew dispatch
-(`SimulationStudioPage`) and aircraft (`planFirefighting`).
+the dispatch centre has it, as a function of how remote the fire's origin is. The board sends
+the run card then. The commander sees only reported fires, with `reported_after_min`,
+`reported_by` and `reported_reason`. The fire list reads "Started 14:02 · reported 14:11 ·
+first engine 14:24" (Pacific time; the board clock starts at the wind series' T+0). The fire
+panel adds the reason, for example "Reported after 53 min — 7.9 km from the nearest home, at
+night, found by satellite". Studio (`firefighting.ignitionReportDelayMinutes`) uses the same
+model, seeded by the ignition's place and minute, for crew dispatch and aircraft. Studio has no
+road lines, so there it uses homes only.
 
-| Part | Value | Evidence |
+**Remoteness** d = min(distance to the nearest occupied home × 2 when terrain hides the smoke
+from it, distance to the nearest road).
+- *Homes*: the nearest developed landscape cell (FBFM40 91), or 0 inside a drill zone dense
+  enough to be NFPA 1720 "suburban" (500 people/mi² or more, at 2.5 persons per household).
+- *Line of sight*: 12 elevation samples between smoke 30 m up and an eye 2 m up.
+- *Roads*: the board's evacuation route lines (drill roads; a partial network).
+- *Assumptions*: the ×2, the 30 m and 2 m heights, and the household size. The NFPA 1720 bands
+  are labels only.
+
+Median minutes to the first 911 call, log-linear in 1 + d/250 m:
+
+  day(d) = 3 × (1 + d/250)^0.748          night(d) = day(d) + 18.5 × (1 + d/250)^0.396
+
+| Anchor | Value | Evidence |
 | --- | --- | --- |
-| Demand zone | Urban above 1,000 people/mi², suburban 500-1,000, rural below 500. Board: the ignition zone's households × 2.5 persons over its area. Studio: developed share of cells within 500 m (50% or more urban, 15% or more suburban) | NFPA 1720 Table 4.3.2 classes. The 2.5 persons per household and the Studio proxy are ASSUMPTIONS |
-| Ignition to the first 911 call, median (min) | Urban 3 by day / 21.5 by night; suburban 5 / 23.5; rural 10 / 45. Lognormal, log-SD 0.7 | Night offset for urban and suburban: +18.5 min, NIST TN 2174 (Gilbert et al. 2021, NFIRS) Table 2, night 23:00-06:00 with smoke alarms. Rural day 10: the Camp Fire 2018. Line interruption 06:15, fire seen about 06:20, 911 received by the CAL FIRE ECC at 06:25:19 (Butte County DA, Camp Fire Public Report 2020, p.7). Rural night 45: ASSUMPTION near the Grass Valley 2023 case (camera alert 05:19, first 911 06:01). Urban and suburban day, and the log-SD, are ASSUMPTIONS; Alberta delays have CV above 1 (Huang & Wichmann 2024) |
-| Night | Urban and suburban: 23:00-06:00 Pacific (people asleep). Rural: sun down (smoke unseen) | TN 2174's window; NOAA sunrise and sunset (`studio/daylight.ts`) |
-| AI camera | Wildland only, day or night: median 15 min, log-SD 0.6, plus 2 min ECC confirmation; whichever comes first, camera or 911, reports the fire | ASSUMPTIONS. Check: the model has the camera first for 28% of rural day fires and 86% of rural night fires, about 40% for a mostly daytime mix. ALERTCalifornia reports 636 of 1,668 detected fires (38%) flagged before any 911 call (Bay Area News Group, 2025) and "over 30%" in 2023 |
-| 911 answer | 90% within 15 s (median 8 s assumed) | NFPA 1225 (2022) 15.4.1, from a secondary source; another source gives 10 s |
-| Transfer to the CAL FIRE ECC (wildland 911 calls) | 90% within 30 s (median 20 s assumed) | NFPA 1225 15.4.2, secondary source, unverified. The Camp Fire call was transferred this way |
-| Processing | 90% within 64 s (median 40 s assumed) | NFPA 1710 4.1.2.3.3, as NFPA 1221 |
-| Field reports | No discovery delay: answering and processing only | Model |
+| d = 0, day | 3 min | ASSUMPTION: no absolute figure retrieved |
+| d = 0, night | +18.5 min | NIST TN 2174 (Gilbert et al. 2021, NFIRS) Table 2: residential fires at night, smoke alarms present |
+| d ≈ 1 km, day | 10 min | Camp Fire 2018 (Butte County DA, Camp Fire Public Report 2020, p.7): line interruption 06:15, seen about 06:20 from Highway 70, 911 received by the CAL FIRE ECC at 06:25:19. The 1 km distance is ASSUMED |
+| d ≈ 1 km, night | 45 min | Grass Valley, 11 Sept 2023: ALERTCalifornia camera alert 05:19, first 911 call 06:01, "near a residential area". The distance is ASSUMED |
+| Exponents 0.748 and 0.396 | Follow from the anchors | Derived; the 250 m scale is an ASSUMPTION |
+| Spread | Lognormal, log-SD 0.7 | ASSUMPTION; Alberta delays have CV above 1 (Huang & Wichmann 2024) |
+| Night | 23:00-06:00 Pacific anywhere (TN 2174's window), or darkness when d ≥ 1 km (smoke unseen) | ASSUMPTION on the second part; NOAA sunrise and sunset |
 
-Sampled (5,000 draws each; median / p10 / p90, minutes): urban day 3.8 / 2.1 / 8.2; urban night
-22.1 / 9.5 / 52.2; suburban day 6.2 / 3.3 / 12.5; rural day 10.2 / 5.4 / 18.6; rural night
-16.9 / 9.5 / 31.5 (cameras cut the rural night tail).
+Beyond the anchors the curve is extrapolated: by day 29 min at 5 km and 80 min at 20 km.
+Remote fires are then mostly found another way, whichever channel comes first:
+
+| Channel | Model | Evidence |
+| --- | --- | --- |
+| AI camera (wildland) | In view for 60% of ignitions; median 15 min (log-SD 0.6) + 2 min ECC confirmation | ASSUMPTIONS. Check: ALERTCalifornia flagged 636 of 1,668 detected fires (38%) before any 911 call (Bay Area News Group, 2025) |
+| Satellite (wildland) | Median 55 min (log-SD 0.8) + 5 min to act | Camp Fire: first GOES-16 hotspot about 07:10 PST, about 55 min after 06:15 (secondary source). The wide spread allows the Kincade Fire (2019): GOES-17 flagged it 5 min after ignition (Lindley et al. 2020, *J. Operational Meteorology*) |
+| 911 answer | 90% within 15 s (median 8 s assumed) | NFPA 1225 (2022) 15.4.1, secondary source; another gives 10 s |
+| Transfer to the CAL FIRE ECC | 90% within 30 s (median 20 s assumed) | NFPA 1225 15.4.2, secondary source, unverified |
+| Processing | 90% within 64 s (median 40 s assumed) | NFPA 1710 4.1.2.3.3, as NFPA 1221 |
+| Field reports | No discovery delay | Model |
+
+Traffic on the nearest road is not used.
+
+Sampled totals, ignition to dispatch (5,000 draws; median / p90, minutes; share first found by
+911 / camera / satellite). Distance 0 is a structure fire, where cameras and satellites do not apply.
+
+| d | Day | Night |
+| --- | --- | --- |
+| 0 | 3.8 / 8.2; all 911 | 22.1 / 52.2; all 911 |
+| 250 m | 6.2 / 12.6; 95 / 5 / 0% | 18.7 / 41.0; 46 / 42 / 12% |
+| 1 km | 10.3 / 20.9; 83 / 15 / 2% | 21.5 / 52.3; 33 / 49 / 18% |
+| 5 km | 18.7 / 41.5; 46 / 41 / 12% | 24.6 / 74.3; 16 / 54 / 30% |
+| 20 km | 24.0 / 70.1; 17 / 54 / 28% | 25.9 / 92.5; 6 / 55 / 39% |
 
 ## Off-road reach
 
@@ -304,7 +339,13 @@ straight-line fallback, which is optimistic for residential streets.
   5-15 s for the fire solver. The observation is 9-67 kB (the decide limit is 200 kB) and builds
   in 2-10 ms. The browser's ×60 runs 24 h in 24 min.
 
-### With call-in delays and off-road reach (deterministic spread; 4 seeds; day 12:00 and night 02:00 PDT; 6 h)
+### With call-in delays and off-road reach (seeded natural variation on, the board's default; 4 seeds; day 12:00 and night 02:00 PDT; 6 h)
+
+These runs went through `buildFireSolveRequest`, so they used the board's seeded natural
+variation (`naturalVariation: true` by default; `stochastic` passed to the solver). An earlier
+note here called them deterministic, which was wrong. The first "Measured" table above predates
+natural variation and was deterministic. Report delays in this table are from the earlier
+three-band model; the remoteness model's re-run is in the next table.
 
 First engine and containment are minutes from **ignition**. "Remote" means every road leg was
 made to end 1.5 km short of the fire, as `crew_routes` reports when roads stop short.
@@ -329,6 +370,21 @@ min in GR2 (was 5-6). IA success is 0-3% in SH5 and 100% in GR2. In GR2 every ca
 75 m cell (0.56 ha), so the burned total does not change. Board and response logic still take
 0.4-0.6 s of CPU per simulated day.
 
+### With the remoteness model (natural variation on; 4 seeds; 6 h; minutes from ignition)
+
+The rural cases have a hamlet (developed cells) 0.9 km from the ignition, like Camp. The remote
+cases have their nearest homes 7.9 km away and every road ending 1.5 km short of the fire.
+
+| Scenario | Reported after (reason) | First engine | Line work starts | Contained | Area | IA ≤ 10 ac | Caught |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Residential day | 2.3-4.8 ("among homes") | 7-8 | 7-8 | 13-15 | 0.4 ha | 4/4 | 0 |
+| Residential night | 11.7-29.3 ("among homes, at night") | 17-33 | 17-33 | 24-45 | 0.4-0.7 ha | 4/4 | 0 |
+| Rural grass day | 5.0-19.5 ("900 m from the nearest home") | 19-39 | 19-39 | 28-42 | 0.7-2.5 ha | 4/4 | 0 |
+| Rural grass night | 13.4-26.5 (2 of 4 by AI camera) | 28-40 | 28-40 | 154-170 | 15-66 ha | 0/4 | 15 |
+| Remote grass day | 13.4-26.5 ("7.9 km from the nearest home"; 2 by camera) | 26-38 | 109-143 | 109-143 | 7.9-31 ha | 0/4 | 0-15 |
+| Remote grass night | 13.4-52.8 (1 by satellite at 52.8, 3 by camera) | 26-64 | 109-151 | 236-268 | 46-127 ha | 0/4 | 15-30 |
+| Rural brush day / night | 5.0-26.5 | 19-40 | 19-40 | not by 6 h | 491-683 ha | 0/8 | 60-75 |
+
 ## What is left
 
 - **Traffic**: the live twin's per-edge congestion is not used, because the board's households
@@ -343,14 +399,14 @@ min in GR2 (was 5-6). IA success is 0-3% in SH5 and 100% in GR2. In GR2 every ca
 - **Line**: no burnout timing, no loss of an already contained line on a wind shift, no line
   degradation over time.
 - **Units**: pilot duty limits are not modelled; water tenders are not units.
-- **Report delays**: the absolute urban and suburban daytime call-in medians and the camera
-  model are assumptions. There is no camera coverage map (cameras are taken to cover all
-  wildland), and the 911 load of a large fire (queued calls) is not modelled.
+- **Report delays**: the 3 min doorstep median, the 250 m scale, the anchor distances, the
+  camera coverage of 60% and the camera and satellite times are assumptions. There is no camera
+  or road-traffic map, Studio has no road lines, and the 911 load of a large fire (queued
+  calls) is not modelled.
 - **Diurnal fire weather**: night runs use the same wind and moisture as day; the board has no
   diurnal cycle. Night is slower only through the call-in.
-- **Stochastic spread**: the board's solves are deterministic. `fire/stochastic.ts`
-  (`FireSolveRequest.stochastic`, merged from `feat/shared-world`) is not passed by
-  `model.ts` `buildFireSolveRequest`, so the measurements above use deterministic spread.
+- **Stochastic spread**: the board passes seeded natural variation to the solver (`model.ts`
+  `buildFireSolveRequest`, on by default), and the later measurements used it.
 - **Reproducibility**: the browser steps the clock in variable fractions of a minute and road
   legs arrive asynchronously. A browser run is reproducible in its seeded draws but not
   minute-exact; a headless run with the same steps is exact.

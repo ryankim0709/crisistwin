@@ -44,7 +44,7 @@ import {
 } from "./apparatus";
 import { DROP_HOLDS_FLAME_FEET, planAircraft, type AircraftPlan, type AirBase } from "./aircraft";
 import { WILDLAND_RUN_CARDS } from "../response/runCards";
-import { reportDelay } from "../response/report";
+import { lineOfSight, nearestDeveloped, reportDelay } from "../response/report";
 import { deriveStream } from "../response/rng";
 import { cellAt as gridCellAt } from "../fire/spread";
 
@@ -106,21 +106,11 @@ const RUN_CARD = WILDLAND_RUN_CARDS.medium;
  * Type 2 crew. Air (California Fire Pilots Association, secondary source): air attack, two
  * airtankers (CAL FIRE's S-2T) and one helicopter (Type 2 here; ASSUMPTION on the type).
  */
-/** ASSUMPTION: developed (FBFM40 91) share of the cells within this radius of an ignition stands in for population density in Studio, which has no households. */
-export const DENSITY_RADIUS_M = 500;
-/**
- * ASSUMPTION mapping, developed share to people per square mile (picks the NFPA 1720 demand
- * zone in response/report.ts): 50% or more developed reads as urban (1,500), 15% or more as
- * suburban (750), less as rural (100).
- */
-export function peopleProxyPerSqMi(developedShare: number): number {
-  return developedShare >= 0.5 ? 1500 : developedShare >= 0.15 ? 750 : 100;
-}
-
 /**
  * Minutes from an ignition to dispatch (call-in, answer, transfer, processing;
  * response/report.ts), seeded per ignition from its place and minute so a rerun gives the
- * same delay. Studio has no households, so density comes from developed cells (assumption).
+ * same delay. Studio has no households: the nearest developed cell (FBFM40 91) stands in for the
+ * nearest home (assumption).
  */
 export function ignitionReportDelayMinutes(
   grid: LandscapeGrid | null,
@@ -128,32 +118,24 @@ export function ignitionReportDelayMinutes(
   startMinute: number,
   settings: FirefightingSettings,
 ): number {
-  let developedShare = 0;
+  const p: [number, number] = [location.longitude, location.latitude];
   let developed = false;
+  let home: { meters: number; at: [number, number] } | null = null;
+  let homeInSight = true;
   if (grid) {
     const c0 = gridCellAt(grid, location);
     developed = c0 >= 0 && grid.fuelCodes[c0] === DEVELOPED_FUEL_CODE;
-    if (c0 >= 0) {
-      const r = Math.max(1, Math.round(DENSITY_RADIUS_M / grid.groundCellSizeMeters));
-      const x0 = c0 % grid.width;
-      const y0 = (c0 - x0) / grid.width;
-      let n = 0;
-      let dev = 0;
-      for (let y = Math.max(0, y0 - r); y <= Math.min(grid.height - 1, y0 + r); y += 1) {
-        for (let x = Math.max(0, x0 - r); x <= Math.min(grid.width - 1, x0 + r); x += 1) {
-          if ((x - x0) ** 2 + (y - y0) ** 2 > r * r) continue;
-          n += 1;
-          if (grid.fuelCodes[y * grid.width + x] === DEVELOPED_FUEL_CODE) dev += 1;
-        }
-      }
-      developedShare = n > 0 ? dev / n : 0;
-    }
+    home = nearestDeveloped(grid, p);
+    if (home) homeInSight = lineOfSight(grid, p, home.at);
   }
   const rng = deriveStream(0, `${location.longitude.toFixed(5)},${location.latitude.toFixed(5)},${startMinute}`);
+  // Studio has no road lines here, so remoteness comes from developed cells (homes) only.
   return reportDelay(rng, {
     ignitionEpochMs: startMsOf(settings) + startMinute * 60_000,
-    location: [location.longitude, location.latitude],
-    peoplePerSqMi: peopleProxyPerSqMi(developedShare),
+    location: p,
+    nearestHomeM: home?.meters ?? null,
+    homeInSight,
+    nearestRoadM: null,
     developed,
     wildland: !developed,
     alreadyReported: false,
