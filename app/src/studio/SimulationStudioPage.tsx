@@ -1,7 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType } from "react";
 import type { GeoPoint } from "../fire/spread";
 import type { ScheduledFireRun } from "../fire/scheduledTypes";
-import { formatElapsed } from "../fire/spread";
+import { formatElapsed, cellAt } from "../fire/spread";
+import {
+  buildRandomScenario,
+  PLACEMENT_LABELS,
+  randomRegionId,
+  type IgnitionPlacement,
+} from "./randomScenario";
 import ConfigPanel from "./ConfigPanel";
 import LiveDrillAction from "./LiveDrillAction";
 import PlaybackBar from "./PlaybackBar";
@@ -24,7 +30,9 @@ import { useMapFireline } from "./useMapFireline";
 import { useMapCrews } from "./useMapCrews";
 import { planCrewDispatch } from "./crewDispatch";
 import { crewHandoff, evacuationCrews } from "./crewHandoff";
-import { resourceList } from "./firefighting";
+import { DEFAULT_FIREFIGHTING, ignitionReportDelayMinutes, resourceList, startMsOf } from "./firefighting";
+import StudioPeople from "./StudioPeople";
+import { householdDepartureDelays, type HouseholdBehaviorMode } from "./householdBehavior";
 import { airBasesOf, useSuppressionBases } from "./suppressionBases";
 import type { RunDispatch } from "./useStudioRun";
 import { CREW_COLORS, FIRELINE_COLORS, firelineCss } from "./firelinePalette";
@@ -42,6 +50,7 @@ import {
 } from "./contracts";
 import { demoScenario } from "./demo";
 import {
+  DRAFT_DEFAULTS_VERSION,
   DRAFT_STORAGE_KEY,
   clearDraft,
   draftStatusText,
@@ -55,6 +64,7 @@ import {
   parseScenario,
   solverInputChanged,
   validateScenario,
+  withFirefightingOn,
 } from "./scenario";
 import { Button, LoadingState, Notice, Panel, SegmentedControl, type SegmentedOption } from "../ui";
 import { downloadJson, frameIndexAt } from "./playbackUtils";
@@ -64,8 +74,13 @@ import {
   findRegion,
   loadRegionId,
   saveRegionId,
+  STUDIO_BOARD_SIZES,
+  studioRadiusOverride,
   useRegionBoard,
 } from "./useRegionBoard";
+import { firstLoadSeconds, readinessLabel, useCachedBoards } from "../fire/useCachedBoards";
+import { boardCellMetersFor } from "../fire/boardSize";
+import { useWorld } from "../world/useWorld";
 import { CALIFORNIA_REGIONS, REGION_AREAS } from "../fire/regions";
 import type { DioramaIgnition, DioramaRun, FireDioramaSceneApi } from "../fire/diorama/types";
 import "./studio.css";
@@ -156,9 +171,21 @@ export default function SimulationStudioPage({
     : DRAFT_STORAGE_KEY;
   const viewKey = storageNamespace ? `${VIEW_STORAGE_KEY}.${storageNamespace}` : VIEW_STORAGE_KEY;
   const [initialDraft] = useState(() => loadDraft(draftKey));
-  const [scenario, setScenario] = useState<StudioScenario>(
-    () => initialDraft?.scenario ?? emptyScenario(),
+  // The Studio's defaults (not /dispatch's, which reuses this page with an aside): firefighting
+  // on, the first-alarm package from real stations.
+  const studioDefaults = !Aside;
+  const freshScenario = useCallback(
+    (base: StudioScenario) => (studioDefaults ? withFirefightingOn(base) : base),
+    [studioDefaults],
   );
+  const [scenario, setScenario] = useState<StudioScenario>(() => {
+    if (!initialDraft) return freshScenario(emptyScenario());
+    // A draft saved before firefighting was on by default picks it up once; the autosave then
+    // records the new defaults version, so turning it off later sticks.
+    return initialDraft.defaultsVersion < DRAFT_DEFAULTS_VERSION
+      ? freshScenario(initialDraft.scenario)
+      : initialDraft.scenario;
+  });
   const [savedAt, setSavedAt] = useState<Date | null>(initialDraft?.savedAt ?? null);
   const [saveFailed, setSaveFailed] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -201,9 +228,12 @@ export default function SimulationStudioPage({
     return () => observer.disconnect();
   }, [panelCollapsed]);
 
-  // Evacuation and road closures (3D view only). Closures are edge indices of one road area and
-  // are dropped when the board's area changes; they never change the fire run.
-  const [evacuationOn, setEvacuationOn] = useState(false);
+  // Evacuation and road closures, shown on both views (closures are set in 3D). Closures are edge
+  // indices of one road area and are dropped when the board's area changes; they never change
+  // the fire run.
+  const [evacuationOn, setEvacuationOn] = useState(true);
+  // How households respond to the order (studio/householdBehavior.ts).
+  const [householdBehavior, setHouseholdBehavior] = useState<HouseholdBehaviorMode>("grounded");
   // Which evacuation plan the 3D view plays: the fastest-exit policy or the optimiser's best.
   const [playPlan, setPlayPlan] = useState<PlayPlan>("fastest");
   const [roadTool, setRoadTool] = useState(false);
@@ -256,8 +286,23 @@ export default function SimulationStudioPage({
   // Prebuilt region board (MongoDB), drawn in 3D before any run and used to solve fires on it.
   const [regionId, setRegionId] = useState(loadRegionId);
   const [boardAttempt, setBoardAttempt] = useState(0);
-  const { catalog, board } = useRegionBoard(regionId, boardAttempt);
+  // Area size lives in the shared world (region.radiusMeters), so other tabs follow it.
+  const { world, update: updateWorld } = useWorld();
+  const boardRadius = studioRadiusOverride(world.region.radiusMeters);
+  const { catalog, board } = useRegionBoard(regionId, boardAttempt, boardRadius);
   const region = findRegion(regionId);
+  const sizeReady = useCachedBoards(
+    region
+      ? STUDIO_BOARD_SIZES.flatMap((size) =>
+          size.radiusMeters === null
+            ? []
+            : [{ longitude: region.center.longitude, latitude: region.center.latitude, radiusMeters: size.radiusMeters, cellMeters: boardCellMetersFor(size.radiusMeters) }],
+        )
+      : [],
+    board.status,
+  );
+  // Identity of the board a run was solved on: a different size is a different board.
+  const boardId = boardRadius === null ? regionId : `${regionId}@${boardRadius / 1000}km`;
   const regionGrid = board.status === "ready" ? board.grid : null;
 
   // Playback. `clockRef` is the smooth simulation clock; React state only changes when the
@@ -413,9 +458,9 @@ export default function SimulationStudioPage({
   const handleClear = useCallback(() => {
     clearDraft(draftKey);
     setSavedAt(null);
-    applyScenario(emptyScenario());
+    applyScenario(freshScenario(emptyScenario()));
     setMode("select");
-  }, [applyScenario, draftKey]);
+  }, [applyScenario, draftKey, freshScenario]);
 
   const handleSelect = useCallback((id: string | null) => {
     setSelectedId(id);
@@ -444,15 +489,29 @@ export default function SimulationStudioPage({
     [regionId, cancel, markStale],
   );
 
+  const selectBoardSize = useCallback(
+    (radiusMeters: number | null) => {
+      if (radiusMeters === boardRadius) return;
+      setPlaying(false);
+      cancel();
+      markStale();
+      const radius = radiusMeters ?? findRegion(regionId)?.radiusMeters ?? 7000;
+      const cellMeters =
+        radiusMeters === null ? (findRegion(regionId)?.cellMeters ?? 30) : boardCellMetersFor(radius);
+      void updateWorld({ region: { radiusMeters: radius, cellMeters } }, "simulation");
+    },
+    [boardRadius, regionId, cancel, markStale, updateWorld],
+  );
+
   const handleLoadDemo = useCallback(() => {
-    applyScenario(demoScenario());
+    applyScenario(freshScenario(demoScenario()));
     setMode("select");
     // The demo's fires sit on the default board.
     selectRegion(STUDIO_DEFAULT_REGION_ID);
-  }, [applyScenario, selectRegion]);
+  }, [applyScenario, selectRegion, freshScenario]);
 
   // The 3D view shows the run only while the board it was started on is still selected.
-  const dioramaShowsRun = result !== null && result.boardId === regionId;
+  const dioramaShowsRun = result !== null && result.boardId === boardId;
   const dioramaLandscape = dioramaShowsRun ? result.landscape : regionGrid;
   // Without a board to click in 3D, placing a fire goes to the map.
   const dioramaHasBoard = dioramaLandscape !== null;
@@ -505,10 +564,11 @@ export default function SimulationStudioPage({
         airBases,
       };
     }
+    // Dispatched after the call-in and processing delay (response/report.ts), not at ignition.
     const { dispatch, note } = planCrewDispatch(
       area,
       [first.location.longitude, first.location.latitude],
-      first.startMinute,
+      first.startMinute + ignitionReportDelayMinutes(dioramaLandscape, first.location, first.startMinute, settings),
       resourceList(settings),
       (edge) => closedEdges.has(edge),
       dioramaLandscape,
@@ -525,8 +585,142 @@ export default function SimulationStudioPage({
 
   const handleRun = useCallback(() => {
     setPlaying(false);
-    run(scenario, { id: regionId, grid: regionGrid }, planCrews());
-  }, [run, scenario, regionId, regionGrid, planCrews]);
+    run(scenario, { id: boardId, grid: regionGrid }, planCrews());
+  }, [run, scenario, boardId, regionGrid, planCrews]);
+  // "Random scenario" (studio/randomScenario.ts): one seed picks the region, date, ignitions,
+  // weather source and natural variation. Stages: switch board, wait for it and its roads, build
+  // (weather fetch), apply, then run once the first fire's crew bases have loaded.
+  const [keepArea, setKeepArea] = useState(false);
+  const [placement, setPlacement] = useState<IgnitionPlacement>("away");
+  const [seedText, setSeedText] = useState("");
+  const [randomSummary, setRandomSummary] = useState<string | null>(null);
+  const [recenterKey, setRecenterKey] = useState<string | null>(null);
+  const [randomJob, setRandomJob] = useState<{
+    seed: number;
+    regionId: string;
+    building: boolean;
+    waited: boolean;
+  } | null>(null);
+  const [pendingRun, setPendingRun] = useState<{ scenario: StudioScenario; waited: boolean } | null>(null);
+
+  const handleRandomScenario = useCallback(() => {
+    if (randomJob) return;
+    const typed = Number(seedText.trim());
+    const seed =
+      seedText.trim() !== "" && Number.isInteger(typed) && typed > 0 && typed <= 2_147_483_647
+        ? typed
+        : Math.floor(Math.random() * 2_147_483_646) + 1;
+    setSeedText(String(seed));
+    const target = keepArea ? regionId : randomRegionId(seed);
+    setRandomSummary(null);
+    if (target !== regionId) selectRegion(target);
+    setRandomJob({ seed, regionId: target, building: false, waited: false });
+  }, [randomJob, seedText, keepArea, regionId, selectRegion]);
+
+  // Give up waiting for roads after a while; a board that failed to load ends the job.
+  useEffect(() => {
+    if (!randomJob || randomJob.building) return;
+    if (board.status === "error" && regionId === randomJob.regionId) {
+      setRandomJob(null);
+      showNotice("The region board did not load, so no random scenario was built.");
+      return;
+    }
+    const handle = window.setTimeout(() => setRandomJob((j) => (j ? { ...j, waited: true } : j)), 15000);
+    return () => window.clearTimeout(handle);
+  }, [randomJob, board.status, regionId, showNotice]);
+
+  useEffect(() => {
+    if (!randomJob || randomJob.building) return;
+    const target = findRegion(randomJob.regionId);
+    if (!target || regionId !== randomJob.regionId || !regionGrid) return;
+    // The board of the previous region stays in state for a render after the switch.
+    if (cellAt(regionGrid, { longitude: target.center.longitude, latitude: target.center.latitude }) < 0) return;
+    const roadsSettled = streets.status !== "idle" && streets.status !== "loading";
+    if (!roadsSettled && !randomJob.waited) return;
+    const job = randomJob;
+    setRandomJob({ ...job, building: true });
+    void buildRandomScenario({
+      seed: job.seed,
+      region: target,
+      grid: regionGrid,
+      area,
+      base: withFirefightingOn(emptyScenario()),
+      placement,
+    }).then((built) => {
+      setRandomJob(null);
+      if (!built) {
+        showNotice("No burnable ground found on this board.");
+        return;
+      }
+      setEvacuationOn(true);
+      applyScenario(built.scenario);
+      setSelectedId(null);
+      setRandomSummary(built.summary);
+      setRecenterKey(built.scenario.id);
+      showNotice("Random scenario built (simulated).");
+      setPendingRun({ scenario: built.scenario, waited: false });
+    });
+  }, [randomJob, regionId, regionGrid, streets.status, area, placement, applyScenario, showNotice]);
+
+  // Run once the first fire's crew bases are in (or after a short wait).
+  useEffect(() => {
+    if (!pendingRun) return;
+    if (pendingRun.scenario === scenario && (suppressionBases || pendingRun.waited)) {
+      setPendingRun(null);
+      handleRun();
+      return;
+    }
+    if (pendingRun.waited) return;
+    const handle = window.setTimeout(() => setPendingRun((p) => (p ? { ...p, waited: true } : p)), 3000);
+    return () => window.clearTimeout(handle);
+  }, [pendingRun, scenario, suppressionBases, handleRun]);
+
+  const randomControls = !Aside ? (
+    <div className="studio-random">
+      <div className="studio-row">
+        <Button
+          variant="secondary"
+          size="sm"
+          onClick={handleRandomScenario}
+          disabled={state.phase === "loading-landscape" || state.phase === "computing" || randomJob !== null}
+          title="Pick a seeded random place, date and fire, then run it. Simulated; ignition placement near roads is an assumption."
+        >
+          {randomJob ? "Building…" : "Random scenario"}
+        </Button>
+        <label className="studio-hint">
+          <input type="checkbox" checked={keepArea} onChange={(e) => setKeepArea(e.target.checked)} /> Keep this area
+        </label>
+      </div>
+      <label className="studio-hint">
+        Fire starts{" "}
+        <select
+          value={placement}
+          onChange={(e) => setPlacement(e.target.value as IgnitionPlacement)}
+          aria-label="Where random fires start"
+        >
+          {(Object.keys(PLACEMENT_LABELS) as IgnitionPlacement[]).map((key) => (
+            <option key={key} value={key}>
+              {PLACEMENT_LABELS[key]}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label className="studio-hint">
+        Seed{" "}
+        <input
+          type="text"
+          inputMode="numeric"
+          value={seedText}
+          placeholder="new each time"
+          onChange={(e) => setSeedText(e.target.value)}
+          aria-label="Random scenario seed"
+          style={{ width: "9em" }}
+        />
+      </label>
+      {randomSummary && <p className="studio-hint">{randomSummary} (simulated)</p>}
+    </div>
+  ) : null;
+
   const toggleClosure = useCallback(
     (edge: number) => {
       if (!area) return;
@@ -573,28 +767,34 @@ export default function SimulationStudioPage({
               shownHandoff && result.crewDispatch
                 ? evacuationCrews(area, result.crewDispatch, shownHandoff)
                 : undefined,
+            ...(studioDefaults && householdBehavior === "grounded"
+              ? { departureDelays: householdDepartureDelays(area) }
+              : {}),
           }
         : null,
-    [area, exposure, result, closedEdges, orderMinute, shownHandoff],
+    [area, exposure, result, closedEdges, orderMinute, shownHandoff, studioDefaults, householdBehavior],
   );
   const [publishOn, setPublishOn] = useState(false);
-  const showEvacuation = evacuationOn && view === "diorama" && !Aside;
+  // The evacuation plays on both views; the /dispatch page draws its own.
+  const showEvacuation = evacuationOn && !Aside;
+  // The summaries feed the 3D view's evacuation panel only.
+  const panelShown = showEvacuation && view === "diorama";
 
   const baselineSummary = useMemo(
     () =>
-      showEvacuation && evacuationInputs
+      panelShown && evacuationInputs
         ? simulateEvacuation({ ...evacuationInputs, closedEdges: new Set() })
         : null,
     // Not rerun when only the closures change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [showEvacuation, area, exposure, result, orderMinute, shownHandoff],
+    [panelShown, area, exposure, result, orderMinute, shownHandoff, householdBehavior],
   );
   const closuresSummary = useMemo(
     () =>
-      showEvacuation && evacuationInputs && closedEdges.size > 0
+      panelShown && evacuationInputs && closedEdges.size > 0
         ? simulateEvacuation(evacuationInputs)
         : null,
-    [showEvacuation, evacuationInputs, closedEdges],
+    [panelShown, evacuationInputs, closedEdges],
   );
   // Re-optimised whenever the closures, order minute, run or crews change (debounced).
   const optimizer = useEvacuationOptimizer(evacuationInputs, showEvacuation && dioramaShowsRun);
@@ -610,8 +810,8 @@ export default function SimulationStudioPage({
     [evacuationInputs, optimizedPlan],
   );
   const evacuationView = useMemo<StudioEvacuationView | null>(
-    () => (showEvacuation && area ? { area, exposure, closedEdges, inputs: playedInputs } : null),
-    [showEvacuation, area, exposure, closedEdges, playedInputs],
+    () => (panelShown && area ? { area, exposure, closedEdges, inputs: playedInputs } : null),
+    [panelShown, area, exposure, closedEdges, playedInputs],
   );
   const closedRoadList = useMemo(
     () => (area ? [...closedEdges].map((edge) => area.edges[edge]).filter(Boolean) : []),
@@ -884,6 +1084,8 @@ export default function SimulationStudioPage({
                       publish={publishOn}
                       onPublish={setPublishOn}
                       publishStatus={publishStatus}
+                      behavior={householdBehavior}
+                      onBehavior={setHouseholdBehavior}
                     />
                   )
                 }
@@ -913,15 +1115,58 @@ export default function SimulationStudioPage({
                         ))}
                       </select>
                     </div>
+                    <div className="studio-region__row">
+                      <label htmlFor="studio-area-size">Area size</label>
+                      <select
+                        id="studio-area-size"
+                        className="ui-input"
+                        value={boardRadius ?? ""}
+                        onChange={(event) =>
+                          selectBoardSize(event.target.value === "" ? null : Number(event.target.value))
+                        }
+                      >
+                        {STUDIO_BOARD_SIZES.map((size) => (
+                          <option key={size.label} value={size.radiusMeters ?? ""}>
+                            {size.label}
+                            {size.radiusMeters !== null && region
+                              ? ` \u2014 ${readinessLabel(
+                                  sizeReady({ longitude: region.center.longitude, latitude: region.center.latitude, radiusMeters: size.radiusMeters, cellMeters: boardCellMetersFor(size.radiusMeters) }),
+                                  size.radiusMeters,
+                                  boardCellMetersFor(size.radiusMeters),
+                                )}`
+                              : ""}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    {boardRadius !== null && (
+                      <p className="studio-region__note">
+                        {boardCellMetersFor(boardRadius)} m cells
+                        {boardCellMetersFor(boardRadius) > 30 ? " (coarser than the 30 m region boards)" : ""}.
+                        {region &&
+                        sizeReady({ longitude: region.center.longitude, latitude: region.center.latitude, radiusMeters: boardRadius, cellMeters: boardCellMetersFor(boardRadius) })
+                          ? "This size is cached and loads right away."
+                          : `The first load of this size takes about ${firstLoadSeconds(boardRadius, boardCellMetersFor(boardRadius))} s; later loads are cached.`}
+                        {boardRadius > 13_000
+                          ? " Evacuation and roads cover the centre of the board only."
+                          : ""}
+                      </p>
+                    )}
                     <p className="studio-region__note">
                       {board.status === "ready"
                         ? board.source === "stored"
                           ? "Stored board: LANDFIRE fuels and terrain, prebuilt."
-                          : "Stored board unavailable; loaded live from LANDFIRE."
+                          : board.source === "cached"
+                            ? "Cached board: LANDFIRE fuels and terrain from an earlier live load."
+                            : boardRadius !== null
+                              ? "LANDFIRE fuels and terrain at the chosen size."
+                              : "Stored board unavailable; loaded live from LANDFIRE."
                         : board.status === "loading"
                           ? board.storedUnavailable
                             ? "Stored board unavailable; loading live from LANDFIRE…"
-                            : "Loading stored board…"
+                            : boardRadius !== null
+                              ? "Loading the larger board from LANDFIRE…"
+                              : "Loading stored board…"
                           : "Board could not be loaded."}{" "}
                       Fires on the board run on it; others download their own area.
                     </p>
@@ -930,7 +1175,9 @@ export default function SimulationStudioPage({
                 emptyState={
                   board.status === "loading" ? (
                     <LoadingState>
-                      {board.storedUnavailable
+                      {boardRadius !== null
+                        ? `Loading a ${boardRadius / 500} km wide board around ${region?.name ?? "the region"}. A new size takes a while the first time; later loads are cached.`
+                        : board.storedUnavailable
                         ? `Stored board unavailable; loading ${region?.name ?? "the region"} live from LANDFIRE. This takes longer…`
                         : `Loading the ${region?.name ?? "region"} board…`}
                     </LoadingState>
@@ -991,6 +1238,7 @@ export default function SimulationStudioPage({
               />
             ) : (
               <StudioMap
+                recenterKey={recenterKey}
                 ignitions={scenario.ignitions}
                 ignitionStates={ignitionStates}
                 selectedId={selectedId}
@@ -1138,6 +1386,7 @@ export default function SimulationStudioPage({
               onSelectIgnition={handleSelect}
               onScenarioChange={applyScenario}
               onRun={handleRun}
+              randomScenario={randomControls}
               onCancel={cancel}
               onClear={handleClear}
               onExport={handleExport}
@@ -1174,6 +1423,18 @@ export default function SimulationStudioPage({
             <Notice className="studio-previous">
               Playing the previous run; run again to include your edits.
             </Notice>
+          )}
+          {showEvacuation && dioramaShowsRun && (
+            <StudioPeople
+              map={view === "map" ? studioMap : null}
+              inputs={playedInputs}
+              pending={!playedInputs && streets.status === "loading"}
+              clockRef={clockRef}
+              playing={playing}
+              speed={speed}
+              startMs={startMsOf(result.scenario.firefighting ?? DEFAULT_FIREFIGHTING)}
+              behavior={householdBehavior === "grounded" ? "grounded (not everyone obeys)" : "everyone leaves"}
+            />
           )}
           <PlaybackBar
             enabled={!locked && result !== null && frameMinutes.length > 0}

@@ -61,6 +61,7 @@ twin.catalog()                          # commandable zones, roads, corridors, d
 twin.apply({...})                       # -> accepted action record; raises ActionError
 twin.validate({...})                    # dry run: same checks, no state change
 twin.snapshot(detail="full")            # "summary" omits per-edge rows
+twin.vehicle_states()                   # departed vehicles by edge/state/zone (moving, queued, long queue, blocked)
 twin.events(since=212)                  # -> {"cursor": 230, "events": [...]}
 twin.action_log()                       # accepted actions in order
 twin.whatif([[...], [...]], horizon_min=60, fire_ahead="replay")
@@ -297,6 +298,32 @@ bundle event shape (`id`, `at`, `type`, `label`, `evidence_class`, `time_precisi
 derived contraflow closures, and command and report events. Historical scenario events
 come from the bundle. The page already shows them at their times.
 
+### Vehicle states
+
+`vehicle_states(long_queue_s=LONG_QUEUE_S)` (900 s) says where every departed, not yet arrived vehicle is
+at `now`. It is read-only and feeds the [people snapshot](#people-snapshot).
+
+```jsonc
+{ "now": "2018-11-08T17:30:00Z", "long_queue_s": 900, "en_route_veh": 16592,
+  "edges": [                                   // occupied edges, ascending edge index
+    { "edge_index": 570, "veh": 10, "speed_kph": 0.0, "exposed": false,
+      "block": null,                           // road_closed | fire | no_route | null
+      "moving_veh": {}, "queued_veh": {"bg:060070018002": 5},       // per zone id
+      "long_queue_veh": {"bg:060070018002": 5}, "max_wait_s": 1020 } ],
+  "origins": [ { "node_index": 812, "coord": [-121.617, 39.740], "block": "no_route",
+                 "veh": {"bg:060070019003": 5} } ],                  // departed, not yet on a road edge
+  "returning": [] }                                                   // turned back (agents only)
+```
+
+- `moving_veh`: before the vehicle's free-flow exit time on the edge.
+- `queued_veh`: past that time and waiting to leave the edge, for less than `long_queue_s`.
+- `long_queue_veh`: waiting `long_queue_s` or longer on this one edge (the queue age is the time past
+  the free-flow exit time; it restarts on each edge).
+- `block`: every vehicle on the edge is held, in `queued_veh`: `road_closed` (hard-closed edge, vehicles
+  stopped, as `trapped_by_closure_veh`), `fire` (as `trapped_by_fire_veh`) or `no_route` (no route or
+  escape from the edge's end).
+- The parts add up to `en_route_veh`; the call raises otherwise.
+
 ## What-if
 
 ```python
@@ -517,6 +544,7 @@ published destination has assignment status `fallback_unreachable` is also liste
 | Method and path (base `/api/live/`, controller token) | Python | Notes |
 | --- | --- | --- |
 | `GET incidents/{id}/twin` | `snapshot("full")`, condensed | Monitoring body below |
+| `GET incidents/{id}/people` | `sim.twin_people.people_snapshot` | Estimated people; see [People snapshot](#people-snapshot) |
 | `POST incidents/{id}/twin/whatif` | `whatif` | Body as in [What-if](#what-if). `horizon_min` at most 120 (`API_MAX_HORIZON_MIN`), `fire_ahead` defaults to `frozen`. `400` with the twin's error body for a bad request (`invalid_whatif` and the codes above). Runs synchronously, about 1 s per set |
 
 `GET incidents/{id}/twin`:
@@ -541,6 +569,91 @@ published destination has assignment status `fallback_unreachable` is also liste
   "command_errors": [ { "key", "error", "code", "detail", "action_id", "at" } ],
   "limitations": [ "..." ] }
 ```
+
+### People snapshot
+
+`GET incidents/{id}/people` (controller token) turns the synced twin into estimated **people**, for the
+`/live` map's People layer (`app/src/live/people/`). Python: `sim.twin_people.people_snapshot(twin)`;
+the adapter adds road geometry and drill-clock fields. Reads wait at most 5 s for the twin
+(`PEOPLE_LOCK_TIMEOUT_S`), then `429 twin_busy`; the page keeps its last picture. Poll every 2-5 s; the
+Camp body is about 20 KB before the first departures and 160 KB at the peak (about 1,200 occupied edges).
+Every value is simulated: estimates from an uncalibrated traffic model, not observed positions.
+App users' phones are a separate layer.
+
+How people are counted, per zone (`sim/twin_people.py`):
+
+- Residents: Camp block groups use ACS 2014-2018 population clipped to the road extract (observed,
+  from the scenario's `demand_report`). A Studio package has no census data: homes x 2.41
+  (`ASSUMED_PERSONS_PER_HOUSEHOLD`, Camp's 48,088 residents / 19,913 households; an assumption elsewhere).
+- Carless residents (`home_no_car`): ACS B25044 no-vehicle households x the zone's mean household size
+  (derived). The model never moves them (no pickup model). 0 for packages (not modelled).
+- Persons per vehicle (derived per zone): (residents - carless residents) / evacuating vehicles. Camp
+  averages 1.43, inside the NIST TN 2252 bounds of 1.0 to 2.5 (p. 155); docs/people-data.md "Behaviour
+  evidence" derives 1.38 from two joined samples. No survey measures it.
+- `staying`: residents of census vehicles the twin does not run: households that do not comply under a
+  `sim.behavior` preset (`basis.people_behavior`; the live drill uses `historical`, so 0) or a block
+  group with no road node.
+- Each twin vehicle carries its zone's persons per vehicle, so states convert exactly; arrivals per
+  destination use the overall people-per-arrived-vehicle ratio (the engine does not split them by zone).
+
+States (people; vehicles in `totals.vehicles`). Each person is in exactly one:
+
+| State | Meaning |
+| --- | --- |
+| `home` | Household has not left (waiting or preparing) |
+| `home_no_car` | Lives in a household with no vehicle |
+| `staying` | Staying put on purpose in the model, or no road nearby |
+| `driving` | On a road edge before its free-flow exit time |
+| `queued` | Waiting less than 15 min past free-flow time on an edge, or departed and waiting to get onto the road |
+| `stuck` | Reason `long_queue` (15+ min on one edge), `road_closed`, `fire`, `no_route` or `turned_back` ([Vehicle states](#vehicle-states)) |
+| `out` | Reached an exit, shelter or refuge |
+
+Conservation is checked on every read, per zone and in total: `population = home + home_no_car +
+staying + driving + queued + stuck + out`, and `total = home + driving + queued + stuck + out` vehicles,
+with `driving + queued + stuck = en_route_veh`. Totals are rounded so they still add up
+(largest remainder); per-edge and per-cluster counts are rounded on their own (a nonzero share shows at
+least 1).
+
+```jsonc
+{ "kind": "crisistwin_live_people", "schema_version": "0.1.0", "incident_id": "camp-2018-drill",
+  "evidence_class": "simulated",
+  "label": "Simulated people picture of the exercise from the traffic twin. Estimates, not observations; phones are shown separately.",
+  "now": "2018-11-08T17:58:00Z",              // twin clock
+  "drill_replay_now": "2018-11-08T17:58:00Z",
+  "drill_speed": 2.0,                         // drill s per wall s; 0 when paused or stopped (the map freezes the dots)
+  "long_queue_min": 15,
+  "totals": {
+    "people": { "population": 48088, "home": 10278, "home_no_car": 2787, "staying": 0, "driving": 4979,
+                "queued": 9857, "stuck": 8088, "out": 12099 },
+    "vehicles": { "total": 31638, "home": 7057, "driving": 3482, "queued": 6808, "stuck": 5691, "out": 8600 },
+    "conserved": true },
+  "stuck_by_reason": { "long_queue": 7691, "road_closed": 106, "fire": 73, "no_route": 218, "turned_back": 0 },  // people
+  "zones": [ { "id": "bg:060070016002", "name": "Block Group 2, Census Tract 16", "coord": [-121.70502, 39.76729],
+               "population": 873, "home": 172, "home_no_car": 0, "staying": 0, "driving": 302, "queued": 180,
+               "stuck": 12, "out": 207, "vehicles": 737, "persons_per_vehicle": 1.18, "basis": "acs" } ],  // every zone
+  "edges": {                                  // occupied edges; at most 1,500, most people first, sorted by edge index
+    "fields": ["edge_index", "moving", "queued", "stuck", "reason", "veh", "speed_kph", "max_wait_min",
+               "free_flow_kph", "length_m", "line"],
+    "rows": [[570, 0, 0, 15, "long_queue", 10, 0.0, 17, 40.0, 99, [[-121.59921, 39.77677], [-121.5992, 39.77766]]]] },
+               // people moving / queued / stuck; line in travel direction, simplified (12 m, at most 12 points)
+  "edges_omitted": { "edges": 0, "people": 0 },
+  "points": [ { "coord": [-121.61764, 39.74024], "people": 9, "veh": 5, "state": "stuck", "reason": "no_route",
+                "text": "no open way out" } ],   // departed, not yet on an edge (state queued or stuck), and turned back
+  "stuck": [ { "id": "stuck-1", "reason": "long_queue", "reason_text": "in traffic 15+ min", "road": "Skyway Road",
+               "people": 1206, "veh": 860, "coord": [-121.59601, 39.82405], "edge_indexes": [5120, 5121],
+               "longest_wait_min": 48, "label": "1,206 stuck on Skyway Road: in traffic 15+ min" } ],
+               // per reason: the item with most people seeds a cluster of items within 800 m; at most 40
+  "destinations": [ { "id": "exit:osm-node:86546172", "name": "Exit south", "kind": "exit",
+                      "coord": [-121.57948, 39.53149], "people": 4837, "veh": 3438, "last_10_min_people": 760 } ],
+  "basis": { "population": "ACS 2014-2018 block-group population, clipped to the road extract (observed)",
+             "persons_per_vehicle": 1.43, "persons_per_vehicle_basis": "derived per zone: ...",
+             "persons_per_vehicle_check": "within NIST TN 2252 bounds of 1.0 to 2.5 ...",
+             "zones_census": 43, "zones_assumed": 0, "people_behavior": "historical" },
+  "limitations": [ "..." ] }
+```
+
+Units: people and vehicles are counts, `speed_kph` and `free_flow_kph` km/h, `length_m` metres,
+`max_wait_min` and `longest_wait_min` simulated minutes, coordinates `[lon, lat]`.
 
 ### Controller objective (TwinController)
 

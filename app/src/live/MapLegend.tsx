@@ -58,6 +58,16 @@ const BOARD_ROWS: { key: string; label: string; swatch: ReactNode }[] = [
     ),
   },
   {
+    key: "bd-no-truck",
+    label: "Road the unit's truck can't use (rules R01-R12)",
+    swatch: (
+      <svg viewBox="0 0 20 14" aria-hidden="true">
+        <line x1="1" y1="7" x2="19" y2="7" stroke="#fff" strokeWidth="5" />
+        <line x1="1" y1="7" x2="19" y2="7" stroke={BOARD_COLOR.noTruck} strokeWidth="2.5" strokeDasharray="2.5 3" />
+      </svg>
+    ),
+  },
+  {
     key: "bd-station",
     label: "Fire station (sim)",
     swatch: (

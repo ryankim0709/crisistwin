@@ -15,6 +15,7 @@ import {
   type ZoneForecast,
 } from "./model";
 import type { Selection } from "./DemoMap";
+import { fireTimeline, reachText, reportText, unitAccessText } from "./boardResponse";
 import { ORDER_COMPLIANCE, SHADOW_SHARE, holdsFlameFeet, kindLabel } from "./realism";
 
 const SAFETY: Record<RouteOption["safety"], string> = {
@@ -47,6 +48,10 @@ function FireDetail({ board, id, actions }: { board: Board; id: string; actions:
         <Tag tone={FIRE_STATUS[fire.status].tone}>{FIRE_STATUS[fire.status].label}</Tag>
         <Tag>{SOURCE_LABEL[fire.source]}</Tag>
       </div>
+      <p className="dm-note">
+        {fireTimeline(board, fire)}
+        {reportText(board, fire) ? <><br />{reportText(board, fire)}</> : null}
+      </p>
       <Facts
         items={[
           { label: "Started", value: simClock(fire.ignitedAt) },
@@ -83,6 +88,7 @@ function FireDetail({ board, id, actions }: { board: Board; id: string; actions:
               <span>
                 <strong>{t.id}</strong> {kindLabel(t.kind)}, {TEAM_STATUS[t.status].toLowerCase()}
                 {t.status === "en_route" && t.arriveAt !== null ? `, ${Math.ceil(t.arriveAt - board.minute)} min` : ""}
+                {t.status === "on_scene" && t.workMode !== null ? <span className="lc-dim"> {unitAccessText(board, t)}</span> : null}
               </span>
               <Button size="sm" variant="ghost" onClick={() => actions.releaseTeam(t.id)}>
                 Release
@@ -116,10 +122,12 @@ function FireDetail({ board, id, actions }: { board: Board; id: string; actions:
           fire out resolves {fire.reportIds.length === 1 ? "it" : "them"} on Live command.
         </p>
       ) : null}
+      {reachText(board, fire) ? <Notice tone="warning">{reachText(board, fire)}</Notice> : null}
       <p className="dm-note">
-        Rothermel spread from the fuel, slope and wind at the head. Units build line at their sourced rate for this fuel;
-        the fire is contained when the line reaches its perimeter and the head flame is within what their line holds
-        {holds > 0 ? ` (${holds} ft now)` : ""}.
+        Rothermel spread from the fuel, slope and wind at the head. Units build line at their sourced rate for this fuel
+        once they reach the edge from where their road ends (hose within reach, otherwise on foot); the fire is contained
+        when the line reaches its perimeter and the head flame is within what their line holds
+        {holds > 0 ? ` (${holds} ft now)` : ""}. Simulated.
       </p>
     </>
   );

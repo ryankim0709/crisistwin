@@ -205,9 +205,10 @@ export default function StudioDiorama(props: StudioDioramaProps) {
   const streetArea = streets.status === "ready" ? streets.area : null;
   // The overlay draws its own homes (coloured by household state), so the streets layer then
   // draws roads only.
+  const streetScenery = streets.status === "ready" ? streets.scenery : null;
   const sceneStreets = useMemo(
-    () => (streetArea && evacuation ? { edges: streetArea.edges, homes: [] } : streetArea),
-    [streetArea, evacuation],
+    () => (streetScenery && evacuation ? { edges: streetScenery.edges, homes: [] } : streetScenery),
+    [streetScenery, evacuation],
   );
   const [overlay] = useState(() => new DispatchOverlay());
   const [lineOverlay] = useState(() => new FirelineOverlay());
@@ -386,7 +387,10 @@ export default function StudioDiorama(props: StudioDioramaProps) {
         <div className="studio-diorama__tools">
           {boardControl}
           {landscape && (
-            <div className="studio-diorama__buttons">
+            <div className="studio-diorama__buttons" role="group" aria-labelledby="studio-diorama-zoom">
+              <span id="studio-diorama-zoom" className="studio-diorama__zoom-label">
+                Zoom
+              </span>
               <Button variant="secondary" size="sm" onClick={() => scene?.resetView(false)}>
                 Whole board
               </Button>
@@ -396,7 +400,7 @@ export default function StudioDiorama(props: StudioDioramaProps) {
                 onClick={() => scene?.resetView(true)}
                 disabled={!run}
               >
-                Frame fire
+                Zoom to fire
               </Button>
             </div>
           )}

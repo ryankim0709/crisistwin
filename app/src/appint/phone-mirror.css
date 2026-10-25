@@ -1,0 +1,204 @@
+/* Phone mirror (PhoneMirror.tsx). Prefix: pmr-. Mirrors the iOS app's Map drawer; colours are kit tokens. */
+.pmr {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--ct-space-3);
+  margin: 0;
+  width: 264px;
+  max-width: 100%;
+}
+.pmr-phone {
+  position: relative;
+  box-sizing: border-box;
+  width: 240px;
+  height: 480px;
+  padding: 6px;
+  border-radius: 36px;
+  background: var(--ct-ink);
+  box-shadow: var(--ct-shadow-md);
+}
+.pmr-notch {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  z-index: 2;
+  width: 64px;
+  height: 14px;
+  border-radius: var(--ct-radius-pill);
+  background: var(--ct-ink);
+  transform: translateX(-50%);
+}
+.pmr-screen {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+  border-radius: 31px;
+  background: var(--ct-bg);
+  color: var(--ct-ink);
+}
+.pmr-state {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+  padding: var(--ct-space-4);
+  text-align: center;
+}
+.pmr-map {
+  display: block;
+  flex: none;
+  width: 100%;
+  height: 168px;
+}
+.pmr-map-bg {
+  fill: var(--ct-surface-muted);
+}
+.pmr-map-fire {
+  fill: var(--ct-fire);
+  fill-opacity: 0.35;
+  stroke: var(--ct-fire);
+  stroke-width: 1.5;
+}
+.pmr-map-route {
+  fill: none;
+  stroke: var(--ct-route);
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.pmr-map-dest {
+  fill: var(--ct-route);
+  stroke: var(--ct-surface);
+  stroke-width: 1.5;
+}
+.pmr-map-task {
+  fill: var(--ct-warning);
+  stroke: var(--ct-surface);
+  stroke-width: 1.5;
+}
+.pmr-map-me {
+  fill: var(--ct-brand);
+  stroke: var(--ct-surface);
+  stroke-width: 2;
+}
+.pmr-map-me-approx {
+  fill: var(--ct-surface);
+  stroke: var(--ct-brand);
+  stroke-dasharray: 3 2;
+}
+.pmr-map-note {
+  fill: var(--ct-ink-muted);
+  font-size: var(--ct-text-sm);
+}
+.pmr-card {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: var(--ct-space-2);
+  min-height: 0;
+  margin-top: -18px;
+  padding: var(--ct-space-4) var(--ct-space-3) var(--ct-space-3);
+  overflow: hidden;
+  border-radius: 24px 24px 0 0;
+  background: var(--ct-surface);
+  box-shadow: var(--ct-shadow-md);
+}
+.pmr-title-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--ct-space-2);
+}
+.pmr-title {
+  margin: 0;
+  font-size: var(--ct-text-base);
+  font-weight: 650;
+  line-height: 1.25;
+}
+.pmr-exercise {
+  flex: none;
+  padding: 2px 7px;
+  border: 1px solid var(--ct-warning-border);
+  border-radius: var(--ct-radius-pill);
+  background: var(--ct-warning-soft);
+  color: var(--ct-warning);
+  font-size: var(--ct-text-xs);
+  font-weight: 600;
+}
+.pmr-sub,
+.pmr-line,
+.pmr-caveat,
+.pmr-zone {
+  margin: 0;
+  font-size: var(--ct-text-sm);
+  line-height: 1.35;
+}
+.pmr-sub {
+  color: var(--ct-ink);
+  font-weight: 600;
+}
+.pmr-line {
+  color: var(--ct-ink-muted);
+}
+.pmr-caveat {
+  color: var(--ct-fire);
+  font-weight: 600;
+}
+.pmr-zone {
+  color: var(--ct-ink-subtle);
+  font-size: var(--ct-text-xs);
+}
+.pmr-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ct-space-2);
+  margin-top: auto;
+}
+.pmr-btn {
+  display: inline-flex;
+  flex: 1 1 90px;
+  align-items: center;
+  justify-content: center;
+  min-height: 40px;
+  padding: 0 var(--ct-space-2);
+  border-radius: var(--ct-radius-pill);
+  background: var(--ct-surface-muted);
+  color: var(--ct-ink);
+  font-size: var(--ct-text-sm);
+  font-weight: 600;
+  text-align: center;
+  cursor: default;
+  user-select: none;
+}
+.pmr-btn-primary {
+  background: var(--ct-brand);
+  color: var(--ct-ink-inverse);
+}
+.pmr-btn-danger {
+  background: var(--ct-danger-soft);
+  box-shadow: inset 0 0 0 1px var(--ct-danger-border);
+  color: var(--ct-danger);
+}
+.pmr-caption {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ct-space-2);
+  width: 100%;
+  font-size: var(--ct-text-sm);
+}
+.pmr-plain {
+  margin: 0;
+  color: var(--ct-ink);
+  line-height: 1.4;
+}
+.pmr-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ct-space-2);
+  margin: 0;
+  color: var(--ct-ink-muted);
+  font-size: var(--ct-text-xs);
+}

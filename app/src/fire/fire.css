@@ -707,6 +707,65 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* Wind over time strip (weather series runs only): its own row under the scrubber. */
+.fr-dock.fr-dock--wind {
+  grid-template-areas:
+    "buttons scrub time end"
+    ". wind wind ."
+    "note note note note";
+}
+
+.fr-wind-strip {
+  grid-area: wind;
+  min-width: 0;
+}
+
+.fr-wind-strip-plot {
+  position: relative;
+  height: 32px;
+  color: var(--ct-info);
+  border-bottom: 1px solid var(--ct-border-subtle);
+}
+
+.fr-wind-strip-plot svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.fr-wind-strip-arrow {
+  position: absolute;
+  top: 2px;
+  font-size: var(--ct-text-xs);
+  line-height: 1;
+  color: var(--ct-ink-muted);
+  transform-origin: center;
+}
+
+.fr-wind-strip-now {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--ct-fire);
+}
+
+.fr-wind-strip-readout {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 2px var(--ct-space-3);
+  margin: 2px 0 0;
+  font-size: var(--ct-text-xs);
+  color: var(--ct-ink-muted);
+}
+
+.fr-wind-strip-readout strong {
+  color: var(--ct-ink);
+}
+
 .fr-speed-note {
   grid-area: note;
   margin: 0;
@@ -1039,6 +1098,13 @@
       "note note note";
     row-gap: var(--ct-space-1);
   }
+  .fr-dock.fr-dock--wind {
+    grid-template-areas:
+      "buttons scrub time"
+      ". wind wind"
+      "end end end"
+      "note note note";
+  }
   .fr-dock-end {
     justify-content: flex-end;
   }
@@ -1162,6 +1228,15 @@
       "note";
     gap: 6px;
     padding: 10px var(--ct-space-3);
+  }
+  .fr-dock.fr-dock--wind {
+    grid-template-areas:
+      "time"
+      "scrub"
+      "wind"
+      "buttons"
+      "end"
+      "note";
   }
   .fr-time {
     flex-direction: row;

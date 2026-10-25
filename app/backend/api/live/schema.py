@@ -169,6 +169,16 @@ VALIDATORS: dict[str, dict[str, Any]] = {
             },
         },
     ),
+    "live_virtual_people": _schema(
+        ["incident_id", "id", "n", "seed", "party_key", "zone_id", "home", "choices", "state"],
+        {"incident_id": STR, "id": STR, "n": {"bsonType": ["int", "long"], "minimum": 1}, "party_key": STR,
+         "zone_id": STR, "home": COORD, "has_vehicle": {"bsonType": "bool"}},
+    ),
+    "live_virtual_runs": _schema(
+        ["incident_id", "seed", "next_n"],
+        {"incident_id": STR, "seed": {"bsonType": ["int", "long"]}, "next_n": {"bsonType": ["int", "long"], "minimum": 1},
+         "ticked_to": NULLABLE_DATE, "lease_until": NULLABLE_DATE},
+    ),
     "live_destination_choices": _schema(
         ["incident_id", "party_key", "zone_id", "destination_id", "at", "expires_at"],
         {
@@ -262,6 +272,11 @@ INDEXES: dict[str, list[IndexModel]] = {
         IndexModel([("incident_id", ASCENDING), ("party_key", ASCENDING)], unique=True),
         IndexModel([("incident_id", ASCENDING), ("zone_id", ASCENDING), ("status", ASCENDING)]),
     ],
+    "live_virtual_people": [
+        IndexModel([("incident_id", ASCENDING), ("id", ASCENDING)], unique=True),
+        IndexModel([("incident_id", ASCENDING), ("n", ASCENDING)], unique=True),
+    ],
+    "live_virtual_runs": [IndexModel([("incident_id", ASCENDING)], unique=True)],
     "live_destination_choices": [
         IndexModel([("incident_id", ASCENDING), ("party_key", ASCENDING), ("zone_id", ASCENDING)], unique=True),
         IndexModel([("incident_id", ASCENDING), ("zone_id", ASCENDING), ("destination_id", ASCENDING)]),
@@ -289,6 +304,8 @@ DRILL_DATA_COLLECTIONS = (
     "live_injects",
     "live_checkins",
     "live_destination_choices",
+    "live_virtual_people",
+    "live_virtual_runs",
     "live_plan_routes",
     "live_board",
     "live_responder_locations",

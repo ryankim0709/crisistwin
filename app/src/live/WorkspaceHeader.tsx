@@ -2,6 +2,8 @@ import { useEffect, useRef, useState, type ReactNode, type RefObject } from "rea
 import { Button, EvidenceTag, IconButton, Notice, SegmentedControl, Tag, buttonClass } from "../ui";
 import { simClock } from "../demo/format";
 import { ACTIVITIES, ACTIVITY } from "../demo/model";
+import { boardCellMetersFor } from "../fire/boardSize";
+import { readinessLabel, useCachedBoards } from "../fire/useCachedBoards";
 import { BOARD_SPEEDS, MONITORING, type CommandBoard } from "../demo/useCommandBoard";
 import { WEATHER_PRESETS } from "../demo/useDemoEnvironment";
 import { drillAction } from "./api";
@@ -162,9 +164,42 @@ function useDismiss(ref: RefObject<HTMLDetailsElement | null>) {
  * The simulated board's controls: AI monitoring, the board clock (its own simulated time, not
  * the drill clock), and a "Conditions" popover for fire activity, wind and restart.
  */
+const BOARD_SIZES = [15, 30, 45, 60].map((km) => ({
+  value: String(km),
+  label: `${km} km`,
+  title: `Board about ${km * 2} \u00d7 ${km * 2} km (${km} km from the centre to each edge)`,
+}));
+
+/** The drill environment's centre (GET /api/demo/environment), read once; null until known. */
+let drillCentre: Promise<[number, number] | null> | null = null;
+function useDrillCentre(): [number, number] | null {
+  const [centre, setCentre] = useState<[number, number] | null>(null);
+  useEffect(() => {
+    drillCentre ??= fetch("/api/demo/environment")
+      .then((r) => (r.ok ? (r.json() as Promise<{ center?: [number, number] }>) : null))
+      .then((body) => body?.center ?? null)
+      .catch(() => null);
+    let live = true;
+    void drillCentre.then((c) => live && setCentre(c));
+    return () => {
+      live = false;
+    };
+  }, []);
+  return centre;
+}
+
 export function BoardControls({ board: cb }: { board: CommandBoard }) {
   const ref = useRef<HTMLDetailsElement>(null);
   useDismiss(ref);
+  const centre = useDrillCentre();
+  const request = (km: number) => ({
+    longitude: centre?.[0] ?? 0,
+    latitude: centre?.[1] ?? 0,
+    radiusMeters: km * 1000,
+    cellMeters: boardCellMetersFor(km * 1000),
+  });
+  const sizeReady = useCachedBoards(centre ? BOARD_SIZES.map((s) => request(Number(s.value))) : [], cb.boardLoading);
+  const ready = (km: number) => centre !== null && sizeReady(request(km));
   const { board, windNow } = cb;
   return (
     <div className="lc-board-ctl" role="group" aria-label="Simulated board">
@@ -214,6 +249,25 @@ export function BoardControls({ board: cb }: { board: CommandBoard }) {
                 value={cb.weather}
                 onChange={cb.setWeather}
               />
+              <span className="lc-board-label">Board size</span>
+              <SegmentedControl
+                label="Board size, km from the centre to each edge"
+                options={BOARD_SIZES.map((s) => ({
+                  ...s,
+                  title: `${s.title}. ${readinessLabel(ready(Number(s.value)), Number(s.value) * 1000, boardCellMetersFor(Number(s.value) * 1000))}`,
+                }))}
+                value={String(cb.boardRadius / 1000)}
+                onChange={(value) => cb.setBoardRadius(Number(value) * 1000)}
+              />
+              <span className="lc-dim">
+                {cb.boardLoading
+                  ? "Loading the board\u2026"
+                  : `About ${cb.boardRadius / 500} \u00d7 ${cb.boardRadius / 500} km, ${boardCellMetersFor(cb.boardRadius)} m cells. ${readinessLabel(
+                      ready(cb.boardRadius / 1000),
+                      cb.boardRadius,
+                      boardCellMetersFor(cb.boardRadius),
+                    )}.`}
+              </span>
               {windNow ? (
                 <span className="lc-dim lc-num" title={board.env.spread.wind.label}>
                   Wind now {windNow.speedMetersPerSecond.toFixed(1)} m/s from {Math.round(windNow.fromDegrees)}°

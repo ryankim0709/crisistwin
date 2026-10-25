@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import type { LonLat } from "../live/types";
 import { GROUND_APPARATUS } from "../studio/apparatus";
 import { CREW_ROUTES_URL, demoUrl, type CrewRouteRequest, type CrewRoutesRequest, type CrewRoutesResponse } from "./contracts";
-import { activeFires, applyTravelLeg, crewTarget, distanceM, fireRing, travelKey, type Board } from "./model";
+import { fireRingsForRouting } from "./fireFootprint";
+import { activeFires, applyTravelLeg, crewTarget, distanceM, travelKey, type Board } from "./model";
 
 /** Free units per burning fire whose road time is fetched ahead (nearest by straight line). */
 export const PREFETCH_UNITS_PER_FIRE = 4;
@@ -55,7 +56,7 @@ export function useCrewRoutes(board: Board | null, version: number, incidentId: 
     }
     if (requests.length === 0) return;
 
-    const body: CrewRoutesRequest = { fires: fires.map((f) => fireRing(f, RING_POINTS) as LonLat[]), requests };
+    const body: CrewRoutesRequest = { fires: fireRingsForRouting(board, RING_POINTS), requests };
     for (const r of requests) seen.add(r.id);
     inflight.current = true;
     fetch(demoUrl(CREW_ROUTES_URL, incidentId), {

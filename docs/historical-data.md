@@ -127,3 +127,62 @@ Limits on comparison:
   PSAP or CAD data would need a records request, which this work did not make.
 
 Sources not used: `buttecounty.net` returned HTTP 403 earlier and is recorded as unavailable.
+
+## Historical fire dioramas (`/fire`)
+
+The `/fire` region picker has a "Historical fires" group: Camp 2018, Kincade 2019, Woolsey
+2018 and Marshall 2021. Choosing one opens the real fire as a 3D diorama with a time slider
+(`app/src/historical/HistoricalFireDiorama.tsx`). LANDFIRE fuels and terrain load live around
+the fire. The fire layer comes from the observed NASA VEDA FEDS perimeters in each incident
+package. These are satellite-derived cumulative perimeters, and FEDS snaps each one to local
+noon or midnight, so their times are accurate to about half a day.
+
+**Data files.** `tools/build_historical_fires.py` (standard library only) writes
+`app/public/historical-fires/`:
+
+- `index.json`: the list of fires.
+- `<id>.json`: ignitions with provenance, perimeter snapshots (`minute` after `t0`, the
+  earliest ignition), `bbox`, the recommended `board` and the sources.
+- `<id>.simulated.json`: the replay bundle's `fire_simulated.arrival_grid`, cropped, with
+  `evidence_class: "simulated"`.
+
+The builder applies three rules:
+
+- Perimeters are simplified (Douglas-Peucker, 60 m, which is well under the 375 m VIIRS pixel)
+  and rounded to 5 decimals.
+- Snapshots after growth stops (less than 0.2 % of the final area) are dropped. A snapshot
+  with an unchanged area keeps its time, with `geometry: null`.
+- The board is the final perimeter plus ignitions, with a 15 % + 1.5 km margin. Its
+  `cell_m` comes from the `landscapeCellMetersFor` rule.
+
+Fire ids match the shared world's `region.kind = "historical_fire"` ids
+([shared-world.md](shared-world.md)). Rebuild the files after pulling the packages and
+bundles:
+
+```sh
+python3 -m tools.build_historical_fires   # --data-root / --replays / --output to override paths
+```
+
+**Observed arrival raster.** `app/src/historical/arrivalFromPerimeters.ts` turns the
+snapshots into minutes after `t0` on the board grid (row 0 north, Web Mercator; `Infinity` =
+never burned). A cell arrives when it first falls inside a perimeter. Perimeters are made
+cumulative, so a cell never unburns. Within each interval, the arrival time is
+`t_prev + f (t_k - t_prev)`, with `f = d_prev / (d_prev + d_next)`. `d_prev` is the distance to
+the earlier burned area (the ignition cells before the first snapshot). `d_next` is the
+distance to unburned ground outside the later perimeter. Both are exact Euclidean distance
+transforms. With this rule the front sweeps between snapshots instead of jumping. The UI
+labels the layer "Observed perimeters, interpolated between snapshots". The sweep between
+snapshots is an interpolation, not an observation.
+
+Limits:
+
+- An ignition later than the first snapshot only appears as a pin. This is Marshall's second
+  ignition, at 19:05Z, against a first perimeter snapped to 19:00Z.
+- All seeds start the first interval together.
+- No wind is recorded with the perimeters, so the diorama hides its wind arrow.
+
+**Simulated overlay.** The "Simulated" toggle swaps in the replay bundle's model run. It
+is resampled nearest-cell by `simulatedArrival.ts`: the source grid has row 0 at the south,
+and the board grid has row 0 at the north. The panel tags it as simulated and shows the model
+id and the bundle's calibration headline. The run covers only its own window, from 2.6 to
+9.6 hours after ignition depending on the fire.

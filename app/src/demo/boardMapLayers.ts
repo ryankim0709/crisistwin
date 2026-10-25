@@ -2,7 +2,10 @@ import type { GeoJSONSource, Map as MapLibreMap, MapMouseEvent } from "maplibre-
 import { LEVEL_COLOR, MAP_COLOR } from "../live/CommandMap";
 import { fireHatch } from "../live/mapStyle";
 import type { LonLat } from "../live/types";
-import { fireRing, teamPosition, type Board, type RouteOption, type ZoneForecast } from "./model";
+import { GROUND_APPARATUS } from "../studio/apparatus";
+import type { AccessClassWire, RoadAccessResponse } from "./contracts";
+import { boardFireFeatures, firePolygons } from "./fireFootprint";
+import { teamPosition, type Board, type RouteOption, type ZoneForecast } from "./model";
 
 /**
  * The simulated fire board drawn on top of the live command map (a framework-free port of
@@ -18,6 +21,12 @@ export interface BoardLayerInput {
   routes: ReadonlyMap<string, RouteOption[]>;
   selection: BoardSelection | null;
   igniteMode: boolean;
+  /**
+   * Drill roads closed by the road access rules (GET /api/demo/road_access). Drawn dashed for the
+   * selected unit's class, or, with `showClosedRoads`, for every class on the board.
+   */
+  closedRoads?: RoadAccessResponse["closed_roads"] | null;
+  showClosedRoads?: boolean;
 }
 
 export interface BoardLayers {
@@ -39,6 +48,8 @@ export const BOARD_COLOR = {
   overrun: "#B3140C",
   overrunText: "#7A0A05",
   readyText: "#7A4B00",
+  /** Road closed to a unit's apparatus class (dashed); unused by fire, zones, routes and units. */
+  noTruck: "#8B1E3F",
 };
 
 type Feature = GeoJSON.Feature<GeoJSON.Geometry, Record<string, string | number | boolean | null>>;
@@ -83,10 +94,9 @@ function zoneTag(state: ZoneMapState, forecast: ZoneForecast | undefined): strin
   return "";
 }
 
-/** Fire footprints at board.minute. */
-// TODO: switch to boardFireFeatures(board) from the fire model module when it lands.
+/** Fire footprints at board.minute (the solver's burned cells, fireFootprint.ts). */
 function fireFeatures(board: Board): Feature[] {
-  return board.fires.map((fire) => polygon(fireRing(fire), { id: fire.id, status: fire.status }));
+  return boardFireFeatures(board).features.map((f): Feature => ({ ...f, properties: { ...f.properties } }));
 }
 
 function buildFireLabels(board: Board): Feature[] {
@@ -147,12 +157,35 @@ function buildTeams(board: Board) {
   return { teams, lines };
 }
 
+/** Roads closed to the selected unit's class, or (toggle) to any class on the board. */
+function buildClosedRoads(board: Board, input: BoardLayerInput): Feature[] {
+  const roads = input.closedRoads;
+  if (!roads) return [];
+  const team = input.selection?.kind === "team" ? board.teams.find((t) => t.id === input.selection?.id) : undefined;
+  const classOf = (kind: keyof typeof GROUND_APPARATUS) => GROUND_APPARATUS[kind].access as AccessClassWire;
+  let classes: AccessClassWire[];
+  if (team) classes = [classOf(team.kind)];
+  else if (input.showClosedRoads) classes = [...new Set(board.teams.map((t) => classOf(t.kind)))];
+  else return [];
+  const out: Feature[] = [];
+  for (const f of roads.features) {
+    const rule = classes.map((c) => f.properties.closed[c]).find(Boolean);
+    if (rule) out.push(lineFeature(f.geometry.coordinates as LonLat[], { rule, reason: f.properties.reason }));
+  }
+  return out;
+}
+
 function buildSelection(sel: BoardSelection | null, board: Board): { areas: Feature[]; points: Feature[] } {
   const none = { areas: [], points: [] };
   if (!sel) return none;
   if (sel.kind === "fire") {
     const fire = board.fires.find((f) => f.id === sel.id);
-    return fire ? { areas: [polygon(fireRing(fire), { id: fire.id })], points: [point(fire.origin, { id: fire.id })] } : none;
+    return fire
+      ? {
+          areas: firePolygons(board, fire).map((p): Feature => ({ type: "Feature", geometry: p.geometry, properties: { id: fire.id } })),
+          points: [point(fire.origin, { id: fire.id })],
+        }
+      : none;
   }
   if (sel.kind === "zone") {
     const zone = board.zones.find((z) => z.id === sel.id);
@@ -173,7 +206,7 @@ function selectionCenter(sel: BoardSelection, board: Board): LonLat | null {
 
 const SOURCES = [
   "bd-zones", "bd-zone-labels", "bd-routes", "bd-fires", "bd-fire-labels", "bd-team-lines", "bd-teams",
-  "bd-stations", "bd-dest", "bd-sel-area", "bd-sel-point",
+  "bd-stations", "bd-dest", "bd-sel-area", "bd-sel-point", "bd-no-truck",
 ];
 const HATCH_IMAGE = "bd-fire-hatch";
 const FONT = ["Noto Sans Regular"];
@@ -212,6 +245,12 @@ function installLayers(map: MapLibreMap, beforeId: string): string[] {
     "line-color": STATE_MATCH(zoneColor),
     "line-width": STATE_MATCH({ overrun: 3, ordered: 2.5, threatened: 2, quiet: 0.6 }),
     "line-opacity": 0.95,
+  } });
+  add({ id: "bd-no-truck-casing", type: "line", source: "bd-no-truck", layout: { "line-cap": "round" }, paint: {
+    "line-color": BOARD_COLOR.halo, "line-width": 5, "line-opacity": 0.8,
+  } });
+  add({ id: "bd-no-truck", type: "line", source: "bd-no-truck", paint: {
+    "line-color": BOARD_COLOR.noTruck, "line-width": 2.5, "line-dasharray": [1, 1.2],
   } });
   add({ id: "bd-sel-area", type: "line", source: "bd-sel-area", layout: { "line-join": "round" }, paint: { "line-color": MAP_COLOR.selection, "line-width": 4.5 } });
   add({ id: "bd-routes", type: "line", source: "bd-routes", layout: { "line-join": "round" }, paint: {
@@ -342,6 +381,7 @@ export function attachBoardLayers(
       setData("bd-dest", r.dests);
       setData("bd-sel-area", sel.areas);
       setData("bd-sel-point", sel.points);
+      setData("bd-no-truck", buildClosedRoads(board, input));
       // Move the camera only when the selection changes, not on each board update.
       const key = input.selection ? `${input.selection.kind}:${input.selection.id}` : null;
       if (key !== lastSelKey && input.selection) {

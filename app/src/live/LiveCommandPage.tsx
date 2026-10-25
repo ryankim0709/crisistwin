@@ -23,6 +23,7 @@ import { ACTIVITY } from "../demo/model";
 import { CONGESTION_LABEL, TRAVEL_LABEL } from "../demo/observation";
 import SelectedPanel from "../demo/SelectedPanel";
 import { useCommandBoard } from "../demo/useCommandBoard";
+import { useRoadAccess } from "../demo/useRoadAccess";
 import "../demo/demo.css";
 import ActivityLog from "./ActivityLog";
 import { useTriageKeys } from "./useTriageKeys";
@@ -44,6 +45,7 @@ import SelectedItem, { type ImpactState, type RunAction } from "./SelectedItem";
 import { useCommand } from "./useCommand";
 import { usePoll } from "./usePoll";
 import { useTwin } from "./useTwin";
+import { PeopleSummary, usePeople } from "./people";
 import WorkspaceHeader, { BoardControls } from "./WorkspaceHeader";
 import "./live.css";
 
@@ -55,6 +57,8 @@ const LAYER_LABEL: Record<LayerKey, string> = {
   reports: "Reports",
   roads: "Roads",
   shelters: "Shelters",
+  people: "People",
+  noTruck: "Roads trucks can't use",
 };
 type LeftTab = "reports" | "board";
 const LEFT_TABS: SegmentedOption<LeftTab>[] = [
@@ -219,6 +223,8 @@ export default function LiveCommandPage() {
     reports: true,
     roads: true,
     shelters: true,
+    people: true,
+    noTruck: false,
   });
   // A different incident: drop the selection and per-incident panels (the polls restart themselves).
   useEffect(() => {
@@ -254,6 +260,9 @@ export default function LiveCommandPage() {
   const unauthorized = command.error?.unauthorized ?? false;
   const data = unauthorized ? null : command.data;
   const twinData = data ? twin.data : null;
+  // The simulated people picture polls only while its layer is on.
+  const people = usePeople(data && layers.people ? incidentToken : null, incidentId);
+  const peopleData = data && layers.people ? people.data : null;
   // The simulated board (fires, units, households) and the AI commander, on the drill's zones.
   const cb = useCommandBoard({ token, incidentId, data });
   const setBoardSelection = cb.setSelection;
@@ -317,12 +326,15 @@ export default function LiveCommandPage() {
   // The board's map layers, drawn on the live map (demo/boardMapLayers.ts). The handlers and the
   // latest input sit in refs: CommandMap calls onMapReady once, at load.
   const boardLayers = useRef<BoardLayers | null>(null);
+  const roadAccess = useRoadAccess(incidentId, !!cb.board);
   const boardInput: BoardLayerInput = {
     board: cb.board,
     forecasts: cb.forecasts,
     routes: cb.routes.routes,
     selection: cb.selection,
     igniteMode: cb.igniteMode,
+    closedRoads: roadAccess.data?.closed_roads ?? null,
+    showClosedRoads: layers.noTruck,
   };
   const boardInputRef = useRef(boardInput);
   const boardHandlers = useRef({ onSelect: selectBoard, onIgnite: cb.onIgnite });
@@ -333,7 +345,7 @@ export default function LiveCommandPage() {
     boardInputRef.current = boardInput;
     boardLayers.current?.update(boardInput);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- the board is mutated in place; version marks changes
-  }, [cb.board, cb.version, cb.forecasts, cb.routes.routes, cb.selection, cb.igniteMode]);
+  }, [cb.board, cb.version, cb.forecasts, cb.routes.routes, cb.selection, cb.igniteMode, roadAccess.data, layers.noTruck]);
   const onMapReady = useCallback((map: MapLibreMap) => {
     const layers = attachBoardLayers(map, EXTRA_LAYERS_BEFORE_ID, {
       onSelect: (sel) => boardHandlers.current.onSelect(sel),
@@ -485,6 +497,7 @@ export default function LiveCommandPage() {
         <CommandMap
           data={data}
           twin={twinData}
+          people={peopleData}
           items={items}
           selected={selected}
           focus={focus}
@@ -496,10 +509,13 @@ export default function LiveCommandPage() {
           interceptClick={interceptClick}
         />
         {data && !showDiorama ? (
-          <LayerToggles
-            layers={layers}
-            onToggle={(k) => setLayers((l) => ({ ...l, [k]: !l[k] }))}
-          />
+          <div className="lc-map-top">
+            {layers.people ? <PeopleSummary snapshot={peopleData} error={people.error} /> : null}
+            <LayerToggles
+              layers={layers}
+              onToggle={(k) => setLayers((l) => ({ ...l, [k]: !l[k] }))}
+            />
+          </div>
         ) : null}
         {data && !showDiorama ? <MapLegend record={!isPackage} board={!!board} /> : null}
         {/* The map stays mounted under the diorama, so its view and board layers survive a switch. */}

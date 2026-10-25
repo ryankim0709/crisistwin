@@ -1,4 +1,4 @@
-"""Scenario weather: historical, climatological and forecast wind for any California point.
+"""Scenario weather: historical, climatological and forecast wind for a point in the western US.
 
 Pure stdlib. Network access goes through one injectable ``http_get`` so the maths and the
 parsers are testable offline (see ``tests/test_weather.py``). Design and terms of use:
@@ -14,12 +14,15 @@ Conventions at every boundary of this module:
 * Wind direction is meteorological: the bearing the wind blows **from**, degrees true,
   clockwise from north, in [0, 360). ``None`` means calm or not reported; a missing value is
   never replaced by a plausible-looking number.
-* Heights are not converted. ASOS and gridpoint winds are 10 m, RAWS winds are 20 ft
+* Heights are not converted. ASOS, gridpoint and ERA5 winds are 10 m, RAWS winds are 20 ft
   (6.1 m); the Rothermel input is the open 20 ft wind (same simplification as
   ``app/src/fire/weather.ts``).
+* Elevations are metres above sea level; station-site differences are station minus site.
 * Every series carries an evidence class: ``observed`` (station data), ``forecast`` (NWS
-  gridpoint forecast) or ``derived`` (chosen statistically from observations, see
-  ``climatology_percentile``).
+  gridpoint forecast), ``derived`` (chosen statistically from observations, see
+  ``climatology_percentile``) or ``modelled`` (ERA5 reanalysis, ``fetch_reanalysis``).
+* Station choice (``rank_stations``, ``score_station``) uses weights that are CrisisTwin
+  assumptions, named as constants below and documented in docs/scenario-weather.md.
 """
 
 from __future__ import annotations
@@ -43,6 +46,50 @@ from typing import Callable, Iterable, Optional, Sequence
 OBSERVED = "observed"
 FORECAST = "forecast"
 DERIVED = "derived"
+MODELLED = "modelled"  # reanalysis: a model's reconstruction of the past, not a measurement
+EVIDENCE_LABELS = {
+    OBSERVED: "observed",
+    FORECAST: "forecast",
+    DERIVED: "derived",
+    MODELLED: "modelled (reanalysis)",
+}
+
+SELECTION_VERSION = "station-rank/1"
+"""Version of the station choice below; API caches key on it so old answers are not served."""
+
+# ---- station choice (historical_replay, climatology_percentile). Every weight is an ASSUMPTION
+# chosen for CrisisTwin, not a published constant; docs/scenario-weather.md "Station selection".
+MAX_CANDIDATES = 12
+"""At most this many stations (wind-capable, archive covering the start) are ranked and tried."""
+MAX_CANDIDATE_DISTANCE_KM = 60.0
+"""Stations farther than this are not candidates; beyond it the reanalysis is used instead."""
+SCORE_PER_KM = 1.0
+"""Penalty points per km of horizontal distance (the score's unit is 'km-equivalent')."""
+SCORE_PER_100M_ELEV = 5.0
+"""ASSUMPTION: 100 m of station-site elevation difference costs as much as 5 km of distance.
+Wind in complex terrain changes faster with height (ridge vs canyon vs valley floor) than with
+horizontal distance; at this rate a 500 m difference equals 25 km."""
+SCORE_ELEV_UNKNOWN = 5.0
+"""Penalty when the station's or the site's elevation is unknown (as if 100 m off)."""
+SCORE_SUMMIT = 15.0
+"""ASSUMPTION: extra penalty for a summit/ridge/lookout station standing well above the site:
+its wind is the free-air flow above the terrain, not the canyon or foothill wind at the site."""
+SUMMIT_MIN_ABOVE_SITE_M = 300.0
+"""A station counts as 'summit' only if its name says so AND it is this much above the site."""
+SUMMIT_NAME = re.compile(r"\b(MOUNT|MT|MTN|PEAK|SUMMIT|LOOKOUT|RIDGE|BALDY|TOP)\b", re.I)
+SCORE_RAWS_BONUS = -3.0
+"""ASSUMPTION: RAWS are sited for fire weather in wildland terrain and measure the 20 ft wind
+the fire model takes (no height conversion), so a RAWS is preferred over an airport at the same
+distance and elevation. CrisisTwin sites are wildland or wildland-urban-interface fires."""
+WARN_ELEV_DIFF_M = 500.0
+"""Warn when the chosen station's elevation differs from the site's by more than this."""
+WARN_DISTANCE_KM = 30.0
+"""Warn when the chosen station is farther than this."""
+MIN_STATION_COVERAGE = 0.5
+"""ASSUMPTION: a best station covering less than this fraction of the window's hours is not
+used; the hourly reanalysis is used instead (the stations stay listed)."""
+REANALYSIS_ID = "reanalysis"
+"""``station=`` value that forces the reanalysis."""
 
 MODES = ("historical_replay", "climatology_percentile", "forecast")
 
@@ -55,6 +102,18 @@ IEM_ASOS_URL = "https://mesonet.agron.iastate.edu/cgi-bin/request/asos.py"
 IEM_HADS_URL = "https://mesonet.agron.iastate.edu/cgi-bin/request/hads.py"
 IEM_NETWORK_URL = "https://mesonet.agron.iastate.edu/geojson/network/{network}.geojson"
 NWS_POINTS_URL = "https://api.weather.gov/points/{lat:.4f},{lon:.4f}"
+IEM_DCP_VARS_URL = "https://mesonet.agron.iastate.edu/json/dcp_vars.php?station={station}"
+OPEN_METEO_ARCHIVE_URL = "https://archive-api.open-meteo.com/v1/archive"
+OPEN_METEO_ELEVATION_URL = "https://api.open-meteo.com/v1/elevation"
+USGS_EPQS_URL = "https://epqs.nationalmap.gov/v1/json"
+
+REANALYSIS_MODEL = "era5"
+"""Open-Meteo model id. ERA5 (ECMWF, 0.25 deg). Open-Meteo's ERA5-Land (0.1 deg) returns null
+for 10 m wind and gusts (checked 2026-10-24), so it cannot be the wind source."""
+REANALYSIS_GRID = "ERA5 0.25 deg x 0.25 deg (about 28 km N-S, 22 km E-W at 37 N), hourly"
+REANALYSIS_LATENCY_DAYS = 6
+"""ERA5 reaches the archive about 5 days after real time (Open-Meteo docs); answers for windows
+ending later than this many days ago are not disk-cached (they may still be filling in)."""
 
 SOURCE_TERMS = {
     "iem_asos": {
@@ -75,6 +134,25 @@ SOURCE_TERMS = {
         "terms": "Open data, free, no key, US Government public domain; a identifying "
         "User-Agent is required and an undisclosed rate limit applies. Do not present "
         "modified content as official NWS product.",
+    },
+    "open_meteo_era5": {
+        "name": "Open-Meteo Historical Weather API, ECMWF ERA5 reanalysis (Copernicus Climate "
+        "Change Service; Hersbach et al. 2020, QJRMS 146:1999-2049)",
+        "url": "https://open-meteo.com/en/docs/historical-weather-api",
+        "terms": "Free, no key, non-commercial use only (CrisisTwin is a non-commercial "
+        "prototype); under 10,000 calls/day, 5,000/hour, 600/minute per IP; data CC BY 4.0, "
+        "attribution 'Weather data by Open-Meteo.com' and Copernicus/ECMWF for ERA5 "
+        "(https://open-meteo.com/en/terms, checked 2026-10-24).",
+    },
+    "usgs_epqs": {
+        "name": "USGS 3DEP Elevation Point Query Service",
+        "url": "https://epqs.nationalmap.gov/v1/docs",
+        "terms": "US Government public domain, no key.",
+    },
+    "open_meteo_elevation": {
+        "name": "Open-Meteo Elevation API (Copernicus DEM GLO-90)",
+        "url": "https://open-meteo.com/en/docs/elevation-api",
+        "terms": "Same Open-Meteo terms as above.",
     },
 }
 
@@ -172,6 +250,7 @@ class Station:
     archive_begin: Optional[str] = None  # YYYY-MM-DD
     archive_end: Optional[str] = None  # None = still reporting
     distance_km: Optional[float] = None
+    elevation_m: Optional[float] = None  # metres above sea level, IEM station metadata
 
     def active_at(self, t: datetime) -> bool:
         day = t.astimezone(timezone.utc).strftime("%Y-%m-%d")
@@ -182,15 +261,24 @@ class Station:
         return True
 
 
+def network_source(network: str) -> Optional[str]:
+    """``XX_ASOS`` -> ``iem_asos`` (airports), ``XX_DCP`` -> ``iem_hads`` (RAWS relayed by HADS)."""
+    if re.fullmatch(r"[A-Z]{2}_ASOS", network):
+        return "iem_asos"
+    if re.fullmatch(r"[A-Z]{2}_DCP", network):
+        return "iem_hads"
+    return None
+
+
 def parse_station_geojson(text: str, network: str) -> list[Station]:
     """Parse an IEM ``/geojson/network/<NET>.geojson`` document into stations.
 
-    ``CA_ASOS`` -> ASOS/AWOS airports (wind reported). ``CA_DCP`` mixes hydrologic gauges
-    (no wind) with RAWS; only stations whose name contains "RAWS" are kept. Whether a RAWS
-    actually has wind for a given window is only known from its data, so callers must check
-    coverage (``scenario_wind`` does).
+    ``XX_ASOS`` -> ASOS/AWOS airports (wind reported). ``XX_DCP`` mixes hydrologic gauges
+    (no wind) with RAWS; only stations whose name contains "RAWS" are kept (the naming holds in
+    CA_DCP and CO_DCP, checked 2026-10-24). Whether a RAWS actually has wind for a given window
+    is only known from its data, so callers must check coverage (``scenario_wind`` does).
     """
-    source = {"CA_ASOS": "iem_asos", "CA_DCP": "iem_hads"}.get(network)
+    source = network_source(network)
     if source is None:
         raise ValueError(f"unsupported network {network!r}")
     doc = json.loads(text)
@@ -203,6 +291,7 @@ def parse_station_geojson(text: str, network: str) -> list[Station]:
         name = str(props.get("sname", ""))
         if source == "iem_hads" and "RAWS" not in name.upper():
             continue
+        elev = props.get("elevation")
         out.append(
             Station(
                 id=str(f.get("id") or props.get("sid")),
@@ -213,6 +302,7 @@ def parse_station_geojson(text: str, network: str) -> list[Station]:
                 network=network,
                 archive_begin=props.get("archive_begin"),
                 archive_end=props.get("archive_end"),
+                elevation_m=float(elev) if isinstance(elev, (int, float)) else None,
             )
         )
     return out
@@ -233,13 +323,17 @@ def nearest_stations(
 
     ``at`` (aware UTC) drops stations whose archive does not cover that instant.
     ``sources`` restricts to ``"iem_asos"`` and/or ``"iem_hads"``. ``catalog`` defaults to the
-    cached IEM catalog (fetched once, then served from the disk cache).
+    cached IEM catalog of the states around the point (``states_for_point``; fetched once, then
+    served from the disk cache).
     """
     if not (-180 <= lon <= 180 and -90 <= lat <= 90):
         raise ValueError("coordinates are (lon, lat) in degrees")
     if k < 1:
         raise ValueError("k must be >= 1")
-    stations = list(catalog) if catalog is not None else load_catalog(http_get, cache_dir)
+    stations = (
+        list(catalog) if catalog is not None
+        else load_catalog(http_get, cache_dir, states=states_for_point(lon, lat))
+    )
     wanted = set(sources) if sources else None
     scored = []
     for s in stations:
@@ -255,15 +349,55 @@ def nearest_stations(
     ]
 
 
+# State bounding boxes (lon_min, lat_min, lon_max, lat_max), degrees WGS84, US Census Bureau
+# state extents rounded outward. ASSUMPTION: a rectangle is good enough to decide which IEM state
+# networks can hold a station near a point; candidates are then filtered by true distance. Only
+# the western states (where CrisisTwin's fire scenarios are) and Hawaii are listed.
+STATE_BBOXES = {
+    "CA": (-124.48, 32.53, -114.13, 42.01),
+    "OR": (-124.57, 41.99, -116.46, 46.30),
+    "WA": (-124.85, 45.54, -116.92, 49.00),
+    "NV": (-120.01, 35.00, -114.04, 42.00),
+    "AZ": (-114.82, 31.33, -109.04, 37.00),
+    "UT": (-114.05, 37.00, -109.04, 42.00),
+    "ID": (-117.24, 41.99, -111.04, 49.00),
+    "MT": (-116.05, 44.36, -104.04, 49.00),
+    "WY": (-111.06, 40.99, -104.05, 45.01),
+    "CO": (-109.06, 36.99, -102.04, 41.00),
+    "NM": (-109.05, 31.33, -103.00, 37.00),
+    "HI": (-160.25, 18.91, -154.81, 22.24),
+}
+DEFAULT_STATES = ("CA",)  # what load_catalog served before the state lookup existed
+
+
+def states_for_point(lon: float, lat: float, margin_km: Optional[float] = None) -> tuple[str, ...]:
+    """States whose bounding box, grown by ``margin_km`` (default the candidate radius), holds the point.
+
+    A point near a border gets both states' networks. A point outside every listed state gets
+    ``()``: no station catalog, so ``scenario_wind`` goes straight to reanalysis.
+    """
+    m_km = MAX_CANDIDATE_DISTANCE_KM if margin_km is None else margin_km
+    dlat = m_km / 111.0
+    dlon = m_km / (111.0 * max(math.cos(math.radians(lat)), 0.1))
+    return tuple(
+        st for st, (x0, y0, x1, y1) in STATE_BBOXES.items()
+        if x0 - dlon <= lon <= x1 + dlon and y0 - dlat <= lat <= y1 + dlat
+    )
+
+
 def load_catalog(
-    http_get: Optional[Callable] = None, cache_dir: Optional[Path] = None
+    http_get: Optional[Callable] = None,
+    cache_dir: Optional[Path] = None,
+    states: Sequence[str] = DEFAULT_STATES,
 ) -> list[Station]:
+    """ASOS and RAWS stations of the IEM ``<ST>_ASOS`` and ``<ST>_DCP`` networks of ``states``."""
     stations: list[Station] = []
-    for network in ("CA_ASOS", "CA_DCP"):
-        body, _ = cached_get(
-            IEM_NETWORK_URL.format(network=network), http_get=http_get, cache_dir=cache_dir
-        )
-        stations.extend(parse_station_geojson(body.decode("utf-8"), network))
+    for st in states:
+        for network in (f"{st}_ASOS", f"{st}_DCP"):
+            body, _ = cached_get(
+                IEM_NETWORK_URL.format(network=network), http_get=http_get, cache_dir=cache_dir
+            )
+            stations.extend(parse_station_geojson(body.decode("utf-8"), network))
     return stations
 
 
@@ -389,15 +523,35 @@ def parse_asos_csv(text: str) -> list[RawObs]:
     return out
 
 
+def _shef6(row: dict) -> dict:
+    """Map 7-character SHEF column names to the 6-character form.
+
+    The IEM HADS archive labels columns with the 6-character code (``USIRGZ``) up to 2020 and
+    with the full 7-character code including the probability letter (``USIRGZZ``) from 2021
+    (checked 2026-10-24: JBGC1 2020-11-08 vs 2021-11-08). Reading only the 6-character name made
+    every RAWS from 2021 on look windless. A 7-character code ending in the probability code
+    ``Z`` (no probability) is the same series as its 6-character prefix.
+    """
+    out = {}
+    for k, v in row.items():
+        if k and len(k) == 7 and k.isupper() and k.endswith("Z"):
+            out.setdefault(k[:6], v)
+        else:
+            out[k] = v
+    return out
+
+
 def parse_hads_csv(text: str) -> list[RawObs]:
     """IEM hads.py CSV (``what=txt``): SHEF columns in English units (mph, deg F).
 
     Several SHEF codes arrive on separate rows with different minutes; only rows carrying a
-    wind speed or direction become observations.
+    wind speed or direction become observations. Accepts both the 6- and the 7-character SHEF
+    column names (see ``_shef6``).
     """
     rows = [ln for ln in text.splitlines() if ln and not ln.startswith("#")]
     out: list[RawObs] = []
-    for r in csv.DictReader(rows):
+    for raw in csv.DictReader(rows):
+        r = _shef6(raw)
         if "utc_valid" not in r:
             raise WeatherError("HADS CSV missing 'utc_valid' column")
         spd, dr = _num(r.get(HADS_WIND_SPEED)), _num(r.get(HADS_WIND_DIR))
@@ -795,13 +949,32 @@ def climatology_percentile(
     """
     start = require_utc(start, "start")
     y0, y1 = years
-    cands = nearest_stations(
-        lon, lat, 1, catalog=catalog, sources=["iem_asos"],
-        at=datetime(y0, 1, 1, tzinfo=timezone.utc), http_get=http_get, cache_dir=cache_dir,
+    # Station: the best-scored long-record ASOS (score_station, same weights as historical_replay;
+    # RAWS are not used here: their HADS records are too patchy for a 14-year pool). Without one
+    # within MAX_CANDIDATE_DISTANCE_KM, the nearest long-record ASOS as before.
+    at0 = datetime(y0, 1, 1, tzinfo=timezone.utc)
+    site = site_elevation(lon, lat, http_get=http_get, cache_dir=cache_dir)
+    ranked, _ = rank_stations(
+        lon, lat, at0, site_elev_m=site["elevation_m"], catalog=catalog, sources=["iem_asos"],
+        check_wind=False, http_get=http_get, cache_dir=cache_dir,
     )
-    if not cands:
-        raise WeatherError("no ASOS station with an archive covering the climatology window")
-    st = cands[0]
+    sel_warnings: list[str] = []
+    if ranked:
+        st, chosen = ranked[0]
+    else:
+        cands = nearest_stations(lon, lat, 1, catalog=catalog, sources=["iem_asos"], at=at0,
+                                 http_get=http_get, cache_dir=cache_dir)
+        if not cands:
+            raise WeatherError("no ASOS station with an archive covering the climatology window")
+        st = cands[0]
+        chosen = {"station": st.id, "id": st.id, "name": st.name, "source": st.source,
+                  "network": st.network, "lon": st.lon, "lat": st.lat, "distance_km": st.distance_km,
+                  "elevation_m": st.elevation_m, "rank": None, **score_station(st, site["elevation_m"])}
+        ranked = [(st, chosen)]
+    for _, info in ranked:
+        info.update(status="not_tried", reason=_why(info))
+    chosen.update(status="chosen")
+    sel_warnings.extend(station_warnings(chosen))
     month = start.month
     pool: list[tuple[int, list[HourlySample], dict]] = []
     all_eps: list[tuple[int, int, int, float]] = []  # (year_idx, first, n, peak)
@@ -857,12 +1030,463 @@ def climatology_percentile(
                 "year": year,
                 "note": "real observed hours chosen statistically; relabelled to start at the scenario start",
             },
+            "station_selection": {
+                "version": SELECTION_VERSION,
+                "rule": "best-scored long-record ASOS within %g km (score_station), else the nearest"
+                        % MAX_CANDIDATE_DISTANCE_KM,
+                "site": site,
+                "chosen": {k2: chosen.get(k2) for k2 in (
+                    "id", "name", "distance_km", "elevation_m", "elevation_diff_m", "exposure",
+                    "score", "score_terms")},
+                "candidates": [info for _, info in ranked],
+                "warnings": sel_warnings,
+            },
             "raw": raw_records,
         },
     )
 
 
+# --------------------------------------------------------------------------- site elevation
+
+
+def _get_once(url: str, headers: Optional[dict] = None, timeout: float = 15.0) -> bytes:
+    """Single GET, short timeout, no retries: for optional lookups that must not stall a request."""
+    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, **(headers or {})})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 (https only)
+            return resp.read()
+    except Exception as exc:  # network, timeout, HTTP error
+        raise WeatherError(f"GET {url} failed: {exc}") from exc
+
+
+def site_elevation(
+    lon: float, lat: float, *, http_get: Optional[Callable] = None, cache_dir: Optional[Path] = None
+) -> dict:
+    """Ground elevation at the site, metres above sea level: ``{elevation_m, source, url}``.
+
+    USGS 3DEP point query first (US only), then the Open-Meteo elevation API (Copernicus
+    GLO-90, global). ``elevation_m`` is ``None`` with ``errors`` when both fail; the station
+    ranking then scores elevation as unknown instead of guessing.
+    """
+    lon_r, lat_r = round(lon, 4), round(lat, 4)
+    get = http_get or _get_once
+    errors = []
+    url = USGS_EPQS_URL + "?" + urllib.parse.urlencode(
+        {"x": lon_r, "y": lat_r, "wkid": 4326, "units": "Meters", "includeDate": "false"}
+    )
+    try:
+        body, _ = cached_get(url, http_get=get, cache_dir=cache_dir)
+        value = float(json.loads(body)["value"])
+        if -500.0 < value < 9000.0:  # EPQS answers -1000000 outside its coverage
+            return {"elevation_m": round(value, 1), "source": "usgs_epqs",
+                    "dataset": "USGS 3DEP (best available, 1/3 arc-second where present)", "url": url}
+        errors.append(f"usgs_epqs: no data ({value})")
+    except Exception as exc:  # noqa: BLE001 - an optional lookup; fall through
+        errors.append(f"usgs_epqs: {exc}")
+    url = OPEN_METEO_ELEVATION_URL + "?" + urllib.parse.urlencode({"latitude": lat_r, "longitude": lon_r})
+    try:
+        body, _ = cached_get(url, http_get=get, cache_dir=cache_dir)
+        value = float(json.loads(body)["elevation"][0])
+        return {"elevation_m": round(value, 1), "source": "open_meteo_elevation",
+                "dataset": "Copernicus DEM GLO-90", "url": url}
+    except Exception as exc:  # noqa: BLE001
+        errors.append(f"open_meteo_elevation: {exc}")
+    return {"elevation_m": None, "source": None, "errors": errors}
+
+
+# --------------------------------------------------------------------------- station ranking
+
+
+def hads_wind_listed(
+    station_id: str, *, http_get: Optional[Callable] = None, cache_dir: Optional[Path] = None
+) -> Optional[bool]:
+    """Does IEM list a wind-speed variable (SHEF ``USIRG*``) for this DCP station?
+
+    ``True`` listed, ``False`` the station lists variables but no wind speed (a gauge or a RAWS
+    whose anemometer is not relayed), ``None`` unknown (empty list or lookup failed). The list
+    describes the station's current variables; it is cached on disk per station (clear the
+    weather cache to refresh). Only ``False`` excludes a station.
+    """
+    url = IEM_DCP_VARS_URL.format(station=urllib.parse.quote(station_id))
+    try:
+        body, _ = cached_get(url, http_get=http_get or _get_once, cache_dir=cache_dir)
+        ids = [str(v.get("id", "")) for v in json.loads(body).get("vars", [])]
+    except Exception:  # noqa: BLE001 - unknown, not excluded
+        return None
+    if not ids:
+        return None
+    return any(i.startswith(HADS_WIND_SPEED[:5]) for i in ids)
+
+
+def score_station(st: Station, site_elev_m: Optional[float]) -> dict:
+    """Representativeness penalty of ``st`` for the site (lower is better), with its terms.
+
+    ``score = SCORE_PER_KM * distance_km + SCORE_PER_100M_ELEV * |dz| / 100 m + summit + type``
+    with ``dz = station elevation - site elevation`` (m). Weights: see the constants above
+    (assumptions, docs/scenario-weather.md "Station selection").
+    """
+    d_km = st.distance_km if st.distance_km is not None else 0.0
+    terms = {"distance": round(SCORE_PER_KM * d_km, 2)}
+    if st.elevation_m is None or site_elev_m is None:
+        dz = None
+        terms["elevation"] = SCORE_ELEV_UNKNOWN
+    else:
+        dz = st.elevation_m - site_elev_m
+        terms["elevation"] = round(SCORE_PER_100M_ELEV * abs(dz) / 100.0, 2)
+    named_summit = bool(SUMMIT_NAME.search(st.name))
+    summit = named_summit and (dz is None or dz >= SUMMIT_MIN_ABOVE_SITE_M)
+    raws = st.source == "iem_hads"
+    terms["exposure"] = SCORE_SUMMIT if summit else 0.0
+    terms["type"] = SCORE_RAWS_BONUS if raws else 0.0
+    if summit:
+        exposure = "summit/ridge (name) above the site"
+    elif raws:
+        exposure = "RAWS (fire-weather station, 20 ft wind)"
+    else:
+        exposure = "airport ASOS/AWOS (open exposure, 10 m wind)"
+    return {
+        "score": round(sum(terms.values()), 2),
+        "score_terms": terms,
+        "elevation_diff_m": None if dz is None else round(dz, 1),
+        "exposure": exposure,
+    }
+
+
+def _why(c: dict) -> str:
+    t = c["score_terms"]
+    parts = [f"{c['distance_km']:.1f} km"]
+    dz = c.get("elevation_diff_m")
+    parts.append("elevation unknown (+%g)" % t["elevation"] if dz is None
+                 else f"{abs(dz):.0f} m {'above' if dz >= 0 else 'below'} the site (+{t['elevation']:g})")
+    if t["exposure"]:
+        parts.append(f"summit/ridge (+{t['exposure']:g})")
+    if t["type"]:
+        parts.append(f"RAWS ({t['type']:g})")
+    return f"score {c['score']:g} = " + ", ".join(parts)
+
+
+def station_warnings(c: dict) -> list[str]:
+    """Why the chosen station may not represent the site (empty when it looks representative)."""
+    out = []
+    dz = c.get("elevation_diff_m")
+    if dz is not None and abs(dz) > WARN_ELEV_DIFF_M:
+        out.append(f"{c['name']} ({c['id']}) is {abs(dz):.0f} m {'above' if dz > 0 else 'below'} the site "
+                   f"(more than {WARN_ELEV_DIFF_M:.0f} m): its wind may not represent the site.")
+    if c.get("distance_km") is not None and c["distance_km"] > WARN_DISTANCE_KM:
+        out.append(f"{c['name']} ({c['id']}) is {c['distance_km']:.0f} km from the site "
+                   f"(more than {WARN_DISTANCE_KM:.0f} km).")
+    if c["score_terms"].get("exposure"):
+        out.append(f"{c['name']} ({c['id']}) is a summit/ridge station: free-air wind, not canyon or valley wind.")
+    if dz is None:
+        out.append("Station or site elevation unknown: elevation was not checked.")
+    return out
+
+
+def rank_stations(
+    lon: float,
+    lat: float,
+    at: datetime,
+    *,
+    site_elev_m: Optional[float],
+    catalog: Optional[Sequence[Station]] = None,
+    sources: Optional[Iterable[str]] = None,
+    k: int = MAX_CANDIDATES,
+    max_km: float = MAX_CANDIDATE_DISTANCE_KM,
+    check_wind: bool = True,
+    http_get: Optional[Callable] = None,
+    cache_dir: Optional[Path] = None,
+) -> tuple[list[tuple[Station, dict]], list[dict]]:
+    """Up to ``k`` wind-capable stations within ``max_km`` whose archive covers ``at``, best first.
+
+    Returns ``(ranked, excluded)``: ``ranked`` = ``[(station, info)]`` ordered by
+    ``score_station`` (ties: nearer, then id); ``excluded`` = RAWS skipped because IEM lists no
+    wind variable for them (``hads_wind_listed`` is ``False``), as info dicts.
+    """
+    near = nearest_stations(lon, lat, 100_000, catalog=catalog, at=at, sources=sources,
+                            http_get=http_get, cache_dir=cache_dir)
+    scored = []
+    for st in near:
+        if st.distance_km is None or st.distance_km > max_km:
+            continue
+        info = {"station": st.id, "id": st.id, "name": st.name, "source": st.source,
+                "network": st.network, "lon": st.lon, "lat": st.lat,
+                "distance_km": st.distance_km, "elevation_m": st.elevation_m,
+                **score_station(st, site_elev_m)}
+        scored.append((info["score"], st.distance_km, st.id, st, info))
+    scored.sort(key=lambda x: x[:3])
+    ranked, excluded = [], []
+    for _, _, _, st, info in scored:
+        if len(ranked) >= k:
+            break
+        if check_wind and st.source == "iem_hads":
+            listed = hads_wind_listed(st.id, http_get=http_get, cache_dir=cache_dir)
+            info["wind_listed"] = listed
+            if listed is False:
+                excluded.append({**info, "status": "no_wind_sensor",
+                                 "reason": "IEM lists no wind-speed variable for this DCP station"})
+                continue
+        ranked.append((st, info))
+    for i, (_, info) in enumerate(ranked, start=1):
+        info["rank"] = i
+    return ranked, excluded
+
+
+# --------------------------------------------------------------------------- reanalysis
+
+
+def reanalysis_url(lon: float, lat: float, start: datetime, end: datetime) -> str:
+    q = {
+        "latitude": f"{lat:.4f}",
+        "longitude": f"{lon:.4f}",
+        "start_date": start.astimezone(timezone.utc).strftime("%Y-%m-%d"),
+        "end_date": end.astimezone(timezone.utc).strftime("%Y-%m-%d"),
+        "hourly": "wind_speed_10m,wind_direction_10m,wind_gusts_10m,temperature_2m,relative_humidity_2m",
+        "models": REANALYSIS_MODEL,
+        "wind_speed_unit": "ms",
+        "temperature_unit": "celsius",
+        "timezone": "GMT",
+    }
+    return OPEN_METEO_ARCHIVE_URL + "?" + urllib.parse.urlencode(q)
+
+
+def parse_open_meteo(doc: dict) -> list[RawObs]:
+    """Open-Meteo archive ``hourly`` arrays (``wind_speed_unit=ms``, deg C, %, GMT) to reports.
+
+    Times are HH:00 UTC. Wind, temperature and RH are the model's instantaneous values at that
+    time; the gust is the maximum over the preceding hour (ERA5 'since previous post-processing').
+    Direction is where the wind blows FROM (0 = north is valid here, unlike METAR).
+    """
+    h = doc.get("hourly") or {}
+    times = h.get("time") or []
+    out = []
+    for i, ts in enumerate(times):
+        def col(name):
+            vals = h.get(name) or []
+            return vals[i] if i < len(vals) else None
+        t = datetime.strptime(ts, "%Y-%m-%dT%H:%M").replace(tzinfo=timezone.utc)
+        sp, dr = col("wind_speed_10m"), col("wind_direction_10m")
+        out.append(RawObs(
+            t=t,
+            speed_ms=None if sp is None else float(sp),
+            from_deg=None if (dr is None or not sp) else norm_deg(float(dr)),
+            gust_ms=None if col("wind_gusts_10m") is None else float(col("wind_gusts_10m")),
+            rh_pct=None if col("relative_humidity_2m") is None else float(col("relative_humidity_2m")),
+            temp_c=None if col("temperature_2m") is None else float(col("temperature_2m")),
+        ))
+    return out
+
+
+def fetch_reanalysis(
+    lon: float,
+    lat: float,
+    start_utc: datetime,
+    end_utc: datetime,
+    *,
+    http_get: Optional[Callable] = None,
+    cache_dir: Optional[Path] = None,
+) -> WeatherSeries:
+    """Hourly ERA5 reanalysis at the site from Open-Meteo, evidence class ``modelled``.
+
+    10 m wind and gust, 2 m temperature and RH. A grid-cell value smooths terrain: canyon and
+    downslope winds are under-read. Windows ending within ``REANALYSIS_LATENCY_DAYS`` of now are
+    not disk-cached (the archive may still be filling them in).
+    """
+    start, end = require_utc(start_utc, "start_utc"), require_utc(end_utc, "end_utc")
+    if end <= start:
+        raise ValueError("end_utc must be after start_utc")
+    url = reanalysis_url(lon, lat, start, end)
+    recent = end > datetime.now(timezone.utc) - timedelta(days=REANALYSIS_LATENCY_DAYS)
+    if recent:
+        body = (http_get or default_http_get)(url)
+        rec = {"url": url, "bytes": len(body), "sha256": hashlib.sha256(body).hexdigest(),
+               "retrieved_utc": iso_z(datetime.now(timezone.utc)), "from_cache": False,
+               "not_cached": "window within the reanalysis latency"}
+    else:
+        body, rec = cached_get(url, http_get=http_get, cache_dir=cache_dir)
+    try:
+        doc = json.loads(body)
+    except ValueError as exc:
+        raise WeatherError(f"reanalysis: unparseable answer: {exc}") from exc
+    if doc.get("error"):
+        raise WeatherError(f"reanalysis: {doc.get('reason') or doc}")
+    obs = parse_open_meteo(doc)
+    samples = hourly_series(obs, start, end)
+    g_lat, g_lon = doc.get("latitude"), doc.get("longitude")
+    return WeatherSeries(
+        evidence_class=MODELLED,
+        source="open_meteo_era5",
+        station=None,
+        samples=samples,
+        provenance={
+            "terms": SOURCE_TERMS["open_meteo_era5"],
+            "raw": rec,
+            "model": REANALYSIS_MODEL,
+            "grid": {
+                "resolution": REANALYSIS_GRID,
+                "point_lat": g_lat,
+                "point_lon": g_lon,
+                "point_distance_km": (None if g_lat is None or g_lon is None
+                                      else round(haversine_km(lon, lat, g_lon, g_lat), 2)),
+                "elevation_m": doc.get("elevation"),
+                "elevation_note": "elevation Open-Meteo reports for the point (it adjusts 2 m "
+                                  "temperature to it); the ERA5 cell itself is a 0.25 deg mean",
+            },
+            "heights": "wind and gust 10 m above ground; temperature and RH 2 m",
+            "time_basis": "instantaneous model value at HH:00 UTC (wind, temperature, RH); gust = "
+                          "maximum over the preceding hour",
+            "limits": "A 0.25 deg grid cell smooths terrain: canyon, gap and downslope winds "
+                      "(Santa Ana, Diablo, Front Range) are usually under-read.",
+        },
+    )
+
+
 # --------------------------------------------------------------------------- scenario_wind
+
+
+def _find_station(station_id: str, lon: float, lat: float, catalog, http_get, cache_dir) -> Station:
+    """Station ``station_id`` (IEM id; a 4-letter ICAO ``Kxxx`` also matches ``xxx``) with its distance."""
+    want = station_id.strip().upper()
+    ids = {want}
+    if len(want) == 4 and want.startswith("K"):
+        ids.add(want[1:])
+    for st in nearest_stations(lon, lat, 100_000, catalog=catalog, http_get=http_get, cache_dir=cache_dir):
+        if st.id.upper() in ids:
+            return st
+    raise ValueError(
+        f"station {station_id!r} is not an ASOS or RAWS station in the networks around this point "
+        f"({', '.join(states_for_point(lon, lat)) or 'none'})"
+    )
+
+
+def _reanalysis_option(lon: float, lat: float) -> dict:
+    return {"station": REANALYSIS_ID, "id": REANALYSIS_ID, "name": "ERA5 reanalysis (Open-Meteo)",
+            "source": "open_meteo_era5", "distance_km": None, "elevation_m": None,
+            "exposure": "model grid cell, " + REANALYSIS_GRID, "evidence_class": MODELLED}
+
+
+def _historical(
+    lon, lat, start, end, *, k, min_coverage, forced, catalog, http_get, cache_dir
+) -> tuple[WeatherSeries, list[dict], dict, list[str]]:
+    """historical_replay: rank, fetch in rank order, fall back to reanalysis. See ``scenario_wind``."""
+    site = site_elevation(lon, lat, http_get=http_get, cache_dir=cache_dir)
+    states = states_for_point(lon, lat) if catalog is None else None
+    warnings: list[str] = []
+    if site["elevation_m"] is None:
+        warnings.append("Site elevation unknown (USGS 3DEP and Open-Meteo lookups failed): "
+                        "stations were ranked without the elevation check.")
+    ranked, excluded = rank_stations(
+        lon, lat, start, site_elev_m=site["elevation_m"], catalog=catalog, k=k,
+        http_get=http_get, cache_dir=cache_dir,
+    )
+    selection = {
+        "version": SELECTION_VERSION,
+        "rule": ("rank wind-capable stations within %g km whose archive covers the start by score "
+                 "(lower is better); fetch in rank order; the first covering >= %g of the hours wins; "
+                 "else the best-covered if >= %g; else ERA5 reanalysis"
+                 % (MAX_CANDIDATE_DISTANCE_KM, min_coverage, MIN_STATION_COVERAGE)),
+        "weights": {"per_km": SCORE_PER_KM, "per_100m_elevation_difference": SCORE_PER_100M_ELEV,
+                    "elevation_unknown": SCORE_ELEV_UNKNOWN, "summit_ridge": SCORE_SUMMIT,
+                    "summit_min_above_site_m": SUMMIT_MIN_ABOVE_SITE_M, "raws": SCORE_RAWS_BONUS,
+                    "evidence": "assumed (CrisisTwin choice, not a published constant)"},
+        "warn_if": {"elevation_diff_m_over": WARN_ELEV_DIFF_M, "distance_km_over": WARN_DISTANCE_KM},
+        "site": site,
+        "states": list(states) if states is not None else "catalog given",
+        "max_candidates": k,
+        "forced": forced,
+    }
+    cands: list[dict] = [info for _, info in ranked]
+    not_fetched = ("; not fetched: the request forced a source" if forced
+                   else "; not fetched: a better-ranked station had enough data")
+    for info in cands:
+        info.update(status="not_tried", coverage=None, reason=_why(info) + not_fetched)
+    if not ranked:
+        warnings.append(f"No wind-capable station within {MAX_CANDIDATE_DISTANCE_KM:g} km has an archive "
+                        "covering the start.")
+
+    def fetch(st: Station, info: dict) -> Optional[WeatherSeries]:
+        try:
+            ser = fetch_history(st, start, end, http_get=http_get, cache_dir=cache_dir)
+        except WeatherError as exc:
+            info.update(status="error", error=str(exc), reason=_why(info) + f"; fetch failed: {exc}")
+            return None
+        cov = ser.coverage()
+        info.update(status="tried", coverage=round(cov, 3),
+                    reason=_why(info) + f"; wind in {cov:.0%} of the hours")
+        return ser
+
+    def reanalysis() -> Optional[WeatherSeries]:
+        try:
+            ser = fetch_reanalysis(lon, lat, start, end, http_get=http_get, cache_dir=cache_dir)
+        except (WeatherError, ValueError, KeyError) as exc:
+            selection["reanalysis_error"] = str(exc)
+            return None
+        return ser if ser.coverage() > 0 else None
+
+    def finish_station(st, info, ser):
+        info["status"] = "chosen"
+        info["reason"] = info["reason"].replace(not_fetched, "")
+        selection["chosen"] = {k2: info.get(k2) for k2 in (
+            "id", "name", "source", "distance_km", "elevation_m", "elevation_diff_m", "exposure",
+            "score", "score_terms", "rank", "coverage")}
+        warnings.extend(station_warnings(info))
+        return ser
+
+    # Forced choice.
+    if forced and forced.strip().lower() == REANALYSIS_ID:
+        ser = reanalysis()
+        if ser is None:
+            raise WeatherError(f"reanalysis has no data for the window: {selection.get('reanalysis_error')}")
+        selection["chosen"] = {"id": REANALYSIS_ID, "reason": "forced by the request"}
+        warnings.append(ser.provenance["limits"])
+        return ser, cands + excluded, selection, warnings
+    if forced:
+        st = _find_station(forced, lon, lat, catalog, http_get, cache_dir)
+        info = next((i for s, i in ranked if s.id == st.id), None)
+        if info is None:
+            info = {"station": st.id, "id": st.id, "name": st.name, "source": st.source,
+                    "network": st.network, "lon": st.lon, "lat": st.lat,
+                    "distance_km": st.distance_km, "elevation_m": st.elevation_m,
+                    "rank": None, **score_station(st, site["elevation_m"])}
+            cands.append(info)
+        ser = fetch(st, info)
+        if ser is None or ser.coverage() == 0:
+            raise WeatherError(f"{st.id} ({st.name}) has no wind observations for the window "
+                               f"({info.get('error') or 'coverage 0'}); choose another station")
+        info["reason"] += "; forced by the request"
+        return finish_station(st, info, ser), cands + excluded, selection, warnings
+
+    # Ranked choice.
+    best = None  # (coverage, station, info, series); ties keep the better-ranked station
+    for st, info in ranked:
+        ser = fetch(st, info)
+        if ser is None:
+            continue
+        cov = ser.coverage()
+        if best is None or cov > best[0]:
+            best = (cov, st, info, ser)
+        if cov >= min_coverage:
+            return finish_station(st, info, ser), cands + excluded, selection, warnings
+    if best is not None and best[0] >= MIN_STATION_COVERAGE:
+        warnings.append(f"No station covered {min_coverage:.0%} of the hours; using the best-covered "
+                        f"({best[0]:.0%}).")
+        return finish_station(best[1], best[2], best[3]), cands + excluded, selection, warnings
+    ser = reanalysis()
+    if ser is not None:
+        selection["chosen"] = {"id": REANALYSIS_ID,
+                               "reason": "no station within %g km had wind for >= %g of the hours"
+                                         % (MAX_CANDIDATE_DISTANCE_KM, MIN_STATION_COVERAGE)}
+        warnings.append("No representative station had data: hourly ERA5 reanalysis is used "
+                        "(modelled, not observed). " + ser.provenance["limits"])
+        return ser, cands + excluded, selection, warnings
+    if best is not None and best[0] > 0:
+        warnings.append(f"Reanalysis unavailable; using a station with only {best[0]:.0%} of the hours.")
+        return finish_station(best[1], best[2], best[3]), cands + excluded, selection, warnings
+    tried = [{"station": c["id"], "coverage": c.get("coverage"), "error": c.get("error")}
+             for c in cands if c.get("status") != "not_tried"]
+    raise WeatherError(
+        f"no wind data near ({lon}, {lat}) for the window: stations tried {tried}; "
+        f"reanalysis: {selection.get('reanalysis_error', 'no data')}"
+    )
 
 
 def scenario_wind(
@@ -872,10 +1496,11 @@ def scenario_wind(
     hours: int,
     mode: str,
     *,
-    k: int = 4,
+    k: int = MAX_CANDIDATES,
     min_coverage: float = 0.75,
     percentile: float = 95.0,
     sector: tuple[float, float] = (315.0, 90.0),
+    station: Optional[str] = None,
     http_get: Optional[Callable] = None,
     cache_dir: Optional[Path] = None,
     catalog: Optional[Sequence[Station]] = None,
@@ -884,15 +1509,22 @@ def scenario_wind(
 
     ``mode``:
 
-    * ``historical_replay``: observed hours from the nearest of the ``k`` nearest stations
-      (ASOS and RAWS) that covers at least ``min_coverage`` of the window; if none does, the
-      best-covered one. Every candidate and its coverage is listed in ``provenance``.
+    * ``historical_replay``: up to ``k`` wind-capable stations (ASOS and RAWS) within
+      ``MAX_CANDIDATE_DISTANCE_KM`` are ranked by ``score_station`` (distance, elevation
+      difference from the site, summit exposure, RAWS preference) and fetched in rank order;
+      the first covering at least ``min_coverage`` of the hours wins, else the best-covered one
+      if it covers ``MIN_STATION_COVERAGE``, else the hourly ERA5 reanalysis (evidence class
+      ``modelled``). ``station`` forces a station id, or ``"reanalysis"``.
     * ``climatology_percentile``: see ``climatology_percentile`` (evidence class ``derived``).
     * ``forecast``: NWS gridpoint forecast (evidence class ``forecast``).
 
-    Returns a JSON-serialisable dict: ``{mode, evidence_class, lon, lat, start_utc, hours,
-    units, samples:[{t_utc, speed_ms, from_deg, gust_ms, rh_pct, temp_c, n_obs}], station,
-    provenance, summary}``. Gaps are ``None`` samples and are counted in ``summary``.
+    Returns a JSON-serialisable dict: ``{mode, evidence_class, evidence_label, lon, lat,
+    start_utc, hours, units, samples:[{t_utc, speed_ms, from_deg, gust_ms, rh_pct, temp_c,
+    n_obs}], station, source, candidates, warnings, provenance, summary}``. Gaps are ``None``
+    samples and are counted in ``summary``. ``candidates`` lists every ranked station with its
+    score, terms, status (chosen / tried / not_tried / error / no_wind_sensor), coverage and
+    reason, then the reanalysis option; ``provenance.station_selection`` has the rule, weights,
+    site elevation and the chosen station.
     """
     if mode not in MODES:
         raise ValueError(f"mode must be one of {MODES}")
@@ -900,6 +1532,8 @@ def scenario_wind(
         raise ValueError("hours must be >= 1")
     start = require_utc(start, "start")
     end = start + timedelta(hours=hours)
+    candidates: list[dict] = []
+    warnings: list[str] = []
     if mode == "forecast":
         series = fetch_forecast(lon, lat, start, hours, http_get=http_get)
     elif mode == "climatology_percentile":
@@ -907,30 +1541,23 @@ def scenario_wind(
             lon, lat, start, hours, percentile=percentile, sector=sector,
             catalog=catalog, http_get=http_get, cache_dir=cache_dir,
         )
+        sel = series.provenance.get("station_selection") or {}
+        candidates = sel.pop("candidates", [])
+        warnings = sel.pop("warnings", [])
     else:
-        cands = nearest_stations(
-            lon, lat, k, catalog=catalog, at=start, http_get=http_get, cache_dir=cache_dir
+        series, candidates, selection, warnings = _historical(
+            lon, lat, start, end, k=k, min_coverage=min_coverage, forced=station,
+            catalog=catalog, http_get=http_get, cache_dir=cache_dir,
         )
-        if not cands:
-            raise WeatherError("no station archive covers the requested start time")
-        considered, best = [], None  # best = (coverage, series)
-        for st in cands:
-            try:
-                cand = fetch_history(st, start, end, http_get=http_get, cache_dir=cache_dir)
-            except WeatherError as exc:
-                considered.append({"station": st.id, "distance_km": st.distance_km, "error": str(exc)})
-                continue
-            cov = cand.coverage()
-            considered.append({"station": st.id, "distance_km": st.distance_km, "coverage": round(cov, 3)})
-            if best is None or cov > best[0]:
-                best = (cov, cand)
-            if cov >= min_coverage:
-                best = (cov, cand)  # nearest adequate station wins
-                break
-        if best is None or best[0] == 0:
-            raise WeatherError(f"no wind observations near ({lon}, {lat}) for the window; tried {considered}")
-        series = best[1]
-        series.provenance["candidates"] = considered
+        option = _reanalysis_option(lon, lat)
+        if series.source == "open_meteo_era5":
+            option.update(status="chosen", reason=selection["chosen"].get("reason"))
+        else:
+            option.update(status="not_tried", reason="fallback when no station has data; "
+                                                     "request it with station=reanalysis")
+        candidates = candidates + [option]
+        series.provenance["candidates"] = candidates
+        series.provenance["station_selection"] = selection
     d = series.to_dict()
     samples = d["samples"]
     speeds = [s["speed_ms"] for s in samples if s["speed_ms"] is not None]
@@ -945,6 +1572,7 @@ def scenario_wind(
     return {
         "mode": mode,
         "evidence_class": series.evidence_class,
+        "evidence_label": EVIDENCE_LABELS.get(series.evidence_class, series.evidence_class),
         "lon": lon,
         "lat": lat,
         "start_utc": iso_z(start),
@@ -953,6 +1581,8 @@ def scenario_wind(
         "station": d["station"],
         "source": d["source"],
         "samples": samples,
+        "candidates": candidates,
+        "warnings": warnings,
         "provenance": d["provenance"],
         "summary": summary,
     }

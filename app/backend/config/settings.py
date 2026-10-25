@@ -55,9 +55,20 @@ if not MONGODB_CONNECTION_SECRET.startswith(("mongodb://", "mongodb+srv://")):
 MONGODB_DATABASE = os.environ.get("MONGODB_DATABASE", "crisistwin")
 if not re.fullmatch(r"[A-Za-z0-9_-]{1,63}", MONGODB_DATABASE):
     raise ImproperlyConfigured("MONGODB_DATABASE must be 1–63 ASCII letters, digits, underscores, or hyphens.")
+# Optional separate database for the big rebuildable caches (geo tiles, landscape grids, conditions);
+# defaults to the application ones so nothing changes locally. See docs/deploy.md.
+CACHE_MONGODB_CONNECTION_SECRET = os.environ.get("CACHE_MONGODB_URI", "").strip() or MONGODB_CONNECTION_SECRET
+if not CACHE_MONGODB_CONNECTION_SECRET.startswith(("mongodb://", "mongodb+srv://")):
+    raise ImproperlyConfigured("CACHE_MONGODB_URI must be a mongodb:// or mongodb+srv:// connection string.")
+CACHE_MONGODB_DATABASE = os.environ.get("CACHE_MONGODB_DATABASE", "").strip() or MONGODB_DATABASE
+if not re.fullmatch(r"[A-Za-z0-9_-]{1,63}", CACHE_MONGODB_DATABASE):
+    raise ImproperlyConfigured("CACHE_MONGODB_DATABASE must be 1–63 ASCII letters, digits, underscores, or hyphens.")
 # Live drill (docs/live-reports.md, ADR 0011/0012). Secrets come from the environment only.
 # Unset LIVE_CONTROLLER_TOKEN: requests without a token are the controller (no token needed).
 # Set it to lock controller endpoints behind that bearer token. Unset LIVE_INVITE_CODE disables join (403).
+# Most finished-board files the landscape cache keeps before evicting the oldest.
+LANDSCAPE_CACHE_MAX_FILES = int(os.environ.get("LANDSCAPE_CACHE_MAX_FILES", "2000"))
+
 LIVE_CONTROLLER_TOKEN = os.environ.get("LIVE_CONTROLLER_TOKEN", "").strip()
 # Open live feeds (docs/adr/0032-open-live-feeds.md). No keys; the contact goes in the User-Agent.
 INTEL_FEEDS_CONTACT = os.environ.get("INTEL_FEEDS_CONTACT", "").strip()
@@ -100,4 +111,7 @@ TIME_ZONE = "UTC"
 USE_I18N = True
 USE_TZ = True
 CSRF_COOKIE_SECURE = not DEBUG
+# Behind the Caddy reverse proxy (deploy/): trust its X-Forwarded-Proto so Django sees HTTPS.
+if env_bool("DJANGO_BEHIND_PROXY", "false"):
+    SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 X_FRAME_OPTIONS = "DENY"

@@ -34,7 +34,8 @@ from bisect import bisect_left, bisect_right
 from dataclasses import asdict, dataclass, field
 from datetime import timedelta
 
-from sim.behavior import BehaviorParams
+from sim.behavior import (BehaviorParams, HouseholdChoices, HouseholdContext, draw_household_choices,
+                          household_params, summarize_choices)
 from sim.events import canonical_road_name
 from sim.geo import EARTH_RADIUS_M
 from sim.history import format_utc, parse_utc
@@ -207,6 +208,11 @@ ASSUMPTIONS = [
     f"{CARLESS_TRANSPORT_HAZARD_PER_H:g}/h once ordered or fire reaches the zone (assumed).",
     "Households that do not comply (noncompliant_share, 0 unless a scenario sets it from the order-compliance "
     "range 0.870-0.968 of Wong et al. 2020) own no twin vehicle, never leave and say they are staying.",
+    "With behavior_profile set, each household draws its own choices from sim/behavior_params.json (sourced, "
+    "derived or labelled assumptions; docs/people-data.md 'Behaviour evidence'): drawn stayers replace "
+    "noncompliant_share and staying_share, drawn trigger and delay order departures, drawn vehicles share the twin's "
+    "zone total, drawn help requests replace carless_transport_share. Trips before leaving, routes, rerouting and "
+    "destination types are recorded on the household but do not move the twin's vehicles.",
     "Reports: once per encounter with probabilities " + ", ".join(
         f"{k} {v:g}" for k, v in sorted(REPORT_PROB_PER_ENCOUNTER.items())) + f"; fire seen within "
     f"{FIRE_SIGHTING_DISTANCE_M:g} m; heavy traffic at >= {HEAVY_TRAFFIC_MIN_QUEUED_VEH} queued vehicles and "
@@ -251,8 +257,18 @@ class ResidentParams:
     (sim.demand participation), so the twin and the phones tell one story."""
     carless_transport_share: float = CARLESS_TRANSPORT_REQUEST_SHARE
     carless_transport_per_h: float = CARLESS_TRANSPORT_HAZARD_PER_H
+    behavior_profile: str | None = None
+    """None (default): the population above, unchanged. A profile of sim/behavior_params.json ("grounded",
+    "legacy") draws each household's choices (sim.behavior.draw_household_choices, one stream per household and
+    choice) and uses them: households whose protective action is to stay are the noncompliant ones (replacing
+    noncompliant_share and staying_share), vehicles follow each household's drawn vehicles as closely as the
+    twin's zone total allows, the departure order follows the drawn trigger and delay, and no-vehicle households
+    ask for transport when their draw says so (replacing carless_transport_share). Every household carries its
+    `choices` (Household.choices)."""
 
     def __post_init__(self) -> None:
+        if self.behavior_profile is not None:
+            household_params(self.behavior_profile)  # ValueError on an unknown profile
         for name in ("app_adoption", "staying_share", "out_checkin_share", "destination_choice_share",
                      "recommended_choice_share", "heavy_traffic_speed_fraction", "board_answer_share",
                      "passive_setting_share", "noncompliant_share", "carless_transport_share"):
@@ -292,6 +308,8 @@ class Household:
     rank: int  # position in the zone's departure order; carless households rank after every vehicle household
     no_vehicle: bool = False  # ACS: no vehicle available (carless by circumstance, may ask for transport)
     noncompliant: bool = False  # owns vehicles but does not leave (no twin vehicle)
+    choices: HouseholdChoices | None = None  # drawn behaviour (ResidentParams.behavior_profile); None by default
+    behavior_note: str | None = None  # where the twin overrode a drawn choice (e.g. its vehicles need an owner)
 
 
 def allocate_vehicles(households: int, vehicles: int) -> list[int]:
@@ -309,6 +327,38 @@ def allocate_vehicles(households: int, vehicles: int) -> list[int]:
         extra -= 1
         k += 1
     return out
+
+
+def allocate_vehicles_by_preference(prefs: list[int], vehicles: int) -> list[int]:
+    """Vehicles per household summing exactly to `vehicles`, as close to each household's drawn preference
+    (`prefs`, at least 1 each) as the total allows: when the twin has fewer, the largest preferences are trimmed
+    first (never below 1); when it has fewer vehicles than households, as allocate_vehicles; when it has more,
+    extra vehicles go round-robin."""
+    n = len(prefs)
+    if n == 0:
+        return []
+    if vehicles < n:
+        return allocate_vehicles(n, vehicles)
+    out = [max(1, int(p)) for p in prefs]
+    total = sum(out)
+    if total > vehicles:
+        cap = max(out)
+        while sum(min(p, cap) for p in out) > vehicles:  # lowest common cap that still covers the total
+            cap -= 1
+        out = [min(p, cap) for p in out]
+        spare = vehicles - sum(out)  # households at the cap get one back each, lowest index first
+        for i, p in enumerate(prefs):
+            if spare <= 0:
+                break
+            if max(1, int(p)) > cap:
+                out[i] += 1
+                spare -= 1
+    for k in range(vehicles - sum(out)):  # the twin has more vehicles than the households want
+        out[k % n] += 1
+    return out
+
+
+_TRIGGER_ORDER = {"before_warning": 0, "warning": 1, "fire_cue": 2, "never": 3}
 
 
 def party_key(seed: int, zone_id: str, index: int) -> str:
@@ -355,6 +405,9 @@ def build_population(engine, params: ResidentParams,
         else:
             share = NO_VEHICLE_SHARE_BUTTE_ACS_2022 if no_vehicle is not None else 0.0
         n_novehicle = min(z.households, round(share * z.households))
+        if params.behavior_profile is not None:
+            pops.append(_zone_population_with_choices(z, zi, s, nodes, params, n_novehicle, rng))
+            continue
         n_noncompliant = round(params.noncompliant_share * (z.households - n_novehicle))
         if z.vehicles > 0 and z.households - n_novehicle - n_noncompliant < 1:  # someone must own the vehicles
             n_noncompliant = max(0, z.households - n_novehicle - 1)
@@ -398,6 +451,68 @@ def build_population(engine, params: ResidentParams,
         pops.append(ZonePopulation(z.id, zi, hh, movers, carless, cum_before, cum_after, frozenset(origin_ix),
                                    (sum(p[0] for p in pts) / len(pts), sum(p[1] for p in pts) / len(pts))))
     return pops
+
+
+def _zone_population_with_choices(z, zi: int, s, nodes, params: ResidentParams, n_novehicle: int,
+                                  rng: random.Random) -> ZonePopulation:
+    """One zone's households when ResidentParams.behavior_profile is set: each household draws its choices
+    (own streams keyed on its party key), and the twin's counts still decide how many leave and when.
+
+    - No-vehicle households: the same ACS count, at seeded slots.
+    - Noncompliant: every other household whose drawn protective action is to stay (stay and defend, shelter in
+      place). If that would leave the zone's twin vehicles without an owner, the lowest-index stayer drives
+      instead and says so in `behavior_note`.
+    - Vehicles: the zone's twin vehicles shared by drawn preference (allocate_vehicles_by_preference).
+    - Departure order: drawn trigger (before any warning, on the warning, on the fire cue for wait-and-see), then
+      drawn delay. The twin decides how many have departed; this order decides which.
+    """
+    if z.vehicles > 0:
+        n_novehicle = min(n_novehicle, z.households - 1)
+    krng = random.Random(f"{params.seed}:{GENERATOR_ID}:carless:{z.id}")
+    novehicle = set(krng.sample(range(z.households), n_novehicle)) if n_novehicle else set()
+    origin_ix = [s.node_ix[n] for n in z.origin_nodes]
+    hh: list[Household] = []
+    for h in range(z.households):
+        key = party_key(params.seed, z.id, h)
+        ch = draw_household_choices(params.seed, key, params.behavior_profile,
+                                    HouseholdContext(has_vehicle=h not in novehicle))
+        stays = not ch.evacuates
+        hh.append(Household(index=h, zone_id=z.id, party_key=key, vehicles=0,
+                            origin_node=origin_ix[h % len(origin_ix)] if origin_ix else -1,
+                            has_app=rng.random() < params.app_adoption, stays=stays, rank=-1,
+                            no_vehicle=h in novehicle, noncompliant=stays and h not in novehicle, choices=ch))
+    drivers = [h for h in hh if not h.no_vehicle and not h.noncompliant]
+    if z.vehicles > 0 and hh and not drivers:
+        first = next(h for h in hh if not h.no_vehicle)
+        first.noncompliant = first.stays = False
+        first.behavior_note = "drew stay; drives because the twin's zone vehicles need an owner"
+        drivers = [first]
+    alloc = allocate_vehicles_by_preference([max(1, h.choices.vehicles_taken) for h in drivers], z.vehicles)
+    for h, v in zip(drivers, alloc):
+        h.vehicles = v
+
+    def order_key(h: Household):
+        ch = h.choices
+        if h.behavior_note:  # an overridden stayer leaves last
+            return (len(_TRIGGER_ORDER), 0.0, h.index)
+        return (_TRIGGER_ORDER[ch.departure_trigger], ch.departure_delay_min or 0.0, h.index)
+
+    movers = sorted((h for h in hh if h.vehicles > 0), key=order_key)
+    for r, h in enumerate(movers):
+        h.rank = r
+    carless = [h for h in hh if h.vehicles == 0]
+    for r, h in enumerate(carless, start=len(movers)):
+        h.rank = r
+    cum_before, cum_after, c = [], [], 0
+    for h in movers:
+        cum_before.append(c)
+        c += h.vehicles
+        cum_after.append(c)
+    if hh and c != z.vehicles:
+        raise AssertionError(f"zone {z.id}: households own {c} vehicles, the twin has {z.vehicles}")
+    pts = [nodes[n] for n in z.origin_nodes] or [(0.0, 0.0)]
+    return ZonePopulation(z.id, zi, hh, movers, carless, cum_before, cum_after, frozenset(origin_ix),
+                          (sum(p[0] for p in pts) / len(pts), sum(p[1] for p in pts) / len(pts)))
 
 
 # ---------------------------------------------------------------- geometry
@@ -599,8 +714,12 @@ class ResidentGenerator:
         self.fire_zone_latent_help = 0
         self.latent_transport = 0  # transport requests of households with no vehicle (not in the help rate)
         self.transport_rng = random.Random(f"{self.p.seed}:{GENERATOR_ID}:transport")  # own stream
-        self.asks_transport = {h.party_key: self.transport_rng.random() < self.p.carless_transport_share
-                               for z in self.pops for h in z.households if h.no_vehicle}
+        if self.p.behavior_profile is None:
+            self.asks_transport = {h.party_key: self.transport_rng.random() < self.p.carless_transport_share
+                                   for z in self.pops for h in z.households if h.no_vehicle}
+        else:  # the household's own drawn choice (sim.behavior help_request_no_vehicle)
+            self.asks_transport = {h.party_key: h.choices.requests_help
+                                   for z in self.pops for h in z.households if h.no_vehicle}
 
     # --- helpers
 
@@ -815,8 +934,12 @@ class ResidentGenerator:
                             dest = offers[0]
                         else:
                             dest = offers[1 + rng.randrange(len(offers) - 1)]
-                        out.append(self._event("destination", hh, at, destination_body(pop.zone_id, dest),
-                                               {"state": "departed", "at": at, "offered": offers}))
+                        cause = {"state": "departed", "at": at, "offered": offers}
+                        if hh.choices is not None:  # drawn behaviour, for the truth log and a UI
+                            cause.update(destination_type=hh.choices.destination_type,
+                                         route_strategy=hh.choices.route_strategy,
+                                         departure_trigger=hh.choices.departure_trigger)
+                        out.append(self._event("destination", hh, at, destination_body(pop.zone_id, dest), cause))
             self.prev_departed[zi], self.prev_arrived[zi] = n_dep, n_arr
 
             # At home: vehicle households not departed, and carless households.
@@ -930,7 +1053,22 @@ class ResidentGenerator:
                 "noncompliant_households": sum(h.noncompliant for h in hh),
                 "no_vehicle_app_households": sum(h.no_vehicle and h.has_app for h in hh),
                 "staying_households": sum(h.stays for h in hh),
-                "vehicles": sum(h.vehicles for h in hh), "zones": len(self.pops)}
+                "vehicles": sum(h.vehicles for h in hh), "zones": len(self.pops),
+                **({} if self.p.behavior_profile is None else {
+                    "behavior_profile": self.p.behavior_profile,
+                    "behavior_overrides": sum(h.behavior_note is not None for h in hh),
+                    "behavior": summarize_choices(h.choices for h in hh)})}
+
+    def household_choices(self, party_key: str) -> dict | None:
+        """One household's drawn choices with sources and a short narrative (simulated); None without a profile."""
+        for z in self.pops:
+            for h in z.households:
+                if h.party_key == party_key:
+                    if h.choices is None:
+                        return None
+                    return {**h.choices.to_dict(), "vehicles_in_twin": h.vehicles, "behavior_note": h.behavior_note,
+                            "evidence_class": EVIDENCE_CLASS}
+        return None
 
     def rates(self) -> dict:
         """Latent (all-household) help rates next to the Camp record; a sanity comparison, not a fit."""
