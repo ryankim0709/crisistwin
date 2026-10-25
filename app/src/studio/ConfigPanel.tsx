@@ -429,9 +429,14 @@ export default function ConfigPanel(props: ConfigPanelProps) {
           <h3 id={`${uid}-wx`} className="studio-subtitle">
             Conditions{" "}
             <span className="studio-subtitle-note">
-              {settings.weatherSeries?.enabled ? "wind hour by hour" : "constant for the run"}
+              {settings.weatherSeries?.enabled ? "wind changes hour by hour" : "one wind for the whole run"}
             </span>
           </h3>
+          <p className="studio-hint">
+            {settings.weatherSeries?.enabled
+              ? "The run follows real hourly weather: wind speed and direction change as it plays (see the wind strip on the playback bar). Moving the sliders switches back to one fixed wind."
+              : "Assumed keeps the wind below fixed for the whole run. For wind that changes hour by hour, pick Historical, Worst or Forecast and apply it."}
+          </p>
 
           <div className="studio-field">
             <HorizonControl
