@@ -259,7 +259,7 @@ export default function SimulationStudioPage({
   // Which evacuation plan the 3D view plays: the fastest-exit policy or the optimiser's best.
   const [playPlan, setPlayPlan] = useState<PlayPlan>("fastest");
   const [roadTool, setRoadTool] = useState(false);
-  const [orderMinute, setOrderMinute] = useState(DEFAULT_ORDER_MINUTE);
+  const [orderMinute, setOrderMinute] = useState<number | null>(DEFAULT_ORDER_MINUTE);
   const [closures, setClosures] = useState<{ areaId: string; edges: ReadonlySet<number> }>({
     areaId: "",
     edges: new Set(),
@@ -981,7 +981,7 @@ export default function SimulationStudioPage({
     publishOn && !Aside,
     evacuationInputs,
     currentMinute,
-    `Studio run · ${area?.name ?? "area"} · order at T+${orderMinute}`,
+    `Studio run · ${area?.name ?? "area"} · ${orderMinute === null ? "threat-based orders" : `order everyone at T+${orderMinute}`}`,
   );
   const running = state.phase === "loading-landscape" || state.phase === "computing";
 
