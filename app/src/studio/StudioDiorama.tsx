@@ -205,9 +205,10 @@ export default function StudioDiorama(props: StudioDioramaProps) {
   const streetArea = streets.status === "ready" ? streets.area : null;
   // The overlay draws its own homes (coloured by household state), so the streets layer then
   // draws roads only.
+  const streetScenery = streets.status === "ready" ? streets.scenery : null;
   const sceneStreets = useMemo(
-    () => (streetArea && evacuation ? { edges: streetArea.edges, homes: [] } : streetArea),
-    [streetArea, evacuation],
+    () => (streetScenery && evacuation ? { edges: streetScenery.edges, homes: [] } : streetScenery),
+    [streetScenery, evacuation],
   );
   const [overlay] = useState(() => new DispatchOverlay());
   const [lineOverlay] = useState(() => new FirelineOverlay());

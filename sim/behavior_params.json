@@ -1,0 +1,1367 @@
+{
+  "schema": "household-behavior-1",
+  "title": "Per-household evacuation behaviour: evidence and profiles for sim/behavior.py draw_household_choices",
+  "units": "probabilities and weights are fractions; times are minutes; hours are local clock hours 0-24",
+  "labels": {
+    "sourced": "value read from the cited document (page or table in `locator`)",
+    "derived": "arithmetic on sourced values, shown in `derivation`",
+    "assumption": "no source gives it; a placeholder for sensitivity runs, not a finding",
+    "legacy": "reproduces the model's behaviour before this file (no evidence claimed)",
+    "gap": "looked for and not found; nothing in the model uses it"
+  },
+  "transferability_scale": "high: same kind of event and population (fast California WUI fire); medium: other US wildfire or a different warning regime; low: stated intentions, another country's policy, another hazard, or a qualitative count",
+  "page_convention": "Wong et al. 2020, Grajdura 2022 and NIST TN 2252: printed page numbers. NIST TN 2103: PDF page (printed = PDF - 5). Forrister et al. 2024 and Kuligowski et al. 2022: PDF pages of the versions in `url`.",
+  "retrieved": "2026-10-24",
+  "sources": {
+    "wong2020": "Wong, S.D., Broader, J.C., Shaheen, S.A. (2020). Review of California Wildfire Evacuations from 2017 to 2019. UC ITS report, DOI 10.7922/G29G5K2R. https://escholarship.org/uc/item/5w85z07g. Online surveys: Oct 2017 N. California (Tubbs, Nuns, Atlas) n=79; Dec 2017 S. California (Thomas, Creek, Skirball) n=226; Carr 2018 n=284.",
+    "wong2023": "Wong, S.D., Broader, J.C., Walker, J.L., Shaheen, S.A. (2023). Understanding California wildfire evacuee behavior and joint choice making. Transportation 50:1165-1211, DOI 10.1007/s11116-022-10275-y. Pre-print read: https://escholarship.org/uc/item/4fm7d34j (same survey data as wong2020).",
+    "grajdura2022": "Grajdura, S. (2022). Mixed Methods Approaches to Wildfire Evacuation: Modeling Behavior, Simulation, and Equity. PhD dissertation, UC Davis. https://escholarship.org/uc/item/3t8025w5. Camp Fire survey n=397 (133 shelter, 264 online), 26 shelter interviews.",
+    "nist2252": "Maranghides, A., et al. (2023). A Case Study of the Camp Fire: Notification, Evacuation, Traffic, and Temporary Refuge Areas. NIST TN 2252, DOI 10.6028/NIST.TN.2252. Reconstruction from 911, radio, video and interviews; no resident survey.",
+    "nist2252sup": "NIST TN 2252 Supplement (2023), Appendix D Tables D-2, D-3 (CodeRED delivery), parsed in tools/comms_fixtures/codered_delivery_table.json and summarised in tools/comms_degradation.json `alerting`.",
+    "zhao2022": "Zhao, X., Xu, Y., Lovreglio, R., Kuligowski, E., et al. (2022). Estimating wildfire evacuation decision and departure timing using large-scale GPS data. Transportation Research Part D. arXiv:2109.07745. Kincade 2019, 5,166 inferred homes.",
+    "kuligowski2022": "Kuligowski, E.D., Zhao, X., Lovreglio, R., et al. (2022). Modeling evacuation decisions in the 2019 Kincade fire in California. Safety Science 146. Author manuscript https://mro.massey.ac.nz/bitstreams/be2703da-d4ac-4ca5-97d8-7a0a04f99e16/download. Online survey n=270.",
+    "sun2024": "Sun, Y., Forrister, A., Kuligowski, E.D., Lovreglio, R., Cova, T.J., Zhao, X. (2024). Social vulnerabilities and wildfire evacuations: a case study of the 2019 Kincade Fire. Safety Science. arXiv:2402.06639. GPS, 135 block groups.",
+    "forrister2024": "Forrister, A., Kuligowski, E.D., Sun, Y., Yan, X., Lovreglio, R., Cova, T.J., Zhao, X. (2024). Analyzing risk perception, evacuation decision and delay time: a case study of the 2021 Marshall Fire in Colorado. Travel Behaviour and Society 35:100729. Online survey N=191.",
+    "forrister2022qr": "Forrister, A., et al. (2022). Marshall Fire quick response report, Natural Hazards Center QR 349 (HTML), Table 1 'Transportation Decisions Made by Evacuees', N=132 evacuees.",
+    "walpole2020": "Walpole, E.H., Kuligowski, E.D., et al. (2020). NIST TN 2103 (Chimney Tops 2 fire, Gatlinburg TN, 2016, household survey), DOI 10.6028/NIST.TN.2103. N=323 (280 evacuees, 43 stayed).",
+    "lovreglio2020": "Lovreglio, R., Kuligowski, E., Walpole, E., Link, E., Gwynne, S. (2020). Calibrating the Wildfire Decision Model using hybrid choice modelling. IJDRR 50:101770 (Chimney Tops 2 data). Massey author manuscript.",
+    "mclennan2014": "McLennan, J., Elliott, G., Wright, L. (2014). Bushfire survival preparations by householders in at-risk areas of south-eastern Australia. Australian Journal of Emergency Management 29(2). n=584, hypothetical scenario.",
+    "acs2022": "U.S. Census Bureau, ACS 2018-2022 5-year, B25044 (tools/people_behavior.json `no_vehicle_households_butte`).",
+    "people_behavior": "tools/people_behavior.json (this repository): earlier sourced parameters, same evidence rule.",
+    "mclennan2019": "McLennan, J., Ryan, B., Bearman, C., Toh, K. (2019). Should we leave now? Behavioral factors in evacuation under wildfire threat. Fire Technology 55:487-516. Read: USQ author preprint (manuscript pages, not mapped to journal pages). Review of eight Australian field-interview studies (23 fires, n=1,641) and surveys.",
+    "whittaker2021": "Whittaker, J., et al. (2021). Black Summer: how the NSW community responded to the 2019-20 bushfire season. Bushfire and Natural Hazards CRC Report 651. Survey n=1,004 (773 residents) and 202 interviews.",
+    "mcgee2018": "McGee, T.K. (2018). Residents' experiences of the 2016 Fort McMurray Wildfire, Alberta. In Viegas (Ed.), Advances in Forest Fire Research 2018, pp. 1155-1159. Online survey n=447 (self-selected, 81% women).",
+    "cfa2020": "CFA / BNHCRC (2020). Application of Self-Evacuation Archetypes (Safer Together), Table 6 p. 48, reporting Strahan, Whittaker and Handmer (2018) IJDRR 27:307-316 archetype shares (the 2018 paper itself was not read)."
+  },
+  "evidence": {
+    "order_compliance_wong": {
+      "behaviour": "Order recipients who evacuated",
+      "value": {
+        "oct2017_norcal": 0.875,
+        "dec2017_socal": 0.87,
+        "carr2018": 0.968
+      },
+      "population": "survey respondents who received a mandatory order",
+      "sources": [
+        "wong2020"
+      ],
+      "locator": "Table 11, p. 39",
+      "label": "sourced",
+      "transferability": "high for Oct 2017 N. California (fast, wind-driven, night, low notice; the analogue choice is ours); convenience sample"
+    },
+    "evacuation_rate_other_fires": {
+      "behaviour": "Respondents who evacuated (all respondents, ordered or not)",
+      "value": {
+        "kincade2019_survey": 0.8,
+        "marshall2021": 0.6911,
+        "chimney_tops2_2016": 0.867
+      },
+      "population": "online surveys, n=270 / 191 / 323",
+      "sources": [
+        "kuligowski2022",
+        "forrister2024",
+        "walpole2020"
+      ],
+      "locator": "Kuligowski 2022 p. 12; Forrister 2024 Table 4 p. 8; TN 2103 PDF pp. 29, 42",
+      "label": "sourced",
+      "transferability": "medium: corroborates that 13% to 31% do not leave; not used as a parameter"
+    },
+    "shadow_evacuation_wong": {
+      "behaviour": "Non-recipients of an order who evacuated",
+      "value": {
+        "oct2017_norcal": 0.291,
+        "dec2017_socal": 0.625,
+        "carr2018": 0.75
+      },
+      "sources": [
+        "wong2020"
+      ],
+      "locator": "Table 11, p. 39",
+      "label": "sourced",
+      "transferability": "medium: small cells; Carr had a 2-day build-up"
+    },
+    "stay_reasons_gatlinburg": {
+      "behaviour": "Reasons for staying (select all), people who stayed",
+      "value": {
+        "not_ordered": 0.419,
+        "protect_property": 0.302,
+        "no_warning": 0.256,
+        "too_late_or_dangerous": 0.233,
+        "safer_to_stay": 0.186,
+        "believed_no_risk": 0.186,
+        "care_for_animals": 0.163,
+        "saw_others_stay": 0.116,
+        "routes_blocked_other": 0.116,
+        "physically_unable": 0.047,
+        "care_for_others": 0.047,
+        "no_resources": 0.023
+      },
+      "population": "Chimney Tops 2 (Gatlinburg 2016) stayers, N=43",
+      "sources": [
+        "walpole2020"
+      ],
+      "locator": "TN 2103 PDF p. 32, Figure 19",
+      "label": "sourced",
+      "transferability": "medium: night, no-notice, almost no official warning (83% received none); like Camp"
+    },
+    "stay_reasons_wong": {
+      "behaviour": "Non-evacuees who wanted to protect property (select all)",
+      "value": {
+        "oct2017_norcal": 0.167,
+        "dec2017_socal": 0.294,
+        "carr2018": 0.367
+      },
+      "sources": [
+        "wong2020"
+      ],
+      "locator": "Table 20, p. 51 (also: did not receive any orders 71.4/47.1/30.0%; did not want to leave 31.0/39.2/26.7%; went back home due to traffic 0.0/2.0/3.3%)",
+      "label": "sourced",
+      "transferability": "high (California), n=42/51/30"
+    },
+    "camp_fatalities_by_activity": {
+      "behaviour": "Camp Fire deaths by activity",
+      "value": {
+        "deaths": 85,
+        "believed_evacuating": 19,
+        "not_evacuating": 66,
+        "refused_to_leave_in_paradise_EAR": "3 of 881 civilians"
+      },
+      "sources": [
+        "nist2252"
+      ],
+      "locator": "p. 218 (deaths), p. 193 (refusals), p. 217 (at least 42% of victims had a mobility or medical condition)",
+      "label": "sourced",
+      "transferability": "high (outcome check, not a behaviour share)"
+    },
+    "camp_temporary_refuge": {
+      "behaviour": "Civilians who sheltered at temporary refuge areas (TRAs) instead of driving out",
+      "value": {
+        "at_least_civilians": 1222,
+        "share_of_paradise_population": "5% to 9% at 1.0 person per vehicle, 12% at 2.5"
+      },
+      "sources": [
+        "nist2252"
+      ],
+      "locator": "p. 155, Table 37; 31 TRAs (pp. xxv-xxvi)",
+      "label": "sourced",
+      "transferability": "high for Camp; TRAs are an outcome of blocked roads, not a home decision; the traffic twin models refuges separately"
+    },
+    "wait_and_see_intent_mclennan": {
+      "behaviour": "Stated plan if a fire would reach the home in 1-2 h: leave at once / stay and defend / wait and see",
+      "value": {
+        "leave": 0.47,
+        "stay_and_defend": 0.24,
+        "wait_and_see": 0.29
+      },
+      "population": "south-eastern Australia, n=584, hypothetical",
+      "sources": [
+        "mclennan2014"
+      ],
+      "locator": "results text (273, 139, 172 of 584)",
+      "label": "sourced",
+      "transferability": "low: stated intention to a hypothetical under the Australian stay-or-go policy; kept as the high sensitivity value (0.29 of all respondents, 0.33 of compliers)"
+    },
+    "wait_and_see_states_lovreglio": {
+      "behaviour": "Wildfire Decision Model states (no reaction, investigate, vigilant, respond)",
+      "value": {
+        "example_warning_plus_flames": {
+          "normal": 0.01,
+          "investigating": 0.13,
+          "vigilant": 0.23,
+          "response": 0.63
+        },
+        "thresholds": [
+          -0.936,
+          1.606,
+          2.868
+        ]
+      },
+      "sources": [
+        "lovreglio2020"
+      ],
+      "locator": "Table 3 PDF p. 20; Sec. 3.6 worked example (a model prediction, not a sample share)",
+      "label": "sourced",
+      "transferability": "medium: Chimney Tops 2 data; would need the latent risk model to use"
+    },
+    "camp_first_awareness": {
+      "behaviour": "How Camp respondents first found out about the fire",
+      "value": {
+        "saw_fire": 0.446,
+        "in_person": 0.263,
+        "call_or_text": 0.171,
+        "online": 0.069,
+        "tv_radio": 0.038,
+        "official": 0.013
+      },
+      "population": "Camp Fire survey n=397 (sums to 1.0)",
+      "sources": [
+        "grajdura2022"
+      ],
+      "locator": "Table 1 p. 36 and Table 12 p. 103",
+      "label": "sourced",
+      "transferability": "high for a no-notice fire; low for fires with hours of official notice (Kincade: 73% received an order)"
+    },
+    "camp_order_received": {
+      "behaviour": "Camp respondents who received an evacuation order at any time on 8 Nov 2018",
+      "value": 0.19,
+      "sources": [
+        "grajdura2022"
+      ],
+      "locator": "p. 37 (a later passage, p. 38, says 21%)",
+      "label": "sourced",
+      "transferability": "high for Camp only"
+    },
+    "official_order_received_other": {
+      "behaviour": "Respondents who received an official order or warning",
+      "value": {
+        "kincade2019": 0.73,
+        "marshall2021": 0.65,
+        "chimney_tops2_any_warning": 0.226,
+        "chimney_tops2_order": 0.031,
+        "oct2017_norcal_mandatory": 0.304,
+        "dec2017_socal_mandatory": 0.611,
+        "carr2018_mandatory": 0.662
+      },
+      "sources": [
+        "kuligowski2022",
+        "forrister2024",
+        "walpole2020",
+        "wong2020"
+      ],
+      "locator": "Kuligowski 2022 p. 11; Forrister 2024 Table 4 p. 8 and p. 7; TN 2103 PDF pp. 19-22; Wong 2020 Table 12 p. 40",
+      "label": "sourced",
+      "transferability": "medium: use for a scenario with notice"
+    },
+    "official_channels_kincade": {
+      "behaviour": "Channels of official orders (select all)",
+      "value": {
+        "text": 0.64,
+        "social_media": 0.36,
+        "email": 0.28,
+        "recorded_phone": 0.25,
+        "siren": 0.24,
+        "radio": 0.21,
+        "face_to_face_loudspeaker_live_phone_tv_web": "few (no figure)",
+        "informal_told_by_someone": 0.44
+      },
+      "population": "Kincade survey n=270",
+      "sources": [
+        "kuligowski2022"
+      ],
+      "locator": "p. 11",
+      "label": "sourced",
+      "transferability": "medium (Sonoma County after Tubbs; WEA share not reported)"
+    },
+    "official_channels_wong": {
+      "behaviour": "Channels by which mandatory-order recipients got the order (select all), Oct 2017 N. California / Dec 2017 S. California / Carr",
+      "value": {
+        "reverse_911": [
+          0.083,
+          0.341,
+          0.388
+        ],
+        "text": [
+          0.292,
+          0.5,
+          0.372
+        ],
+        "official_in_person": [
+          0.417,
+          0.326,
+          0.303
+        ],
+        "subscribed_alert": [
+          0.417,
+          0.326,
+          0.117
+        ],
+        "someone_told_you": [
+          0.375,
+          0.268,
+          0.362
+        ],
+        "tv": [
+          0.125,
+          0.21,
+          0.197
+        ],
+        "social_media": [
+          0.167,
+          0.341,
+          0.149
+        ],
+        "website": [
+          0.083,
+          0.377,
+          0.133
+        ],
+        "radio": [
+          0.042,
+          0.065,
+          0.069
+        ],
+        "smartphone_app": [
+          0.0,
+          0.087,
+          0.117
+        ]
+      },
+      "population": "order recipients n=24/138/188",
+      "sources": [
+        "wong2020"
+      ],
+      "locator": "Table 12, p. 40",
+      "label": "sourced",
+      "transferability": "high (California)"
+    },
+    "camp_codered_delivery": {
+      "behaviour": "Camp CodeRED phone notifications delivered",
+      "value": {
+        "numbers_called": 20926,
+        "delivered": 6573,
+        "delivered_share_of_numbers": 0.31,
+        "bcso_answered_share": 0.33,
+        "max_share_of_population_reached": 0.17,
+        "registered_paradise_residents": "less than 40%",
+        "wea_sent": 0
+      },
+      "sources": [
+        "nist2252"
+      ],
+      "locator": "pp. 43-44, Table 8; p. xxiii and p. 42 (no IPAWS/WEA)",
+      "label": "sourced",
+      "transferability": "high for Camp; registration and dial capacity vary by county"
+    },
+    "codered_success_by_hour": {
+      "behaviour": "CodeRED initial-call connect share by message time, Camp 8-9 Nov 2018",
+      "value": {
+        "mean": 0.55,
+        "07:13-10:22": 0.588,
+        "11:46-18:48": 0.507,
+        "19:30-19:50": 0.761,
+        "after_midnight": 0.143
+      },
+      "sources": [
+        "nist2252sup"
+      ],
+      "locator": "Tables D-2, D-3 via tools/comms_degradation.json `alerting`",
+      "label": "derived",
+      "transferability": "low for the hour effect: the after-midnight calls (580 contacts) went to remote areas (Stirling City, Inskip), so hour and place are confounded"
+    },
+    "phone_alert_reach_by_hour": {
+      "behaviour": "Share of households a CodeRED-style call reaches, by local hour",
+      "derivation": "0.17 (NIST maximum share of the population reached) x (connect share of the hour band / 0.55 mean): 07-11 h 0.17 x 0.588/0.55 = 0.182; 11-19 h 0.17 x 0.507/0.55 = 0.157; 19-24 h 0.17 x 0.761/0.55 = 0.235; 00-07 h 0.17 x 0.143/0.55 = 0.044",
+      "sources": [
+        "nist2252",
+        "nist2252sup"
+      ],
+      "locator": "see camp_codered_delivery and codered_success_by_hour",
+      "label": "derived",
+      "transferability": "low: person-level bound applied per household; hour effect confounded with place"
+    },
+    "self_initiated_kincade": {
+      "behaviour": "Evacuees by trigger, Kincade GPS: self before any notice / shadow outside zones / on warning / on order",
+      "value": {
+        "self_before_notice": 0.33,
+        "shadow": 0.23,
+        "on_warning": 0.07,
+        "on_order": 0.38
+      },
+      "derivation": "share of in-zone evacuees who left before any notice = 0.33 / (0.33 + 0.07 + 0.38) = 0.423",
+      "sources": [
+        "zhao2022"
+      ],
+      "locator": "Sec. 4.4.1, p. 16, Figure 10",
+      "label": "derived",
+      "transferability": "medium: GPS (not survey); Kincade residents had lived through Tubbs 2017; slow-moving fire with days of warning. Kincade survey: 22 of 270 commenters left before or without an order (Kuligowski 2022 p. 17)"
+    },
+    "camp_delay_mean": {
+      "behaviour": "Camp awareness-to-departure gap",
+      "value": {
+        "mean_awareness": "08:00 (SD 71 min)",
+        "mean_departure": "09:33",
+        "median_departure": "09:00",
+        "gap_mean_min": 93
+      },
+      "derivation": "09:33 - 08:00 = 93 min, a difference of two sample means",
+      "sources": [
+        "grajdura2022",
+        "people_behavior"
+      ],
+      "locator": "pp. 51-52",
+      "label": "derived",
+      "transferability": "high for Camp; no percentiles published (only Fig. 3, p. 38)"
+    },
+    "marshall_delay_moments": {
+      "behaviour": "Marshall awareness-to-departure delay",
+      "value": {
+        "mean_min": 136.59,
+        "sd_min": 263.44,
+        "preparation_mean_min": 63.64,
+        "preparation_sd_min": 84.5
+      },
+      "population": "Marshall 2021 evacuees, N=129 in the regression",
+      "sources": [
+        "forrister2024"
+      ],
+      "locator": "Table 4, p. 8",
+      "label": "sourced",
+      "transferability": "medium: Colorado suburban grass fire, daytime, 100 mph winds; the coefficient of variation (1.93) is the only published spread for a wildfire delay"
+    },
+    "departure_delay_lognormal": {
+      "behaviour": "Delay from trigger to departure, lognormal",
+      "derivation": "sigma from Marshall's coefficient of variation: sigma = sqrt(ln(1 + (263.44/136.59)^2)) = 1.246; median from the Camp mean: 93 / exp(1.246^2 / 2) = 42.8 min. Uncapped p10/p50/p90 = 8.6/42.8/213 min. Capped at 1440 min (assumption: one day).",
+      "sources": [
+        "grajdura2022",
+        "forrister2024"
+      ],
+      "label": "derived",
+      "transferability": "medium: Camp level, Marshall shape (two events joined; neither publishes Camp's spread)"
+    },
+    "delay_by_first_source_camp": {
+      "behaviour": "Change in preparation time by first source of awareness (ref: call, text, online, TV, radio)",
+      "value": {
+        "evacuation_notice_min": -91.3,
+        "told_in_person_min": -21.5,
+        "saw_fire_min": 4.9,
+        "received_order_any_time_min": 47.1
+      },
+      "population": "Camp n=321, OLS (adj. R2 0.07)",
+      "sources": [
+        "grajdura2022"
+      ],
+      "locator": "Table 3, p. 46; text p. 53 (notice p = 0.099; others not significant; order +47.1 p < 0.01, attributed to orders arriving after departure had begun)",
+      "label": "sourced",
+      "transferability": "low: not significant except the order effect, which is reverse-causal. Not used: the model draws one delay distribution for every source"
+    },
+    "delay_by_awareness_time": {
+      "behaviour": "Later awareness, shorter gap (within an event)",
+      "value": {
+        "camp_departure_min_per_awareness_min": 0.743,
+        "marshall_delay_min_per_awareness_min": -0.724
+      },
+      "sources": [
+        "grajdura2022",
+        "forrister2024"
+      ],
+      "locator": "Grajdura Table 3 p. 46; Forrister Table 7 p. 9",
+      "label": "sourced",
+      "transferability": "low as a clock-hour effect: it reflects urgency as the fire nears, which the twin's fire cue already carries. Not used"
+    },
+    "departure_hour_wong": {
+      "behaviour": "Night departures (18:00-05:59) among evacuees",
+      "value": {
+        "dec2017_socal": 0.508,
+        "carr2018": 0.725
+      },
+      "sources": [
+        "wong2023"
+      ],
+      "locator": "Table 6, p. 17 of the pre-print; hour shares in wong2020 Table 10 p. 37",
+      "label": "sourced",
+      "transferability": "context only: the hour of departure, not a delay by hour"
+    },
+    "sought_information_wong": {
+      "behaviour": "Order recipients who sought more information (mandatory / voluntary order)",
+      "value": {
+        "oct2017_norcal": [
+          0.417,
+          0.667
+        ],
+        "dec2017_socal": [
+          0.5,
+          0.626
+        ],
+        "carr2018": [
+          0.298,
+          0.622
+        ]
+      },
+      "sources": [
+        "wong2020"
+      ],
+      "locator": "Table 12, p. 41",
+      "label": "sourced",
+      "transferability": "high (California)"
+    },
+    "predeparture_actions_gatlinburg": {
+      "behaviour": "Actions before evacuating (select all)",
+      "value": {
+        "packed_belongings": 0.575,
+        "communicated_plan": 0.364,
+        "secured_home": 0.314,
+        "informed_others": 0.257,
+        "animals": 0.232,
+        "family_reunited": 0.164,
+        "asked_others_what_they_do": 0.136,
+        "reunited_non_family": 0.114,
+        "did_nothing": 0.05,
+        "mean_actions": 3.32
+      },
+      "population": "Chimney Tops 2 evacuees N=280",
+      "sources": [
+        "walpole2020"
+      ],
+      "locator": "TN 2103 PDF p. 31",
+      "label": "sourced",
+      "transferability": "medium"
+    },
+    "trips_before_evacuating_wong": {
+      "behaviour": "Evacuees who made one or more trips before evacuating ('to collect household members or find supplies'; purposes not asked)",
+      "value": {
+        "oct2017_norcal": 0.595,
+        "dec2017_socal": 0.8,
+        "carr2018": 0.744
+      },
+      "derivation": "1 - share with 0 trips (0.405, 0.200, 0.256)",
+      "sources": [
+        "wong2020"
+      ],
+      "locator": "Table 16, p. 49",
+      "label": "derived",
+      "transferability": "high (California)"
+    },
+    "trip_purpose_marshall": {
+      "behaviour": "Purposes of trips made before evacuating (table shares sum to 100)",
+      "value": {
+        "family": 0.2086,
+        "others": 0.2518,
+        "pet": 0.1511,
+        "supplies": 0.1367,
+        "other": 0.0647,
+        "dont_know": 0.1871
+      },
+      "population": "Marshall 2021 evacuees N=132",
+      "sources": [
+        "forrister2022qr"
+      ],
+      "locator": "QR 349 Table 1. The report text gives 22/25/18/13% for the same items; the table is used",
+      "label": "sourced",
+      "transferability": "medium (Colorado, daytime; holiday week)"
+    },
+    "pickup_toward_fire": {
+      "behaviour": "Drives toward the fire to pick up family",
+      "value": null,
+      "note": "No count anywhere. NIST TN 2252 p. 65 names parents possibly going back to Ponderosa Elementary on Pentz Road; p. 73 calls intermediate trips beyond scope. The model draws family trips (trip_purpose_marshall) but not their direction.",
+      "sources": [
+        "nist2252"
+      ],
+      "label": "gap",
+      "transferability": "n/a"
+    },
+    "return_during_closure": {
+      "behaviour": "Evacuees who went back into a closed or burning zone",
+      "value": null,
+      "note": "Not found (tools/people_behavior.json `return_during_closure`).",
+      "sources": [
+        "people_behavior"
+      ],
+      "label": "gap",
+      "transferability": "n/a"
+    },
+    "gps_route_wong": {
+      "behaviour": "Evacuees who used GPS and followed its route / used it but rarely followed / did not use",
+      "value": {
+        "oct2017_norcal": [
+          0.189,
+          0.027,
+          0.784
+        ],
+        "dec2017_socal": [
+          0.183,
+          0.046,
+          0.771
+        ],
+        "carr2018": [
+          0.075,
+          0.055,
+          0.87
+        ]
+      },
+      "sources": [
+        "wong2020"
+      ],
+      "locator": "Table 10, p. 37 (78.2% or more had navigation available, Table A1 p. 61)",
+      "label": "sourced",
+      "transferability": "high (California)"
+    },
+    "route_reason": {
+      "behaviour": "Familiar route vs following other cars",
+      "value": null,
+      "note": "No survey share found for Camp, Wong, Kincade or Marshall. Camp interviews: 'simply trying to escape the fire than having a specific route in mind' (Grajdura p. 112). The split of non-GPS drivers is an assumption that reuses BehaviorParams.herding_prob (0.3).",
+      "sources": [
+        "grajdura2022"
+      ],
+      "label": "gap",
+      "transferability": "n/a"
+    },
+    "congestion_response": {
+      "behaviour": "Leaving the route because of congestion",
+      "value": {
+        "kincade_back_roads_commenters": "5 of 192 commenters",
+        "kincade_heavy_traffic_commenters": "23 of 192",
+        "wong_went_back_home_due_to_traffic": [
+          0.0,
+          0.02,
+          0.033
+        ]
+      },
+      "sources": [
+        "kuligowski2022",
+        "wong2020"
+      ],
+      "locator": "Kuligowski 2022 p. 18; Wong 2020 Table 20 p. 51 (non-evacuees)",
+      "label": "sourced",
+      "transferability": "low: qualitative counts, not a rate"
+    },
+    "camp_vehicle_abandonment": {
+      "behaviour": "Vehicles abandoned on Camp egress roads",
+      "value": {
+        "identified": 235,
+        "burned_share": 0.58,
+        "skyway_clark_wagstaff_1_6_km": 85,
+        "pearson_0_8_km": 39
+      },
+      "sources": [
+        "nist2252"
+      ],
+      "locator": "pp. 116-117",
+      "label": "sourced",
+      "transferability": "high for Camp (outcome check)"
+    },
+    "destination_wong": {
+      "behaviour": "Where evacuees sheltered",
+      "value": {
+        "oct2017_norcal": {
+          "friend": 0.243,
+          "family": 0.243,
+          "hotel_motel": 0.216,
+          "public_shelter": 0.054,
+          "second_residence": 0.0,
+          "rv_camper": 0.081,
+          "airbnb": 0.027,
+          "other": 0.135
+        },
+        "dec2017_socal": {
+          "friend": 0.303,
+          "family": 0.326,
+          "hotel_motel": 0.229,
+          "public_shelter": 0.034,
+          "second_residence": 0.029,
+          "rv_camper": 0.04,
+          "airbnb": 0.011,
+          "other": 0.029
+        },
+        "carr2018": {
+          "friend": 0.398,
+          "family": 0.299,
+          "hotel_motel": 0.134,
+          "public_shelter": 0.024,
+          "second_residence": 0.031,
+          "rv_camper": 0.051,
+          "airbnb": 0.004,
+          "other": 0.059
+        }
+      },
+      "sources": [
+        "wong2020"
+      ],
+      "locator": "Table 10, p. 37",
+      "label": "sourced",
+      "transferability": "high (California); evacuees n=37/175/254"
+    },
+    "destination_marshall": {
+      "behaviour": "Where evacuees went",
+      "value": {
+        "friend_or_family": 0.4576,
+        "hotel_motel": 0.1977,
+        "public_shelter": 0.0847,
+        "park_or_campground": 0.0734,
+        "parking_lot": 0.0621,
+        "store_or_restaurant": 0.0452,
+        "public_building": 0.0226,
+        "other": 0.0565
+      },
+      "sources": [
+        "forrister2022qr"
+      ],
+      "locator": "QR 349 Table 1",
+      "label": "sourced",
+      "transferability": "medium; corroborates Wong (friends or family about half, hotels about a fifth, shelters under a tenth)"
+    },
+    "pets_share": {
+      "behaviour": "Households with pets",
+      "value": {
+        "oct2017_norcal": 0.759,
+        "dec2017_socal": 0.637,
+        "carr2018": 0.817,
+        "kincade2019_pets_or_livestock": 0.796,
+        "chimney_tops2": 0.676,
+        "marshall2021_animals": 0.3455
+      },
+      "sources": [
+        "wong2020",
+        "kuligowski2022",
+        "walpole2020",
+        "forrister2024"
+      ],
+      "locator": "Wong Table A1 p. 61; Kuligowski 2022 p. 7; TN 2103 PDF p. 16; Forrister Table 4 p. 8",
+      "label": "sourced",
+      "transferability": "medium: convenience samples; spread 0.35 to 0.82"
+    },
+    "vehicles_wong": {
+      "behaviour": "Personal vehicles used to evacuate: one / two / more than two",
+      "value": {
+        "oct2017_norcal": [
+          0.405,
+          0.432,
+          0.135
+        ],
+        "dec2017_socal": [
+          0.451,
+          0.406,
+          0.086
+        ],
+        "carr2018": [
+          0.339,
+          0.453,
+          0.165
+        ]
+      },
+      "sources": [
+        "wong2020"
+      ],
+      "locator": "Table 10, p. 38",
+      "label": "sourced",
+      "transferability": "high (California). Marshall: one 52.25%, two or more 30.32% (QR 349 Table 1)"
+    },
+    "persons_per_vehicle": {
+      "behaviour": "Persons per evacuating vehicle",
+      "value": {
+        "nist_bounds": [
+          1.0,
+          2.5
+        ],
+        "nist_conservative": 2.0,
+        "derived_camp_household_over_wong_vehicles": 1.38
+      },
+      "derivation": "Camp household size mean ~2.37 (Grajdura Table 1 p. 36: 1 23.4%, 2 36.2%, 3 20.2%, 4+ 20.2%, 4+ counted as 4) / 1.72 vehicles per evacuating household (Wong Oct 2017, >2 counted as 3) = 1.38; two different samples, so weak",
+      "sources": [
+        "nist2252",
+        "grajdura2022",
+        "wong2020"
+      ],
+      "locator": "NIST p. 155 and p. xxvi",
+      "label": "derived",
+      "transferability": "low: no survey measures it. Not drawn per household; reported for context"
+    },
+    "needs_assistance_kincade": {
+      "behaviour": "Survey commenters who said they needed assistance to evacuate",
+      "value": {
+        "needed": "15 of 192 commenters (0.078)",
+        "assisted_others": "18 of 192"
+      },
+      "sources": [
+        "kuligowski2022"
+      ],
+      "locator": "pp. 17-18",
+      "label": "sourced",
+      "transferability": "low: open comments, not a question; a household-level 'needs help to leave' share is not published"
+    },
+    "disability_households": {
+      "behaviour": "Households with a member with a disability / a medical condition",
+      "value": {
+        "wong_oct2017_norcal": 0.19,
+        "wong_dec2017_socal": 0.142,
+        "wong_carr2018": 0.187,
+        "marshall_medical_condition": 0.2419
+      },
+      "sources": [
+        "wong2020",
+        "forrister2024"
+      ],
+      "locator": "Wong Table A1 p. 61; Forrister Table 4 p. 8",
+      "label": "sourced",
+      "transferability": "medium: an upper bound on needing help to evacuate"
+    },
+    "camp_assistance_events": {
+      "behaviour": "Camp entrapment, assistance and rescue events",
+      "value": {
+        "events": 198,
+        "civilians_at_least": 1007,
+        "assistance_requests": 64,
+        "entrapments": 82,
+        "medical": 14,
+        "pick_ups": 38,
+        "with_preexisting_condition_at_least": 59
+      },
+      "sources": [
+        "nist2252"
+      ],
+      "locator": "p. xxvii; p. 211",
+      "label": "sourced",
+      "transferability": "high for Camp (outcome check; NIST says the record is a fraction of events)"
+    },
+    "no_vehicle_acs": {
+      "behaviour": "Households with no vehicle",
+      "value": {
+        "butte_2018_2022": 0.0608,
+        "kincade_block_group_mean_car_ownership": 0.961
+      },
+      "sources": [
+        "acs2022",
+        "sun2024"
+      ],
+      "locator": "people_behavior.json `no_vehicle_households_butte`; Sun 2024 Table 1 p. 12",
+      "label": "sourced",
+      "transferability": "high (per-zone ACS is used when the twin has it)"
+    },
+    "help_request_share": {
+      "behaviour": "Share of no-vehicle or assistance-needing households that ask for help",
+      "value": null,
+      "note": "Not found. Grajdura p. 74: at least 7% of Camp respondents needed a stranger's or police vehicle or walked. The 0.5 in sim/gen_residents.py CARLESS_TRANSPORT_REQUEST_SHARE is an assumption and is kept.",
+      "sources": [
+        "grajdura2022"
+      ],
+      "label": "gap",
+      "transferability": "n/a"
+    },
+    "wait_and_see_field_mclennan2019": {
+      "behaviour": "Residents who, before the fire, intended to wait and see; and what they did",
+      "value": {
+        "intended_wait_and_see_mean": 0.17,
+        "of_those_left": "two thirds",
+        "of_those_stayed": "one third",
+        "evacuated_mean": 0.6,
+        "evacuees_who_delayed_mean": 0.21,
+        "defend_planners_who_left_mean": 0.2
+      },
+      "population": "eight Australian field-interview studies, 23 fires, n=1,641 threatened residents (unweighted means)",
+      "sources": [
+        "mclennan2019"
+      ],
+      "locator": "author preprint pp. 16-19, Figs. 2-3",
+      "derivation": "share of order-compliant households that wait for the fire cue = (0.17 x 2/3) / 0.875 = 0.13 (wait-and-see residents who eventually left, over the California compliance share)",
+      "label": "derived",
+      "transferability": "low to medium: actual threatened residents (better than the hypothetical 29%), but under the Australian stay-or-go policy"
+    },
+    "return_attempts_mclennan2019": {
+      "behaviour": "Residents away from home when warned who tried to return before the fire arrived",
+      "value": {
+        "nsw_oct2013": {
+          "not_home_when_warned": 0.58,
+          "tried_to_return": 0.64,
+          "succeeded": 0.8
+        },
+        "perth_hills_jan2014": {
+          "not_at_property": 0.29,
+          "tried_to_return": 0.84,
+          "stopped_at_roadblocks": "3 of 21"
+        }
+      },
+      "reasons": "defend the property, final preparations, livestock or pets, valuables",
+      "sources": [
+        "mclennan2019"
+      ],
+      "locator": "author preprint p. 18 (NSW online survey n=589; Perth Hills interviews n=91)",
+      "label": "sourced",
+      "transferability": "medium: people away from home mostly go back; the model does not track who is away"
+    },
+    "black_summer_response": {
+      "behaviour": "Residents' response when most threatened (actual)",
+      "value": {
+        "left_before_fire": 0.38,
+        "left_when_fire_arrived": 0.06,
+        "stayed_and_defended": 0.2,
+        "began_defending_then_left": 0.08,
+        "stayed_to_defend_fire_did_not_arrive": 0.15,
+        "sheltered_inside_house": 0.04,
+        "sheltered_elsewhere": "<0.01",
+        "not_at_home": 0.07,
+        "first_awareness_official_warning": 0.17,
+        "first_awareness_saw_or_smelled_fire": 0.14
+      },
+      "sources": [
+        "whittaker2021"
+      ],
+      "locator": "p. 12 (response), p. 31 (first awareness); 45% of the tourists who travelled toward a burning area did so to defend property or help family (pp. 12, 69)",
+      "label": "sourced",
+      "transferability": "low for California: defending is policy-endorsed in Australia (43% stayed to defend vs 4% sheltered)"
+    },
+    "black_saturday_late_leaving": {
+      "behaviour": "Black Saturday 2009: stayed to defend / sheltered / left; lateness among leavers",
+      "value": {
+        "stayed_to_defend": 0.53,
+        "sheltered_passively": 0.04,
+        "left": 0.43,
+        "leavers_left_late_or_very_late": 0.54,
+        "within_20_min_of_fire": 0.16,
+        "after_fire_arrived": 0.25
+      },
+      "sources": [
+        "mclennan2019"
+      ],
+      "locator": "author preprint pp. 17-18, quoting Whittaker et al. 2013 (IJWF 22:841-849) p. 845; mail survey n=1,314. Secondary quote: Whittaker 2013 itself not read",
+      "label": "sourced",
+      "transferability": "low (Australian policy, extreme day)"
+    },
+    "fort_mcmurray_prep_time": {
+      "behaviour": "Time spent getting ready to leave",
+      "value": {
+        "none": 0.117,
+        "under_15_min": 0.169,
+        "15_to_60_min": 0.391,
+        "1_to_2_h": 0.166,
+        "over_2_h": 0.086,
+        "difficulty_leaving": 0.527
+      },
+      "population": "Fort McMurray 2016, n=447 (shares sum to 0.929 as published)",
+      "sources": [
+        "mcgee2018"
+      ],
+      "locator": "p. 1157",
+      "label": "sourced",
+      "transferability": "medium: a cross-check of departure_delay only (preparation time, not awareness to departure)",
+      "cross_check": "normalised over the 0.929 who answered: <15 min 0.308, 15-60 min 0.421, 1-2 h 0.179, >2 h 0.093; the grounded delay lognormal gives 0.200, 0.407, 0.189, 0.204 (see docs/people-data.md, Cross-check)"
+    },
+    "fort_mcmurray_awareness": {
+      "behaviour": "How Fort McMurray residents became aware they had to leave",
+      "value": {
+        "saw_it": 0.199,
+        "radio": 0.194,
+        "family": 0.153,
+        "social_media": 0.098,
+        "employer": 0.091,
+        "friend_or_neighbour": 0.079
+      },
+      "sources": [
+        "mcgee2018"
+      ],
+      "locator": "p. 1157",
+      "label": "sourced",
+      "transferability": "medium (single-order urban evacuation of 88,000 people); not used"
+    },
+    "self_evacuation_archetypes": {
+      "behaviour": "Self-evacuation archetypes (decision types, not observed behaviour)",
+      "value": {
+        "parkerville_sampson_flat_n457": {
+          "threat_denier": 0.136,
+          "responsibility_denier": 0.103,
+          "dependent_evacuator": 0.068,
+          "considered_evacuator": 0.173,
+          "community_guided": 0.184,
+          "worried_waverer": 0.133,
+          "experienced_independent": 0.203
+        },
+        "cfa_2018_19_n2042": {
+          "threat_denier": 0.136,
+          "responsibility_denier": 0.048,
+          "dependent_evacuator": 0.185,
+          "considered_evacuator": 0.172,
+          "community_guided": 0.206,
+          "worried_waverer": 0.186,
+          "experienced_independent": 0.066
+        }
+      },
+      "sources": [
+        "cfa2020"
+      ],
+      "locator": "Table 6, p. 48",
+      "label": "sourced",
+      "transferability": "low (Australia; a typology, not rates); not used"
+    },
+    "kincade_delay_after_order_gps": {
+      "behaviour": "Delay of departure after the order or warning for the person's zone (0 if they left before it), median per block group",
+      "value": {
+        "mean_of_block_group_medians_h": 2.684,
+        "sd_h": 3.5,
+        "min_h": 0.0,
+        "max_h": 17.047
+      },
+      "population": "Kincade 2019 GPS, 135 block groups",
+      "sources": [
+        "sun2024"
+      ],
+      "locator": "Table 1 p. 12, Eq. 1 p. 7",
+      "label": "sourced",
+      "transferability": "medium: the only delay measured from the order itself; slow fire with days of notice and night orders. Not drawn (block-group medians, not a household distribution)"
+    }
+  },
+  "profiles": {
+    "legacy": {
+      "description": "Reproduces the model before this file: everyone is told and leaves, 30 min lognormal delay (TrafficParams), no trips, routes from the twin, no pets.",
+      "params": {
+        "first_awareness": {
+          "kind": "categorical",
+          "weights": {
+            "official": 1.0
+          },
+          "label": "legacy"
+        },
+        "official_order_received": {
+          "kind": "bernoulli",
+          "p": 1.0,
+          "label": "legacy"
+        },
+        "phone_alert_reached": {
+          "kind": "by_hour",
+          "default_p": 1.0,
+          "bands": [],
+          "label": "legacy"
+        },
+        "order_compliance": {
+          "kind": "bernoulli",
+          "p": 1.0,
+          "label": "legacy",
+          "note": "sim.demand.EVACUATION_PARTICIPATION"
+        },
+        "shadow_evacuation": {
+          "kind": "bernoulli",
+          "p": 0.0,
+          "label": "legacy"
+        },
+        "stay_mode": {
+          "kind": "categorical",
+          "weights": {
+            "shelter_in_place": 1.0
+          },
+          "label": "legacy"
+        },
+        "wait_and_see_given_compliance": {
+          "kind": "bernoulli",
+          "p": 0.0,
+          "label": "legacy"
+        },
+        "self_initiated_given_evacuate": {
+          "kind": "bernoulli",
+          "p": 0.0,
+          "label": "legacy"
+        },
+        "departure_delay": {
+          "kind": "lognormal",
+          "median_min": 30.0,
+          "sigma": 0.8,
+          "max_min": 360.0,
+          "label": "legacy",
+          "note": "TrafficParams.response_delay_*"
+        },
+        "milling": {
+          "kind": "bernoulli",
+          "p": 0.0,
+          "label": "legacy"
+        },
+        "trip_before_leaving": {
+          "kind": "bernoulli",
+          "p": 0.0,
+          "label": "legacy"
+        },
+        "trip_purpose": {
+          "kind": "categorical",
+          "weights": {
+            "other": 1.0
+          },
+          "label": "legacy"
+        },
+        "route_strategy": {
+          "kind": "categorical",
+          "weights": {
+            "navigation": 1.0
+          },
+          "label": "legacy",
+          "note": "the fixed-delay twin routes every packet by the fastest route"
+        },
+        "reroutes_in_congestion": {
+          "kind": "bernoulli",
+          "p": 0.0,
+          "label": "legacy"
+        },
+        "destination_type": {
+          "kind": "categorical",
+          "weights": {
+            "other": 1.0
+          },
+          "label": "legacy",
+          "note": "the twin sends vehicles to exits, not destination types"
+        },
+        "has_pets": {
+          "kind": "bernoulli",
+          "p": 0.0,
+          "label": "legacy"
+        },
+        "vehicles_taken": {
+          "kind": "categorical",
+          "weights": {
+            "2": 1.0
+          },
+          "label": "legacy",
+          "note": "VEHICLES_TAKEN_CAP, capped by vehicles available"
+        },
+        "needs_assistance": {
+          "kind": "bernoulli",
+          "p": 0.0,
+          "label": "legacy"
+        },
+        "help_request_no_vehicle": {
+          "kind": "bernoulli",
+          "p": 0.5,
+          "label": "legacy",
+          "note": "gen_residents.CARLESS_TRANSPORT_REQUEST_SHARE"
+        },
+        "help_request_needs_assistance": {
+          "kind": "bernoulli",
+          "p": 0.0,
+          "label": "legacy"
+        }
+      }
+    },
+    "grounded": {
+      "description": "Camp-like no-notice fire: Camp values where they exist, else other California fires (Wong 2020, Kincade), else other US fires, else a labelled assumption.",
+      "params": {
+        "first_awareness": {
+          "kind": "categorical",
+          "weights": {
+            "saw_fire": 0.446,
+            "in_person": 0.263,
+            "call_or_text": 0.171,
+            "online": 0.069,
+            "tv_radio": 0.038,
+            "official": 0.013
+          },
+          "label": "sourced",
+          "evidence": [
+            "camp_first_awareness"
+          ]
+        },
+        "official_order_received": {
+          "kind": "bernoulli",
+          "p": 0.19,
+          "label": "sourced",
+          "evidence": [
+            "camp_order_received"
+          ]
+        },
+        "phone_alert_reached": {
+          "kind": "by_hour",
+          "default_p": 0.17,
+          "bands": [
+            {
+              "from_h": 0,
+              "to_h": 7,
+              "p": 0.044
+            },
+            {
+              "from_h": 7,
+              "to_h": 11,
+              "p": 0.182
+            },
+            {
+              "from_h": 11,
+              "to_h": 19,
+              "p": 0.157
+            },
+            {
+              "from_h": 19,
+              "to_h": 24,
+              "p": 0.235
+            }
+          ],
+          "label": "derived",
+          "evidence": [
+            "camp_codered_delivery",
+            "codered_success_by_hour",
+            "phone_alert_reach_by_hour"
+          ]
+        },
+        "order_compliance": {
+          "kind": "bernoulli",
+          "p": 0.875,
+          "label": "sourced",
+          "evidence": [
+            "order_compliance_wong",
+            "evacuation_rate_other_fires"
+          ],
+          "note": "Oct 2017 N. California, as PEOPLE_PRESETS camp_2018_sourced"
+        },
+        "shadow_evacuation": {
+          "kind": "bernoulli",
+          "p": 0.291,
+          "label": "sourced",
+          "evidence": [
+            "shadow_evacuation_wong"
+          ]
+        },
+        "stay_mode": {
+          "kind": "categorical",
+          "weights": {
+            "stay_and_defend": 0.302,
+            "shelter_in_place": 0.698
+          },
+          "label": "derived",
+          "evidence": [
+            "stay_reasons_gatlinburg",
+            "stay_reasons_wong",
+            "black_summer_response",
+            "camp_fatalities_by_activity"
+          ],
+          "note": "defend = Gatlinburg stayers citing property (30.2%, inside Wong's 16.7-36.7%); every other stayer shelters at home. Reasons are select-all, so this treats the property reason as the deciding one"
+        },
+        "wait_and_see_given_compliance": {
+          "kind": "bernoulli",
+          "p": 0.13,
+          "label": "derived",
+          "evidence": [
+            "wait_and_see_field_mclennan2019",
+            "wait_and_see_intent_mclennan",
+            "wait_and_see_states_lovreglio"
+          ],
+          "note": "(0.17 x 2/3) / 0.875; low transferability (Australia). Sensitivity: 0.07 (BehaviorParams.wait_for_fire_share) to 0.33 (McLennan 2014 hypothetical)"
+        },
+        "self_initiated_given_evacuate": {
+          "kind": "bernoulli",
+          "p": 0.423,
+          "label": "derived",
+          "evidence": [
+            "self_initiated_kincade"
+          ]
+        },
+        "departure_delay": {
+          "kind": "lognormal",
+          "median_min": 42.8,
+          "sigma": 1.246,
+          "max_min": 1440.0,
+          "label": "derived",
+          "evidence": [
+            "camp_delay_mean",
+            "marshall_delay_moments",
+            "departure_delay_lognormal",
+            "fort_mcmurray_prep_time"
+          ]
+        },
+        "milling": {
+          "kind": "bernoulli",
+          "p": 0.417,
+          "label": "sourced",
+          "evidence": [
+            "sought_information_wong",
+            "predeparture_actions_gatlinburg"
+          ],
+          "note": "Oct 2017 N. California mandatory-order recipients who sought more information. Time spent is inside departure_delay (not drawn separately)"
+        },
+        "trip_before_leaving": {
+          "kind": "bernoulli",
+          "p": 0.595,
+          "label": "derived",
+          "evidence": [
+            "trips_before_evacuating_wong",
+            "return_attempts_mclennan2019",
+            "predeparture_actions_gatlinburg"
+          ]
+        },
+        "trip_purpose": {
+          "kind": "categorical",
+          "weights": {
+            "family": 0.2086,
+            "others": 0.2518,
+            "pet": 0.1511,
+            "supplies": 0.1367,
+            "other": 0.2518
+          },
+          "label": "sourced",
+          "evidence": [
+            "trip_purpose_marshall"
+          ],
+          "note": "other = Marshall 'other' 6.47% + 'don't know' 18.71%"
+        },
+        "route_strategy": {
+          "kind": "categorical",
+          "weights": {
+            "navigation": 0.189,
+            "familiar": 0.568,
+            "follow_others": 0.243
+          },
+          "label": "assumption",
+          "evidence": [
+            "gps_route_wong",
+            "route_reason"
+          ],
+          "note": "navigation 0.189 is sourced (Wong Oct 2017 used GPS and followed it); the rest is split 0.7 familiar / 0.3 follow others by the herding_prob assumption"
+        },
+        "reroutes_in_congestion": {
+          "kind": "bernoulli",
+          "p": 0.25,
+          "label": "assumption",
+          "evidence": [
+            "congestion_response"
+          ],
+          "note": "no rate published; Kincade comments show some took back roads"
+        },
+        "destination_type": {
+          "kind": "categorical",
+          "weights": {
+            "friends_family": 0.486,
+            "hotel": 0.243,
+            "public_shelter": 0.054,
+            "rv_or_camping": 0.081,
+            "second_home": 0.0,
+            "other": 0.135
+          },
+          "label": "sourced",
+          "evidence": [
+            "destination_wong",
+            "destination_marshall"
+          ],
+          "note": "Wong Oct 2017 N. California; hotel includes Airbnb (2.7%)"
+        },
+        "has_pets": {
+          "kind": "bernoulli",
+          "p": 0.759,
+          "label": "sourced",
+          "evidence": [
+            "pets_share"
+          ]
+        },
+        "vehicles_taken": {
+          "kind": "categorical",
+          "weights": {
+            "1": 0.405,
+            "2": 0.432,
+            "3": 0.135
+          },
+          "label": "sourced",
+          "evidence": [
+            "vehicles_wong"
+          ],
+          "note": "Oct 2017 N. California; 'more than two' drawn as 3; rental/other modes (2.8%) dropped"
+        },
+        "needs_assistance": {
+          "kind": "bernoulli",
+          "p": 0.078,
+          "label": "derived",
+          "evidence": [
+            "needs_assistance_kincade",
+            "disability_households",
+            "camp_assistance_events"
+          ],
+          "note": "15/192 Kincade commenters; below the 14-19% of households with a disability, which is an upper bound"
+        },
+        "help_request_no_vehicle": {
+          "kind": "bernoulli",
+          "p": 0.5,
+          "label": "assumption",
+          "evidence": [
+            "help_request_share"
+          ],
+          "note": "kept from gen_residents.CARLESS_TRANSPORT_REQUEST_SHARE"
+        },
+        "help_request_needs_assistance": {
+          "kind": "bernoulli",
+          "p": 0.5,
+          "label": "assumption",
+          "evidence": [
+            "help_request_share"
+          ]
+        }
+      }
+    }
+  }
+}

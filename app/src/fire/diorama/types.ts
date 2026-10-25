@@ -77,6 +77,8 @@ export interface FireDioramaSceneApi {
   setIgnitions(ignitions: readonly DioramaIgnition[]): void;
   /** Meteorological wind direction (degrees the wind blows FROM) and speed. */
   setWind(fromDegrees: number, speedMph: number): void;
+  /** Show or hide the wind arrow and its label (shown by default; hide when there is no wind input). */
+  setWindVisible(visible: boolean): void;
   /** Tint the ground by fuel family (the page's existing fuel legend colours). */
   setFuelOverlay(visible: boolean): void;
   setClickMode(mode: GroundClickMode): void;

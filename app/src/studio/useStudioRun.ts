@@ -6,7 +6,8 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { loadLandscapeForBox, type LandscapeGrid, type MercatorBox } from "../fire/landscape";
+import { type LandscapeGrid, type MercatorBox } from "../fire/landscape";
+import { loadLandscapeForBoxCached } from "../fire/landscapeCache";
 import { boxContains, landscapeRequirement } from "./bounds";
 import type {
   SolverRequest,
@@ -216,8 +217,8 @@ export function useStudioRun(): StudioRunController {
         error: null,
         progress: null,
       }));
-      loadLandscapeForBox(requirement.box, controller.signal)
-        .then((grid) => {
+      loadLandscapeForBoxCached(requirement.box, controller.signal)
+        .then(({ grid }) => {
           if (controller.signal.aborted || requestId !== requestIdRef.current) return;
           const entry: CachedLandscape = { key: requirement.key, box: requirement.box, grid };
           cacheRef.current = [entry, ...cacheRef.current].slice(0, LANDSCAPE_CACHE_SIZE);

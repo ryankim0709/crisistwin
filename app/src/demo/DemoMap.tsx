@@ -11,7 +11,8 @@ import { LEVEL_COLOR, MAP_COLOR } from "../live/CommandMap";
 import { SATELLITE_STYLE, fireHatch } from "../live/mapStyle";
 import { labelPoint } from "../live/format";
 import type { CommandZone, Destination, LonLat } from "../live/types";
-import { fireRing, teamPosition, type Board, type ZoneForecast } from "./model";
+import { boardFireFeatures, firePolygons } from "./fireFootprint";
+import { teamPosition, type Board, type ZoneForecast } from "./model";
 import "maplibre-gl/dist/maplibre-gl.css";
 import "./map.css";
 
@@ -56,11 +57,6 @@ const lineFeature = (coords: LonLat[], properties: Feature["properties"] = {}): 
   geometry: { type: "LineString", coordinates: coords },
   properties,
 });
-const polygon = (ring: LonLat[], properties: Feature["properties"]): Feature => ({
-  type: "Feature",
-  geometry: { type: "Polygon", coordinates: [ring] },
-  properties,
-});
 
 type ZoneMapState = "overrun" | "ordered" | "threatened" | "quiet";
 
@@ -101,10 +97,9 @@ function buildZones(zones: CommandZone[], board: Board, forecasts: Map<string, Z
 }
 
 function buildFires(board: Board) {
-  const rings: Feature[] = [];
+  const rings = boardFireFeatures(board).features.map((f): Feature => ({ ...f, properties: { ...f.properties } }));
   const labels: Feature[] = [];
   for (const fire of board.fires) {
-    rings.push(polygon(fireRing(fire), { id: fire.id, status: fire.status }));
     labels.push(point(fire.origin, { id: fire.id, text: fire.status === "burning" ? fire.id : `${fire.id} · ${fire.status}`, status: fire.status }));
   }
   return { rings, labels };
@@ -142,7 +137,12 @@ function buildSelection(
   if (!sel) return none;
   if (sel.kind === "fire") {
     const fire = board.fires.find((f) => f.id === sel.id);
-    return fire ? { areas: [polygon(fireRing(fire), { id: fire.id })], points: [point(fire.origin, { id: fire.id })] } : none;
+    return fire
+      ? {
+          areas: firePolygons(board, fire).map((p): Feature => ({ type: "Feature", geometry: p.geometry, properties: { id: fire.id } })),
+          points: [point(fire.origin, { id: fire.id })],
+        }
+      : none;
   }
   if (sel.kind === "zone") {
     const zone = zones.find((z) => z.id === sel.id);

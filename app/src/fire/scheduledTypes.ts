@@ -21,6 +21,7 @@ import type {
   SpottingOptions,
   StructureSpreadOptions,
 } from "./spread";
+import type { StochasticRunSummary } from "./stochastic";
 
 /** Everything a run needs besides where and when fire starts. */
 export type FireSettings = Omit<FireScenario, "origin">;
@@ -107,6 +108,8 @@ export interface ScheduledFireRun {
   crownFire: CrownFireStatus;
   crownFireBreakdown: CrownFireBreakdown;
   midflameWind: MidflameWindSummary;
+  /** Present only on a stochastic run; same meaning as `FireRun.stochastic`. */
+  stochastic?: StochasticRunSummary;
   /** True when fire reached the edge of the modelled area, so the footprint is clipped. */
   reachedEdge: boolean;
   /** Earliest minute fire reached the grid edge, or null. Frames at or after it are clipped. */

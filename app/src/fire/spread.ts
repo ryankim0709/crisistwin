@@ -49,8 +49,11 @@
  * cell, and the loop only selects between them. A cell whose canopy cannot sustain crown
  * fire falls back to its surface rate, and a cell with no canopy is never touched.
  *
- * Nothing here uses randomness, so a scenario plus a landscape reproduces a run exactly
- * and no seed has to be recorded.
+ * Randomness is opt-in (`FireScenario.stochastic`, stochastic.ts). Without it nothing here
+ * uses randomness, so a scenario plus a landscape reproduces a run exactly and no seed has to
+ * be recorded. With it, every draw is a pure function of the seed and the cell or wind step
+ * it belongs to, so the same seed reproduces the same field bit for bit, and the run records
+ * the seed and the resolved options (`FireRun.stochastic`).
  *
  * Times are elapsed simulation-clock minutes from T+0: the single ignition on /fire, the
  * scenario start for `simulateScheduledFireSpread`. Distances inside the solver are
@@ -82,6 +85,28 @@ import {
   type ScheduledFireInput,
   type ScheduledFireRun,
 } from "./scheduledTypes";
+import {
+  FEET_PER_METER,
+  MAX_SPOT_LAUNCHES_PER_RUN,
+  SPOT_CLOSED_CANOPY_COVER_FRACTION,
+  SPOT_LANDING_LOG_SIGMA,
+  SPOT_LANDING_MEDIAN_FRACTION_OF_MAX,
+  STREAM_SPOT_DISTANCE,
+  STREAM_SPOT_IGNITION,
+  STREAM_SPOT_LATERAL,
+  STREAM_SPOT_LAUNCH,
+  albiniSurfaceSpotDistanceMeters,
+  firebrandIgnitionProbability,
+  normalAt,
+  resolveStochastic,
+  rosMultiplierField,
+  spotLaunchProbability,
+  uniformAt,
+  windStepAt,
+  windWanderSeries,
+  type StochasticRunSummary,
+  type StochasticSpreadOptions,
+} from "./stochastic";
 
 export interface GeoPoint {
   latitude: number;
@@ -115,6 +140,12 @@ export interface FireScenario {
    * when omitted.
    */
   structureSpread?: StructureSpreadOptions;
+  /**
+   * Seeded stochastic spread (stochastic.ts): a correlated rate-of-spread field, per-step
+   * wind wander and stochastic ember spotting. Absent or `enabled: false`: the deterministic
+   * solver, output unchanged bit for bit.
+   */
+  stochastic?: StochasticSpreadOptions;
 }
 
 export interface MoisturePreset {
@@ -440,7 +471,7 @@ export const NEIGHBOUR_STENCIL_RADIUS = 8;
 
 export const SPREAD_MODEL = {
   id: "rothermel-1972-mtt",
-  version: "4.1.0",
+  version: "4.2.0",
   surfaceSpread: "Rothermel (1972), per Andrews RMRS-GTR-371 (2018)",
   fuelModels: "Scott & Burgan (2005) 40 standard fire behavior fuel models",
   ellipse:
@@ -457,6 +488,8 @@ export const SPREAD_MODEL = {
     "Assumption: deterministic ember transport across non-burnable gaps downwind, reach scaled by wind and fireline intensity after Albini (1979)",
   structureSpread:
     "Assumption: fixed-rate urban conflagration through FBFM40 91, wind-scaled, Hamada (1951) directionality — not a structure fire model",
+  stochastic:
+    "Opt-in, seeded: lognormal ROS field (sigma after Cruz & Alexander 2013, correlation length assumed); 10-minute wind wander sized from the gust factor (Durst 1960 gust curve, Kaimal & Finnigan 1994 sigma_v/sigma_u); ember spotting below the Albini (1979, 1983) BehavePlus maximum distance with the Schroeder (1969) BehavePlus ignition probability; launch rate and landing-distance shape assumed",
 } as const;
 
 const FEET_PER_MINUTE_PER_MPH = 88;
@@ -583,6 +616,11 @@ export interface FireRun {
   crownFireBreakdown: CrownFireBreakdown;
   /** Which midflame-wind behaviour applied, and the factors it produced. */
   midflameWind: MidflameWindSummary;
+  /**
+   * Present only on a stochastic run (`FireScenario.stochastic.enabled`): the seed and
+   * resolved options, and what the random mechanisms did. Its outputs are simulated.
+   */
+  stochastic?: StochasticRunSummary;
   /** True when fire reached the edge of the modelled area, so the run is truncated. */
   reachedEdge: boolean;
   /** Ground metres per cell, same as `resolution.groundCellSizeMeters`. */
@@ -775,6 +813,32 @@ function eccentricityOf(lengthToBreadth: number): number {
 /** Said verbatim when an ignition point falls off the landscape grid. */
 const OUTSIDE_LANDSCAPE_MESSAGE = "The ignition point is outside the modelled area.";
 
+/**
+ * What the solver derives from one open 20-foot wind (`windStateFor` in `solveSpread`):
+ * one per run, or one per wander step on a stochastic run.
+ */
+interface WindState {
+  speedMph: number;
+  /** Bearing the wind blows TOWARD, degrees clockwise from true north. */
+  windToward: number;
+  windTowardRadians: number;
+  /** Flat-factor midflame wind, feet per minute. */
+  scenarioMidflameWind: number;
+  /** Head rate of burning developed ground, metres per minute. */
+  structureHeadRate: number;
+  /** Deterministic ember reach of burning developed ground, ground metres. */
+  structureSpotReach: number;
+  activeCrownLengthToBreadth: number;
+  activeCrownEccentricity: number;
+  /** Grid step one cell directly downwind (x east, y south). */
+  windStepX: number;
+  windStepY: number;
+  /** Unit vectors of the deterministic spotting rays, grid space. */
+  spotRayX: number[];
+  spotRayY: number[];
+  emberSpeedMetersPerMinute: number;
+}
+
 /** A point fire source as the solver core sees it: where, and from which T+0 minute. */
 interface SolverSource {
   location: GeoPoint;
@@ -797,6 +861,7 @@ type SpreadRunTotals = Pick<
   | "crownFire"
   | "crownFireBreakdown"
   | "midflameWind"
+  | "stochastic"
   | "cellSizeMeters"
 >;
 
@@ -1221,19 +1286,21 @@ function solveSpread(
   const cellCount = width * height;
   const spotting = scenario.spotting ?? DEFAULT_SPOTTING;
   const structureSpread = scenario.structureSpread ?? DEFAULT_STRUCTURE_SPREAD;
+  // Null on a deterministic run; then nothing below draws a random number or changes.
+  const stochastic = resolveStochastic(scenario.stochastic);
 
   // Structures are exposed at roof height, so the open wind drives them directly and no
   // midflame reduction is applied. The scaling is linear in wind and bounded.
-  const structureWindFactor = Math.min(
-    Math.max(
-      scenario.windSpeedMph / STRUCTURE_SPREAD_REFERENCE_WIND_MPH,
-      STRUCTURE_WIND_FACTOR_MIN,
-    ),
-    STRUCTURE_WIND_FACTOR_MAX,
-  );
-  const structureHeadRate = structureSpread.enabled
-    ? Math.max(structureSpread.rateMetersPerMinute, 0) * structureWindFactor
-    : 0;
+  const structureHeadRateAt = (windSpeedMph: number): number => {
+    const structureWindFactor = Math.min(
+      Math.max(windSpeedMph / STRUCTURE_SPREAD_REFERENCE_WIND_MPH, STRUCTURE_WIND_FACTOR_MIN),
+      STRUCTURE_WIND_FACTOR_MAX,
+    );
+    return structureSpread.enabled
+      ? Math.max(structureSpread.rateMetersPerMinute, 0) * structureWindFactor
+      : 0;
+  };
+  const structureHeadRate = structureHeadRateAt(scenario.windSpeedMph);
 
   // Every source is checked and every problem collected before any work is done.
   const sourceCells = sources.map((source) => cellAt(landscape, source.location));
@@ -1274,23 +1341,88 @@ function solveSpread(
       ? "per-cell-canopy"
       : "scenario-default-no-canopy";
   const deriveMidflamePerCell = midflameWindSource === "per-cell-canopy";
-  const scenarioMidflameWind =
-    scenario.windSpeedMph * FEET_PER_MINUTE_PER_MPH * scenario.midflameAdjustment;
-
   // One fuel bed per distinct fuel model present, reused by every cell that uses it.
-  const windToward = (scenario.windFromDegrees + 180) % 360;
-  const windTowardRadians = windToward * RADIANS_PER_DEGREE;
   const beds = new Map<number, ReturnType<typeof prepareFuelBed>>();
   for (const [code, fuel] of FUEL_MODELS) beds.set(code, prepareFuelBed(fuel, scenario.moisture));
 
-  /** Maximum ember reach for a cell of this fireline intensity, ground metres. */
-  const spotReachFor = (firelineIntensity: number): number => {
+  /** Maximum ember reach for a cell of this fireline intensity in this open wind, ground metres. */
+  const spotReachFor = (firelineIntensity: number, windSpeedMph: number): number => {
     if (!spotting.enabled || spotting.maxDistanceMeters <= 0) return 0;
     if (firelineIntensity < SPOTTING_MIN_FIRELINE_INTENSITY_BTU_PER_FOOT_PER_SECOND) return 0;
-    const reach =
-      SPOTTING_DISTANCE_COEFFICIENT * scenario.windSpeedMph * Math.sqrt(firelineIntensity);
+    const reach = SPOTTING_DISTANCE_COEFFICIENT * windSpeedMph * Math.sqrt(firelineIntensity);
     return Math.min(reach, spotting.maxDistanceMeters);
   };
+
+  /**
+   * Everything the solver derives from one open wind. A deterministic run has exactly one,
+   * `baseWind`, built from the scenario's wind. With wind wander every 10-minute step has its
+   * own, and a cell spreads out at the wind of the step it ignites in.
+   */
+  const windStateFor = (windSpeedMph: number, windFromDegrees: number): WindState => {
+    const windToward = (windFromDegrees + 180) % 360;
+    const windTowardRadians = windToward * RADIANS_PER_DEGREE;
+    const activeCrownLengthToBreadth = crownLengthToBreadth(windSpeedMph);
+    return {
+      speedMph: windSpeedMph,
+      windToward,
+      windTowardRadians,
+      scenarioMidflameWind: windSpeedMph * FEET_PER_MINUTE_PER_MPH * scenario.midflameAdjustment,
+      structureHeadRate: structureHeadRateAt(windSpeedMph),
+      structureSpotReach: spotReachFor(
+        STRUCTURE_FIRELINE_INTENSITY_BTU_PER_FOOT_PER_SECOND,
+        windSpeedMph,
+      ),
+      activeCrownLengthToBreadth,
+      activeCrownEccentricity: eccentricityOf(activeCrownLengthToBreadth),
+      // Downwind unit vector in grid space: +x is east, +y is south, so north is -y.
+      windStepX: Math.round(Math.sin(windTowardRadians)),
+      windStepY: Math.round(-Math.cos(windTowardRadians)),
+      spotRayX: SPOTTING_BEARING_OFFSETS_DEGREES.map((offset) =>
+        Math.sin(windTowardRadians + offset * RADIANS_PER_DEGREE),
+      ),
+      spotRayY: SPOTTING_BEARING_OFFSETS_DEGREES.map(
+        (offset) => -Math.cos(windTowardRadians + offset * RADIANS_PER_DEGREE),
+      ),
+      emberSpeedMetersPerMinute:
+        ((windSpeedMph * METERS_PER_MILE) / 60) * SPOTTING_EMBER_SPEED_FRACTION,
+    };
+  };
+  const baseWind = windStateFor(scenario.windSpeedMph, scenario.windFromDegrees);
+  const scenarioMidflameWind = baseWind.scenarioMidflameWind;
+  const windToward = baseWind.windToward;
+
+  // Stochastic inputs (stochastic.ts). All null on a deterministic run.
+  const wander =
+    stochastic && stochastic.windWander
+      ? windWanderSeries(stochastic, scenario.horizonMinutes)
+      : null;
+  const windStates: (WindState | undefined)[] = [];
+  /** Wind state of wander step k, built once per step on first use. */
+  const windStateAtStep = (k: number): WindState => {
+    let state = windStates[k];
+    if (!state) {
+      const from = scenario.windFromDegrees + wander!.directionOffsetDegrees[k];
+      state = windStateFor(
+        scenario.windSpeedMph * wander!.speedFactor[k],
+        ((from % 360) + 360) % 360,
+      );
+      windStates[k] = state;
+    }
+    return state;
+  };
+  const rosField = stochastic
+    ? rosMultiplierField(
+        width,
+        height,
+        groundCellSizeMeters,
+        stochastic.seed,
+        stochastic.rosSigma,
+        stochastic.rosCorrelationMeters,
+      )
+    : null;
+  const stochasticSpotting = stochastic !== null && stochastic.spotting && spotting.enabled;
+  /** Surface fireline intensity per cell (after the ROS field), Btu/ft/s; stochastic spotting only. */
+  const spotIntensity = stochasticSpotting ? new Float32Array(cellCount) : null;
 
   // Per-cell spread: metres per minute at the head, heading, ellipse eccentricity, a
   // floor on the directional rate, and how far this cell can throw a firebrand.
@@ -1324,7 +1456,6 @@ function solveSpread(
    */
   const sustainedCrownRateMetersPerMinute = new Float32Array(cellCount);
   const structureEccentricity = eccentricityOf(STRUCTURE_LENGTH_TO_BREADTH);
-  const structureSpotReach = spotReachFor(STRUCTURE_FIRELINE_INTENSITY_BTU_PER_FOOT_PER_SECOND);
 
   // One mutable canopy record, rewritten per cell rather than allocated per cell: a
   // 600 x 600 grid would otherwise make 360,000 short-lived objects in the precompute.
@@ -1335,8 +1466,7 @@ function solveSpread(
     coverFraction: 0,
     heightMeters: 0,
   };
-  const activeCrownLengthToBreadth = crownLengthToBreadth(scenario.windSpeedMph);
-  const activeCrownEccentricity = eccentricityOf(activeCrownLengthToBreadth);
+  const activeCrownLengthToBreadth = baseWind.activeCrownLengthToBreadth;
   let midflameSum = 0;
   let midflameMin = Number.POSITIVE_INFINITY;
   let midflameMax = 0;
@@ -1348,24 +1478,38 @@ function solveSpread(
 
   let burnableCells = 0;
   let developedCells = 0;
-  for (let i = 0; i < cellCount; i++) {
+  /**
+   * Fills cell i's spread arrays at wind `w`. `initial` is the one precompute pass at the
+   * scenario's wind, which also does the run's bookkeeping; with wind wander the relaxation
+   * loop calls it again (`initial` false) when the cell ignites, at that step's wind, and
+   * the call then only rewrites the cell's own arrays.
+   */
+  const computeCell = (i: number, w: WindState, initial: boolean): void => {
     const code = fuelCodes[i];
     if (code === DEVELOPED_FUEL_CODE) {
-      developedCells++;
-      if (structureHeadRate <= 0) continue;
-      headRate[i] = structureHeadRate;
-      headingRadians[i] = windTowardRadians;
+      if (initial) developedCells++;
+      if (w.structureHeadRate <= 0) return;
+      headRate[i] = w.structureHeadRate;
+      headingRadians[i] = w.windTowardRadians;
       eccentricity[i] = structureEccentricity;
-      minDirectionalRate[i] = structureHeadRate * STRUCTURE_BACKING_RATE_FRACTION;
-      spotReach[i] = structureSpotReach;
+      minDirectionalRate[i] = w.structureHeadRate * STRUCTURE_BACKING_RATE_FRACTION;
+      spotReach[i] = w.structureSpotReach;
       headFlameFeet[i] = STRUCTURE_FLAME_LENGTH_FEET;
-      continue;
+      if (spotIntensity) spotIntensity[i] = STRUCTURE_FIRELINE_INTENSITY_BTU_PER_FOOT_PER_SECOND;
+      return;
     }
     const bed = beds.get(code);
     const fuel = FUEL_MODELS.get(code);
-    if (!bed || !fuel) continue;
-    burnableCells++;
-    vegetated[i] = 1;
+    if (!bed || !fuel) return;
+    if (initial) {
+      burnableCells++;
+      vegetated[i] = 1;
+    } else {
+      // A recompute starts from a clean crown state; the precompute's arrays start zeroed.
+      crownType[i] = CROWN_SURFACE;
+      canSustainCrown[i] = 0;
+      sustainedCrownRateMetersPerMinute[i] = 0;
+    }
 
     canopy.baseHeightMeters = landscape.canopyBaseHeightMeters[i];
     canopy.bulkDensityKgPerM3 = landscape.canopyBulkDensityKgPerM3[i];
@@ -1378,14 +1522,16 @@ function solveSpread(
       ? windAdjustmentFactor(canopy, fuel.depthFeet)
       : scenario.midflameAdjustment;
     const midflameWind = deriveMidflamePerCell
-      ? scenario.windSpeedMph * FEET_PER_MINUTE_PER_MPH * midflameAdjustment
-      : scenarioMidflameWind;
-    midflameSum += midflameAdjustment;
-    if (midflameAdjustment < midflameMin) midflameMin = midflameAdjustment;
-    if (midflameAdjustment > midflameMax) midflameMax = midflameAdjustment;
-    midflameCells++;
+      ? w.speedMph * FEET_PER_MINUTE_PER_MPH * midflameAdjustment
+      : w.scenarioMidflameWind;
+    if (initial) {
+      midflameSum += midflameAdjustment;
+      if (midflameAdjustment < midflameMin) midflameMin = midflameAdjustment;
+      if (midflameAdjustment > midflameMax) midflameMax = midflameAdjustment;
+      midflameCells++;
+    }
 
-    const spread = spreadFromBed(bed, midflameWind, windToward, slopeTangent[i], upslopeDegrees[i]);
+    const spread = spreadFromBed(bed, midflameWind, w.windToward, slopeTangent[i], upslopeDegrees[i]);
     const surfaceRateMetersPerMinute = spread.headRateFeetPerMinute * METERS_PER_FOOT;
     let rateMetersPerMinute = surfaceRateMetersPerMinute;
     let cellEccentricity = eccentricityOf(spread.lengthToBreadth);
@@ -1397,10 +1543,10 @@ function solveSpread(
         surfaceRateMetersPerMinute,
         spread.firelineIntensityBtuPerFootPerSecond * KW_PER_METER_PER_BTU_PER_FOOT_PER_SECOND,
         canopy,
-        scenario.windSpeedMph,
+        w.speedMph,
         scenario.moisture.dead1h,
       );
-      if (isSourceCell[i]) sourceCrown.set(i, crown);
+      if (initial && isSourceCell[i]) sourceCrown.set(i, crown);
       if (crown.type !== "surface") {
         crownType[i] = crown.type === "active" ? CROWN_ACTIVE : CROWN_PASSIVE;
         // A crown fire is driven by the surface fire beneath it, so it cannot be slower
@@ -1410,27 +1556,23 @@ function solveSpread(
         rateMetersPerMinute = Number.isFinite(crown.rateMetersPerMinute)
           ? Math.max(surfaceRateMetersPerMinute, crown.rateMetersPerMinute)
           : surfaceRateMetersPerMinute;
-        if (crown.type === "active") cellEccentricity = activeCrownEccentricity;
+        if (crown.type === "active") cellEccentricity = w.activeCrownEccentricity;
       }
 
       // Reason (b), stored but not selected here. This is a property of the canopy and
       // the weather alone (Van Wagner's critical mass flow criterion), independent of
       // whether THIS cell's own surface fire is intense enough to initiate crowning, so
       // it is computed unconditionally rather than only when `crown.type !== "surface"`.
-      if (canSustainActiveCrown(canopy, scenario.windSpeedMph, scenario.moisture.dead1h)) {
+      if (canSustainActiveCrown(canopy, w.speedMph, scenario.moisture.dead1h)) {
         canSustainCrown[i] = 1;
         sustainedCrownRateMetersPerMinute[i] = Math.max(
           surfaceRateMetersPerMinute,
-          activeCrownRateMetersPerMinute(
-            scenario.windSpeedMph,
-            canopy.bulkDensityKgPerM3,
-            scenario.moisture.dead1h,
-          ),
+          activeCrownRateMetersPerMinute(w.speedMph, canopy.bulkDensityKgPerM3, scenario.moisture.dead1h),
         );
       }
     }
 
-    if (isSourceCell[i]) {
+    if (initial && isSourceCell[i]) {
       sourceSpread.set(i, spread);
       sourceMidflameAdjustment.set(i, midflameAdjustment);
     }
@@ -1461,9 +1603,25 @@ function solveSpread(
     // on non-crowning fires would manufacture that reach rather than model it, so this
     // model still understates spotting wherever it is now predicting crown fire. That is
     // a known conservative simplification, not an oversight.
-    spotReach[i] = spotReachFor(spread.firelineIntensityBtuPerFootPerSecond);
+    let surfaceIntensity = spread.firelineIntensityBtuPerFootPerSecond;
     headFlameFeet[i] = spread.flameLengthFeet;
-  }
+    if (rosField) {
+      // Stochastic rate field (stochastic.ts `rosMultiplierField`): one multiplier scales
+      // every directional rate of the cell, so the ellipse keeps its shape. Fireline
+      // intensity is proportional to rate for a given fuel consumption (Byram 1959), so
+      // intensity scales with it and flame length with its 0.46 power. Crown
+      // classification above stays on the unperturbed surface fire.
+      const m = rosField[i];
+      headRate[i] *= m;
+      minDirectionalRate[i] *= m;
+      sustainedCrownRateMetersPerMinute[i] *= m;
+      surfaceIntensity *= m;
+      headFlameFeet[i] *= Math.pow(m, BYRAM_FLAME_EXPONENT);
+    }
+    spotReach[i] = spotReachFor(surfaceIntensity, w.speedMph);
+    if (spotIntensity) spotIntensity[i] = surfaceIntensity;
+  };
+  for (let i = 0; i < cellCount; i++) computeCell(i, baseWind, true);
 
   const arrival = new Float64Array(cellCount).fill(Number.POSITIVE_INFINITY);
   const arrivalMechanism = new Uint8Array(cellCount);
@@ -1592,22 +1750,26 @@ function solveSpread(
     return false;
   };
 
-  // Downwind unit vector in grid space: +x is east, +y is south, so north is -y.
-  const windStepX = Math.round(Math.sin(windTowardRadians));
-  const windStepY = Math.round(-Math.cos(windTowardRadians));
-  const spotRayX = SPOTTING_BEARING_OFFSETS_DEGREES.map((offset) =>
-    Math.sin(windTowardRadians + offset * RADIANS_PER_DEGREE),
-  );
-  const spotRayY = SPOTTING_BEARING_OFFSETS_DEGREES.map(
-    (offset) => -Math.cos(windTowardRadians + offset * RADIANS_PER_DEGREE),
-  );
-  const emberSpeedMetersPerMinute =
-    ((scenario.windSpeedMph * METERS_PER_MILE) / 60) * SPOTTING_EMBER_SPEED_FRACTION;
-  const spottingActive = spotting.enabled && emberSpeedMetersPerMinute > 0;
+  // Ember directions and speed live on the wind state (`windStateFor`): the scenario's on a
+  // deterministic run, the ignition step's under wind wander.
+  const spottingActive = spotting.enabled && baseWind.emberSpeedMetersPerMinute > 0;
   const maxSpotCells = Math.min(
     SPOTTING_MAX_PATH_CELLS,
     Math.floor(Math.max(spotting.maxDistanceMeters, 0) / groundCellSizeMeters),
   );
+
+  // Stochastic spotting (stochastic.ts). A firebrand flies no further than the scenario's
+  // spotting ceiling or the solver's path bound, the same limits deterministic spotting has.
+  const stochasticSpotCeilingMeters = Math.min(
+    Math.max(spotting.maxDistanceMeters, 0),
+    SPOTTING_MAX_PATH_CELLS * groundCellSizeMeters,
+  );
+  const spotLaunchChance = spotLaunchProbability(groundCellSizeMeters);
+  const spotLateralSigmaRadians = stochastic
+    ? stochastic.directionSigmaDegrees * RADIANS_PER_DEGREE
+    : 0;
+  let spotLaunches = 0;
+  let spotIgnitions = 0;
 
   /**
    * Arrival over a step that leaves a fixed (resumed) cell, progress preserved (`ResumeFrom`):
@@ -1654,6 +1816,80 @@ function solveSpread(
     return noArrivalBefore + (1 - Math.min(1, Math.max(0, done))) * newSpotMinutes;
   };
 
+  /**
+   * Stochastic ember spotting from a cell that has just ignited (stochastic.ts). Unlike the
+   * deterministic gap-crossing rule below, a firebrand here may land in continuous fuel
+   * ahead of the front: that is the mechanism by which real fires jump ahead of themselves.
+   * Every draw is keyed on the launching cell, so a resumed solve repeats it exactly.
+   *
+   *   1. Launch: surface intensity at least `SPOTTING_MIN_FIRELINE_INTENSITY_...` and one
+   *      firebrand with probability `spotLaunchProbability(cell width)` (an assumption).
+   *   2. Distance: lognormal (Sardoy et al. 2008 form), median a quarter of the Albini /
+   *      BehavePlus maximum surface-fire spotting distance at this step's 20-ft wind;
+   *      draws past that maximum or past the spotting ceiling start nothing.
+   *   3. Direction: downwind at this step's wind, plus a lateral offset with the turbulence
+   *      direction standard deviation.
+   *   4. Ignition: only vegetated, still-unburned fuel outside built line, with the
+   *      Schroeder / BehavePlus probability of ignition from 1-h moisture, the assumed air
+   *      temperature and the landing cell's canopy cover as shade.
+   *   5. Arrival: flight at the ember speed plus `SPOTTING_IGNITION_DELAY_MINUTES`, the same
+   *      timing deterministic spotting uses.
+   */
+  const launchStochasticSpot = (
+    cell: number,
+    x: number,
+    y: number,
+    time: number,
+    fixed: number,
+    w: WindState,
+  ): void => {
+    const intensity = spotIntensity![cell];
+    if (intensity < SPOTTING_MIN_FIRELINE_INTENSITY_BTU_PER_FOOT_PER_SECOND) return;
+    if (spotLaunches >= MAX_SPOT_LAUNCHES_PER_RUN) return;
+    const seed = stochastic!.seed;
+    if (uniformAt(seed, STREAM_SPOT_LAUNCH, cell) >= spotLaunchChance) return;
+    spotLaunches++;
+    const maxMeters = albiniSurfaceSpotDistanceMeters(
+      intensity,
+      w.speedMph,
+      landscape.canopyHeightMeters[cell] * FEET_PER_METER,
+      landscape.canopyCoverFraction[cell] >= SPOT_CLOSED_CANOPY_COVER_FRACTION,
+    );
+    if (!(maxMeters > 0)) return;
+    const distance =
+      maxMeters *
+      SPOT_LANDING_MEDIAN_FRACTION_OF_MAX *
+      Math.exp(SPOT_LANDING_LOG_SIGMA * normalAt(seed, STREAM_SPOT_DISTANCE, cell));
+    if (distance > maxMeters || distance > stochasticSpotCeilingMeters) return;
+    const bearing =
+      w.windTowardRadians + spotLateralSigmaRadians * normalAt(seed, STREAM_SPOT_LATERAL, cell);
+    const sx = x + Math.round((Math.sin(bearing) * distance) / groundCellSizeMeters);
+    const sy = y + Math.round((-Math.cos(bearing) * distance) / groundCellSizeMeters);
+    if (sx < 0 || sy < 0 || sx >= width || sy >= height) return;
+    const target = sy * width + sx;
+    if (target === cell || vegetated[target] === 0 || settled[target] || headRate[target] <= 0) {
+      return;
+    }
+    const ignitionProbability = firebrandIgnitionProbability(
+      scenario.moisture.dead1h,
+      stochastic!.airTemperatureF,
+      landscape.canopyCoverFraction[target],
+    );
+    if (uniformAt(seed, STREAM_SPOT_IGNITION, cell) >= ignitionProbability) return;
+    const spotMinutes = distance / w.emberSpeedMetersPerMinute + SPOTTING_IGNITION_DELAY_MINUTES;
+    const candidate =
+      fixed === 0 ? time + spotMinutes : resumedSpotArrival(time, spotMinutes, distance);
+    if (holdFrom && holdFrom[target] <= candidate) return;
+    if (candidate < arrival[target]) {
+      arrival[target] = candidate;
+      arrivalMechanism[target] = ARRIVAL_SPOTTING;
+      firstSource[target] = firstSource[cell];
+      arrivedFromActiveCrown[target] = 0;
+      heap.push(candidate, target);
+      spotIgnitions++;
+    }
+  };
+
   let reachedEdge = false;
   let reachedEdgeMinute: number | null = null;
 
@@ -1679,6 +1915,17 @@ function solveSpread(
     settledOrder[settledCount++] = cell;
     if (fixed === FIXED_INERT) continue;
 
+    // Wind wander: a cell spreads out at the wind of the 10-minute step it ignites in, so
+    // its rate, heading, shape and crown state are recomputed here at that wind. Only the
+    // cell's outgoing behaviour changes; its arrival is final. Dijkstra stays exact for the
+    // field it builds, because every step still costs a non-negative time from the moment
+    // its source cell settles.
+    let w = baseWind;
+    if (wander) {
+      w = windStateAtStep(windStepAt(wander, time));
+      computeCell(cell, w, false);
+    }
+
     // Select this cell's outgoing crown state exactly once, right here at settle time:
     // self-initiated (already in `headRate`/`eccentricity`/`crownType` from the
     // precompute) unless an active crown fire arrived from outside AND this cell's own
@@ -1688,7 +1935,7 @@ function solveSpread(
     // after this point can change that cell's outgoing rate again.
     if (canSustainCrown[cell] === 1 && arrivedFromActiveCrown[cell] === 1) {
       headRate[cell] = Math.max(headRate[cell], sustainedCrownRateMetersPerMinute[cell]);
-      eccentricity[cell] = activeCrownEccentricity;
+      eccentricity[cell] = w.activeCrownEccentricity;
       crownType[cell] = CROWN_ACTIVE;
     }
 
@@ -1764,6 +2011,8 @@ function solveSpread(
       }
     }
 
+    if (stochasticSpotting) launchStochasticSpot(cell, x, y, time, fixed, w);
+
     // Ember spotting, deliberately scoped to crossing unvegetated ground. A cell launches
     // only when the ground one step directly downwind holds no fuel model — a street, a
     // subdivision, a parking lot, a field, a river — and a ray ignites only the first
@@ -1773,15 +2022,15 @@ function solveSpread(
     // would inflate the head rate past anything the surface model supports.
     const reach = spotReach[cell];
     if (!spottingActive || reach <= 0 || maxSpotCells < 2) continue;
-    const gapX = x + windStepX;
-    const gapY = y + windStepY;
+    const gapX = x + w.windStepX;
+    const gapY = y + w.windStepY;
     if (gapX < 0 || gapY < 0 || gapX >= width || gapY >= height) continue;
     if (vegetated[gapY * width + gapX] === 1) continue;
 
     const rayCells = Math.min(maxSpotCells, Math.floor(reach / groundCellSizeMeters));
-    for (let r = 0; r < spotRayX.length; r++) {
-      const ux = spotRayX[r];
-      const uy = spotRayY[r];
+    for (let r = 0; r < w.spotRayX.length; r++) {
+      const ux = w.spotRayX[r];
+      const uy = w.spotRayY[r];
       let crossedGap = false;
       for (let step = 1; step <= rayCells; step++) {
         const sx = x + Math.round(ux * step);
@@ -1797,7 +2046,7 @@ function solveSpread(
         if (!crossedGap || settled[target] || headRate[target] <= 0) break;
         const flightMeters = step * groundCellSizeMeters;
         const spotMinutes =
-          flightMeters / emberSpeedMetersPerMinute + SPOTTING_IGNITION_DELAY_MINUTES;
+          flightMeters / w.emberSpeedMetersPerMinute + SPOTTING_IGNITION_DELAY_MINUTES;
         const candidate =
           fixed === 0
             ? time + spotMinutes
@@ -1904,6 +2153,23 @@ function solveSpread(
       appliedMinAdjustment: midflameCells > 0 ? midflameMin : 0,
       appliedMaxAdjustment: midflameCells > 0 ? midflameMax : 0,
     },
+    ...(stochastic
+      ? {
+          stochastic: {
+            evidence: "simulated",
+            applied: stochastic,
+            spotLaunches,
+            spotIgnitions,
+            spotLaunchCapReached: spotLaunches >= MAX_SPOT_LAUNCHES_PER_RUN,
+            windSpeedFactorRange: wander
+              ? [Math.min(...wander.speedFactor), Math.max(...wander.speedFactor)]
+              : [1, 1],
+            windDirectionOffsetRangeDegrees: wander
+              ? [Math.min(...wander.directionOffsetDegrees), Math.max(...wander.directionOffsetDegrees)]
+              : [0, 0],
+          } satisfies StochasticRunSummary,
+        }
+      : {}),
     cellSizeMeters: groundCellSizeMeters,
   };
 

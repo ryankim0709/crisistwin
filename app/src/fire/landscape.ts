@@ -74,11 +74,13 @@ const MERCATOR_ORIGIN_SHIFT = EARTH_CIRCUMFERENCE_METERS / 2;
 const RADIANS_PER_DEGREE = Math.PI / 180;
 
 /**
- * Same-origin path, proxied to https://edcintl.cr.usgs.gov/geoserver/landfire by the Vite
- * dev server and by Nginx in the built image. The upstream advertises permissive CORS but
- * browser requests to it still fail, so the proxy is required, not a convenience.
+ * Same-origin path of the backend's read-through cache (app/backend/api/geo_cache.py): it
+ * forwards the WCS query to LANDFIRE and keeps each answer in MongoDB, so a repeat load of
+ * an area reads the stored bytes. The upstream advertises permissive CORS but browser
+ * requests to it still fail, so a same-origin proxy is required, not a convenience. The Vite
+ * dev proxy `/landfire/wcs` (app/vite.config.ts) still works as an uncached alternative.
  */
-export const LANDFIRE_WCS_URL = "/landfire/wcs";
+export const LANDFIRE_WCS_URL = "/api/geo/landfire/wcs";
 /** The service the proxy forwards to, for callers outside the browser (Node build tools). */
 export const LANDFIRE_UPSTREAM_WCS_URL = "https://edcintl.cr.usgs.gov/geoserver/landfire/wcs";
 /**
@@ -103,7 +105,10 @@ export const LANDFIRE_CANOPY_COVERAGES = {
 } as const;
 export const LANDFIRE_CANOPY_ATTRIBUTION =
   "LANDFIRE 2025 (LF2025) forest canopy base height, bulk density, cover and height, USGS/USDA";
-export const TERRAIN_TILE_URL = "https://s3.amazonaws.com/elevation-tiles-prod/terrarium";
+/** Terrarium tile root served (and cached in MongoDB) by the backend, `{root}/{z}/{x}/{y}.png`. */
+export const TERRAIN_TILE_URL = "/api/geo/terrarium";
+/** The public bucket behind it, for callers outside the browser (Node build tools). */
+export const TERRAIN_UPSTREAM_TILE_URL = "https://s3.amazonaws.com/elevation-tiles-prod/terrarium";
 export const TERRAIN_ATTRIBUTION =
   "Terrain tiles hosted by AWS Open Data, derived from USGS 3DEP and other public sources";
 /** Terrarium zoom level whose pixels are near the 30 m LANDFIRE cell size. */
@@ -112,12 +117,12 @@ const TILE_SIZE = 256;
 
 /**
  * Where the loader fetches from. Every field is optional and the defaults are the browser
- * path: the same-origin LANDFIRE proxy, the public terrain bucket, `globalThis.fetch`, and
- * no extra headers. A Node caller (no Vite proxy) passes `LANDFIRE_UPSTREAM_WCS_URL` and
- * `LANDFIRE_USER_AGENT`.
+ * path: the same-origin cached LANDFIRE and terrain endpoints, `globalThis.fetch`, and
+ * no extra headers. A Node caller (no Vite proxy) passes `LANDFIRE_UPSTREAM_WCS_URL`,
+ * `TERRAIN_UPSTREAM_TILE_URL` and `LANDFIRE_USER_AGENT`.
  */
 export interface LandscapeEndpoints {
-  /** LANDFIRE GeoServer WCS endpoint. Default `LANDFIRE_WCS_URL` ("/landfire/wcs"). */
+  /** LANDFIRE GeoServer WCS endpoint. Default `LANDFIRE_WCS_URL` ("/api/geo/landfire/wcs"). */
   landfireWcsUrl?: string;
   /** Terrarium tile root, `{root}/{z}/{x}/{y}.png`. Default `TERRAIN_TILE_URL`. */
   terrainTileUrl?: string;
@@ -979,7 +984,11 @@ async function fetchTerrainTile(
 
 /** Concurrent terrain tile downloads; a different host from LANDFIRE. */
 const MAX_PARALLEL_TILE_REQUESTS = 6;
-/** Refuse a lattice that would need more terrain tiles than this, rather than download them. */
+/**
+ * A lattice that would need more terrain tiles than this at the requested zoom is read at a
+ * coarser zoom instead (each step down quarters the count), never refused: a 60 km board
+ * stays within a few dozen tiles at the zoom its coarse cells need.
+ */
 const MAX_TERRAIN_TILES = 256;
 
 /** A grid's cells as Mercator edges and signed cell sizes; y decreases down the grid. */
@@ -1020,24 +1029,30 @@ function terrainZoomFor(mercatorCellMeters: number): number {
  */
 async function sampleElevation(
   lattice: Lattice,
-  zoom: number,
+  startZoom: number,
   average: boolean,
   signal: AbortSignal,
   source: DataSource,
 ): Promise<{ elevation: Float32Array; complete: boolean; tileCount: number }> {
+  let zoom = startZoom;
   const { width, height, westX, northY, cellX, cellY } = lattice;
-  const tileSpan = EARTH_CIRCUMFERENCE_METERS / 2 ** zoom;
-  const pixelSpan = tileSpan / TILE_SIZE;
   const eastX = westX + width * cellX;
   const southY = northY + height * cellY;
-  const minTx = Math.floor((westX + MERCATOR_ORIGIN_SHIFT) / tileSpan);
-  const maxTx = Math.floor((eastX + MERCATOR_ORIGIN_SHIFT) / tileSpan);
-  const minTy = Math.floor((MERCATOR_ORIGIN_SHIFT - northY) / tileSpan);
-  const maxTy = Math.floor((MERCATOR_ORIGIN_SHIFT - southY) / tileSpan);
-  const tileCount = (maxTx - minTx + 1) * (maxTy - minTy + 1);
-  if (tileCount > MAX_TERRAIN_TILES) {
-    throw new Error(`The area needs ${tileCount} terrain tiles at zoom ${zoom}; refusing.`);
+  const tileRange = (z: number) => {
+    const span = EARTH_CIRCUMFERENCE_METERS / 2 ** z;
+    const minTx = Math.floor((westX + MERCATOR_ORIGIN_SHIFT) / span);
+    const maxTx = Math.floor((eastX + MERCATOR_ORIGIN_SHIFT) / span);
+    const minTy = Math.floor((MERCATOR_ORIGIN_SHIFT - northY) / span);
+    const maxTy = Math.floor((MERCATOR_ORIGIN_SHIFT - southY) / span);
+    return { span, minTx, maxTx, minTy, maxTy, count: (maxTx - minTx + 1) * (maxTy - minTy + 1) };
+  };
+  let range = tileRange(zoom);
+  while (range.count > MAX_TERRAIN_TILES && zoom > 0) {
+    zoom -= 1;
+    range = tileRange(zoom);
   }
+  const { span: tileSpan, minTx, maxTx, minTy, maxTy, count: tileCount } = range;
+  const pixelSpan = tileSpan / TILE_SIZE;
 
   const keys: [number, number][] = [];
   for (let tx = minTx; tx <= maxTx; tx++) {

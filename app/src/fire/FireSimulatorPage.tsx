@@ -25,7 +25,9 @@ import {
   fetchRegionLandscape,
 } from "./landscapePackage";
 import { DEFAULT_REGION_ID, CALIFORNIA_REGIONS, REGION_AREAS } from "./regions";
-import { landscapeCellMetersFor, loadLandscape, type LandscapeGrid } from "./landscape";
+import { boardCellMetersFor } from "./boardSize";
+import { type LandscapeGrid } from "./landscape";
+import { loadLandscapeCached } from "./landscapeCache";
 import type { FuelMoisture } from "./rothermel";
 import {
   DEFAULT_MIDFLAME_ADJUSTMENT,
@@ -49,12 +51,22 @@ import {
 import { fetchNwsWind, type NwsWindReading } from "./weather";
 import type { ScenarioWindRecord } from "./scenarioWeather";
 import WindSourcePicker from "./ui/WindSourcePicker";
+import NaturalVariationControl, {
+  DEFAULT_VARIATION_SEED,
+  observedGustFactor,
+} from "./ui/NaturalVariationControl";
+import { MAX_ENSEMBLE_MEMBERS } from "./ensemble";
+import { useBurnProbability } from "./useBurnProbability";
+import type { StochasticSpreadOptions } from "./stochastic";
+import type { ScheduledFireInput } from "./scheduledTypes";
 import {
   Button,
   EvidenceTag,
   Facts,
   IconButton,
+  Legend,
   LoadingState,
+  ProgressBar,
   Notice,
   Panel,
   SegmentedControl,
@@ -62,6 +74,8 @@ import {
   type SegmentedOption,
 } from "../ui";
 import { useBoardStreets } from "./useBoardStreets";
+import HistoricalFireDiorama from "../historical/HistoricalFireDiorama";
+import { useHistoricalFireIndex } from "../historical/data";
 import "./fire.css";
 
 const REDUCED_MOTION_QUERY = "(prefers-reduced-motion: reduce)";
@@ -73,6 +87,9 @@ const PHONE_STAGE_MAX_WIDTH_PX = 720;
 const SPACE_OWNERS =
   "button, a[href], select, textarea, summary, [contenteditable], input:not([type='range'])";
 const MAX_WIND_SPEED_MPH = 60;
+const MIN_ENSEMBLE_MEMBERS = 10;
+const MAX_UI_ENSEMBLE_MEMBERS = Math.min(50, MAX_ENSEMBLE_MEMBERS);
+const DEFAULT_ENSEMBLE_MEMBERS = 20;
 /** From this horizon on, constant weather is a material caveat. */
 const LONG_HORIZON_MINUTES = 720;
 /** LANDFIRE's native cell size; anything coarser is disclosed next to the area. */
@@ -144,6 +161,7 @@ function formatDistance(meters: number): string {
 /** Where the board's data came from, shown next to the area. */
 type Provenance =
   | { kind: "stored"; builtAt: string; cellMeters: number }
+  | { kind: "cached"; builtAt: string; cellMeters: number }
   | { kind: "live"; storedUnavailable: boolean };
 
 /** A stored SoCal region, or a custom area loaded live. */
@@ -223,6 +241,10 @@ export default function FireSimulatorPage() {
   const [catalog, setCatalog] = useState<CatalogState>({ status: "loading" });
   const [areaSize, setAreaSize] = useState<AreaSizeId>(DEFAULT_AREA_SIZE);
   const [areaPickerOpen, setAreaPickerOpen] = useState(false);
+  // A real fire opened from the region picker replaces the stage (app/src/historical).
+  const [historicalFireId, setHistoricalFireId] = useState<string | null>(null);
+  const historicalOpen = historicalFireId !== null;
+  const historicalIndex = useHistoricalFireIndex();
   const [origin, setOrigin] = useState<GeoPoint | null>(null);
   const [windSpeedMph, setWindSpeedMph] = useState(DEFAULT_WIND_SPEED_MPH);
   const [windFromDegrees, setWindFromDegrees] = useState(45);
@@ -231,6 +253,11 @@ export default function FireSimulatorPage() {
   const midflameAdjustment = DEFAULT_MIDFLAME_ADJUSTMENT;
   const [spottingEnabled, setSpottingEnabled] = useState(true);
   const spottingDistanceMeters = DEFAULT_SPOTTING.maxDistanceMeters;
+  // Natural variation (seeded stochastic spread). Absent = deterministic, as before.
+  const [variation, setVariation] = useState<StochasticSpreadOptions | undefined>(undefined);
+  const [ensembleMembers, setEnsembleMembers] = useState(DEFAULT_ENSEMBLE_MEMBERS);
+  const [showProbability, setShowProbability] = useState(true);
+  const burn = useBurnProbability();
   const [structureSpreadEnabled, setStructureSpreadEnabled] = useState(true);
   const structureSpreadRate = DEFAULT_STRUCTURE_SPREAD.rateMetersPerMinute;
   const horizonMinutes = FIRE_HORIZON_MINUTES;
@@ -270,7 +297,7 @@ export default function FireSimulatorPage() {
   const radiusMeters = region
     ? region.radiusMeters
     : effectiveRadiusMeters(horizonMinutes, areaSize);
-  const requestedCellMeters = region ? region.cellMeters : landscapeCellMetersFor(radiusMeters);
+  const requestedCellMeters = region ? region.cellMeters : boardCellMetersFor(radiusMeters);
   const centerLatitude = region ? region.center.latitude : areaCenter.latitude;
   const centerLongitude = region ? region.center.longitude : areaCenter.longitude;
 
@@ -303,10 +330,16 @@ export default function FireSimulatorPage() {
       setLandscape({ status: "ready", grid, provenance });
     };
     const live = (storedUnavailable: boolean) =>
-      loadLandscape(centerLongitude, centerLatitude, radiusMeters, controller.signal, {
+      loadLandscapeCached(centerLongitude, centerLatitude, radiusMeters, controller.signal, {
         cellMeters: requestedCellMeters,
-      }).then((grid) => {
-        if (!stale()) finish(grid, { kind: "live", storedUnavailable });
+      }).then(({ grid, source, cachedAt }) => {
+        if (stale()) return;
+        finish(
+          grid,
+          source === "cache"
+            ? { kind: "cached", builtAt: cachedAt ?? "", cellMeters: grid.cellMeters }
+            : { kind: "live", storedUnavailable },
+        );
       });
 
     const work = region
@@ -342,6 +375,13 @@ export default function FireSimulatorPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selection, centerLatitude, centerLongitude, radiusMeters, requestedCellMeters, loadAttempt]);
 
+  // Observed gusts size the wind wander when the run's wind came from observed weather.
+  const gustFactor = useMemo(() => observedGustFactor(scenarioWind), [scenarioWind]);
+  const stochastic = useMemo<StochasticSpreadOptions | undefined>(
+    () => (variation?.enabled ? { ...variation, gustFactor } : undefined),
+    [variation, gustFactor],
+  );
+
   const scenario = useMemo(
     () =>
       origin
@@ -361,6 +401,7 @@ export default function FireSimulatorPage() {
               enabled: structureSpreadEnabled,
               rateMetersPerMinute: structureSpreadRate,
             },
+            ...(stochastic ? { stochastic } : {}),
           }
         : null,
     [
@@ -374,6 +415,7 @@ export default function FireSimulatorPage() {
       spottingDistanceMeters,
       structureSpreadEnabled,
       structureSpreadRate,
+      stochastic,
     ],
   );
   // Solving takes ~100 ms, so let the controls stay responsive while dragging.
@@ -382,6 +424,7 @@ export default function FireSimulatorPage() {
   // OSM roads and synthetic homes along residential streets for the diorama board.
   const streets = useBoardStreets(grid);
   const streetArea = streets.status === "ready" ? streets.area : null;
+  const streetScenery = streets.status === "ready" ? streets.scenery : null;
 
   const result = useMemo<{ run: FireRun | null; error: string | null }>(() => {
     if (!grid || !deferredScenario) return { run: null, error: null };
@@ -403,6 +446,36 @@ export default function FireSimulatorPage() {
   }, [grid, deferredScenario]);
 
   const run = result.run;
+
+  // "Run N times": the same scenario solved with consecutive seeds, in a worker.
+  const burnKey = useMemo(
+    () => (scenario ? `${JSON.stringify(scenario)}|${ensembleMembers}` : null),
+    [scenario, ensembleMembers],
+  );
+  const { cancel: cancelBurn, run: startBurn } = burn;
+  useEffect(() => cancelBurn(), [grid, cancelBurn]);
+  const burnCurrent = burn.state.status === "ready" && burn.state.key === burnKey ? burn.state.raster : null;
+  const burnStale = burn.state.status === "ready" && !burnCurrent;
+  function runBurnProbability() {
+    if (!grid || !scenario || !burnKey) return;
+    const { origin: ignition, ...settings } = scenario;
+    const input: ScheduledFireInput = {
+      settings,
+      sources: [{ id: "ignition", location: ignition, startMinute: 0 }],
+      frameMinutes: [],
+    };
+    const { enabled: _enabled, seed: _seed, ...shared } = stochastic ?? { enabled: true, seed: 0 };
+    startBurn(
+      grid,
+      input,
+      {
+        members: ensembleMembers,
+        baseSeed: variation?.seed ?? DEFAULT_VARIATION_SEED,
+        stochastic: shared,
+      },
+      burnKey,
+    );
+  }
   const frames = useMemo(() => run?.frames ?? [], [run]);
 
   // Scene creation: StrictMode-safe (the cleanup disposes, the re-run builds a fresh scene).
@@ -410,7 +483,7 @@ export default function FireSimulatorPage() {
     // The diorama host only exists in the diorama view; the scene is rebuilt on return and the
     // effects below re-push every piece of state because `scene` changes.
     const host = sceneHostRef.current;
-    if (view !== "diorama" || !host) return;
+    if (view !== "diorama" || !host || historicalOpen) return;
     let created: FireDioramaSceneApi;
     try {
       created = new FireDioramaScene(host, { reducedMotion: reducedMotionRef.current });
@@ -430,7 +503,7 @@ export default function FireSimulatorPage() {
       setScene(null);
       created.dispose();
     };
-  }, [view]);
+  }, [view, historicalOpen]);
 
   // Continuous model time, pushed to the scene every animation frame without a React render.
   const onTime = useCallback((minutes: number) => sceneRef.current?.setTime(minutes), []);
@@ -441,8 +514,8 @@ export default function FireSimulatorPage() {
     scene?.setLandscape(grid);
   }, [scene, grid]);
   useEffect(() => {
-    scene?.setStreets(streetArea);
-  }, [scene, streetArea]);
+    scene?.setStreets(streetScenery);
+  }, [scene, streetScenery]);
   useEffect(() => {
     scene?.setRun(run);
     scene?.setTime(getTime());
@@ -736,13 +809,13 @@ export default function FireSimulatorPage() {
       if (!(event.key === " " || event.code === "Space")) return;
       const target = event.target instanceof Element ? event.target : null;
       if (target?.closest(SPACE_OWNERS) || target?.closest("[role='dialog']")) return;
-      if (!hasRun) return;
+      if (!hasRun || historicalOpen) return;
       event.preventDefault();
       togglePlayback();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [togglePlayback, hasRun]);
+  }, [togglePlayback, hasRun, historicalOpen]);
 
   const resetView = useCallback(() => {
     if (view === "satellite") setFitSignal((value) => value + 1);
@@ -861,6 +934,24 @@ export default function FireSimulatorPage() {
       ? landscape.storedUnavailable
       : provenance?.kind === "live" && provenance.storedUnavailable;
 
+  if (historicalFireId) {
+    return (
+      <main
+        id="main-content"
+        tabIndex={-1}
+        className="fr-page"
+        data-reduced-motion={reducedMotion ? "true" : undefined}
+        aria-label="Historical fire diorama"
+      >
+        <HistoricalFireDiorama
+          fireId={historicalFireId}
+          onSelectFire={setHistoricalFireId}
+          onExit={() => setHistoricalFireId(null)}
+        />
+      </main>
+    );
+  }
+
   return (
     <main
       id="main-content"
@@ -894,6 +985,7 @@ export default function FireSimulatorPage() {
               fitSignal={fitSignal}
               clickMode={clickMode}
               onMapClick={handleGroundClick}
+              burnProbability={showProbability && burnCurrent ? burnCurrent.burnProbability : null}
             />
           </div>
         )}
@@ -978,7 +1070,9 @@ export default function FireSimulatorPage() {
                     value={region ? region.id : ""}
                     onChange={(event) => {
                       const id = event.target.value;
-                      if (id) selectRegion(id);
+                      if (id.startsWith("historical:")) {
+                        setHistoricalFireId(id.slice("historical:".length));
+                      } else if (id) selectRegion(id);
                     }}
                   >
                     {!region && <option value="">Custom: {areaLabel(areaCenter)}</option>}
@@ -994,6 +1088,15 @@ export default function FireSimulatorPage() {
                         ))}
                       </optgroup>
                     ))}
+                    {historicalIndex.status === "ready" && (
+                      <optgroup label="Historical fires (observed perimeters)">
+                        {historicalIndex.index.fires.map((entry) => (
+                          <option key={entry.id} value={`historical:${entry.id}`}>
+                            {entry.name}
+                          </option>
+                        ))}
+                      </optgroup>
+                    )}
                   </select>
                   <Button
                     id="fr-change-area"
@@ -1153,6 +1256,102 @@ export default function FireSimulatorPage() {
                 </div>
               </div>
 
+              <div className="fr-field">
+                <NaturalVariationControl
+                  idPrefix="fire-variation"
+                  value={variation}
+                  onChange={setVariation}
+                  gustFactor={gustFactor}
+                  spottingAvailable={spottingEnabled}
+                />
+              </div>
+
+              <div className="fr-field fr-bp">
+                <span className="fr-field-title">Burn probability</span>
+                <p className="fr-hint">Run the fire many times with different seeds and map how often each spot burns.</p>
+                <div className="fr-bp-row">
+                  <div className="fr-field">
+                    <label htmlFor="fire-ensemble-members">Runs</label>
+                    <input
+                      id="fire-ensemble-members"
+                      className="ui-input"
+                      type="number"
+                      min={MIN_ENSEMBLE_MEMBERS}
+                      max={MAX_UI_ENSEMBLE_MEMBERS}
+                      step={1}
+                      value={ensembleMembers}
+                      onChange={(event) => {
+                        const next = event.target.valueAsNumber;
+                        if (Number.isFinite(next)) setEnsembleMembers(Math.round(next));
+                      }}
+                      onBlur={() =>
+                        setEnsembleMembers((value) =>
+                          clamp(value, MIN_ENSEMBLE_MEMBERS, MAX_UI_ENSEMBLE_MEMBERS),
+                        )
+                      }
+                    />
+                  </div>
+                  {burn.state.status === "running" ? (
+                    <Button variant="secondary" size="sm" onClick={cancelBurn}>
+                      Cancel
+                    </Button>
+                  ) : (
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onClick={runBurnProbability}
+                      disabled={
+                        !grid ||
+                        !scenario ||
+                        !!result.error ||
+                        ensembleMembers < MIN_ENSEMBLE_MEMBERS ||
+                        ensembleMembers > MAX_UI_ENSEMBLE_MEMBERS
+                      }
+                    >
+                      Run {ensembleMembers} times
+                    </Button>
+                  )}
+                </div>
+                {!origin && <p className="fr-hint">Place an ignition point first.</p>}
+                {burn.state.status === "running" && (
+                  <ProgressBar
+                    value={burn.state.total > 0 ? burn.state.done / burn.state.total : 0}
+                    label={`Run ${burn.state.done} of ${burn.state.total}`}
+                  />
+                )}
+                {burn.state.status === "error" && (
+                  <Notice tone="danger" className="fr-compact-notice">
+                    {burn.state.message}
+                  </Notice>
+                )}
+                {burnStale && (
+                  <Notice className="fr-compact-notice">
+                    The scenario changed since this run. Run it again to update the map.
+                  </Notice>
+                )}
+                {burnCurrent && (
+                  <>
+                    <div className="fr-toggle-row">
+                      <input
+                        id="show-burn-probability"
+                        type="checkbox"
+                        checked={showProbability}
+                        onChange={(event) => setShowProbability(event.target.checked)}
+                      />
+                      <label htmlFor="show-burn-probability">Show burn probability</label>
+                    </div>
+                    {view === "diorama" && showProbability && (
+                      <p className="fr-hint">
+                        Drawn on the satellite map.{" "}
+                        <button type="button" className="ui-text-link" onClick={() => chooseView("satellite")}>
+                          Show satellite map
+                        </button>
+                      </p>
+                    )}
+                  </>
+                )}
+              </div>
+
               <div className="fr-toggle-row">
                 <input
                   id="show-fuel"
@@ -1230,6 +1429,14 @@ export default function FireSimulatorPage() {
                     <EvidenceTag kind="simulated" />
                     <span>Model output, not an observed fire</span>
                   </div>
+                  {run.stochastic && (
+                    <p className="fr-nv-help fr-nv-summary" data-testid="fire-stochastic-summary">
+                      Natural variation, seed {run.scenario.stochastic?.seed ?? run.stochastic.applied.seed} ·{" "}
+                      {run.stochastic.spotIgnitions} spot fire
+                      {run.stochastic.spotIgnitions === 1 ? "" : "s"} started
+                      {run.stochastic.applied.spotting ? "" : " (spotting off)"}
+                    </p>
+                  )}
                   <dl className="fr-metrics">
                     <div>
                       <dt>Burned area (simulated)</dt>
@@ -1282,6 +1489,37 @@ export default function FireSimulatorPage() {
                     </svg>
                   </Button>
                   <div id="fr-details" className="fr-details" hidden={!detailsOpen}>
+                    {run.stochastic && (
+                      <div className="fr-card">
+                        <Facts
+                          items={[
+                            { label: "Natural variation (simulated)", value: `seed ${run.scenario.stochastic?.seed ?? run.stochastic.applied.seed}` },
+                            {
+                              label: "Spot fires",
+                              value: `${run.stochastic.spotIgnitions} started from ${run.stochastic.spotLaunches} embers${
+                                run.stochastic.spotLaunchCapReached ? " (launch cap reached)" : ""
+                              }`,
+                            },
+                            ...(run.stochastic.applied.windWander
+                              ? [
+                                  {
+                                    label: "Wind speed range",
+                                    value: `${run.stochastic.windSpeedFactorRange[0].toFixed(2)} to ${run.stochastic.windSpeedFactorRange[1].toFixed(2)} times the set speed`,
+                                  },
+                                  {
+                                    label: "Gust factor",
+                                    value: `${run.stochastic.applied.gustFactor.toFixed(2)} (${
+                                      run.stochastic.applied.gustFactorSource === "observed"
+                                        ? "from observed weather"
+                                        : "typical, assumed"
+                                    })`,
+                                  },
+                                ]
+                              : []),
+                          ]}
+                        />
+                      </div>
+                    )}
                     <div className="fr-card">
                       <div className="fr-mix-row">
                         <Facts
@@ -1499,6 +1737,35 @@ export default function FireSimulatorPage() {
             <p className="fr-hint-chip fr-panel" role="status">
               That spot is outside the loaded region. Click inside the shaded board.
             </p>
+          )}
+
+          {burnCurrent && showProbability && view === "satellite" && (
+            <Panel glass compact className="fr-panel fr-bp-legend" aria-label="Burn probability legend">
+              <div className="fr-results-tag">
+                <EvidenceTag kind="simulated" />
+                <span>
+                  {burnCurrent.members} simulated runs, seed {burnCurrent.baseSeed}
+                </span>
+              </div>
+              <strong>Chance this spot burns</strong>
+              <div className="fr-bp-ramp" aria-hidden="true" />
+              <div className="fr-bp-ticks" aria-hidden="true">
+                <span>0%</span>
+                <span>50%</span>
+                <span>100%</span>
+              </div>
+              <Legend
+                label="Burn probability"
+                items={[
+                  { label: "Burned in a few runs (lighter)", color: "var(--ct-ember)", shape: "square" },
+                  { label: "Burned in most runs (darker)", color: "var(--ct-fire-hot)", shape: "square" },
+                ]}
+              />
+              <p className="fr-hint">
+                Share of runs in which the spot burned within {formatDuration(burnCurrent.horizonMinutes)}. Not
+                an observed or calibrated probability.
+              </p>
+            </Panel>
           )}
 
           <FireLegend
