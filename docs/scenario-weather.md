@@ -11,8 +11,8 @@ Decision record: [ADR 0045](adr/0045-scenario-weather.md). Tests: `tests/test_we
 
 | Source | Used for | Access | Terms |
 | --- | --- | --- | --- |
-| IEM ASOS/AWOS archive (Iowa State) | Airport hourly METAR: wind speed, direction, gust, RH, temperature | `mesonet.agron.iastate.edu/cgi-bin/request/asos.py`; station list `/geojson/network/CA_ASOS.geojson` | Public domain, free for any lawful purpose, attribution appreciated ([disclaimer](https://mesonet.agron.iastate.edu/disclaimer.php)). Per-IP rate limit and a 1,000 station-year cap per request. |
-| IEM DCP/HADS archive | RAWS fire-weather stations relayed through NWS HADS (for example Jarbo Gap, Pike County Lookout, Santa Rosa, Hawkeye): wind, peak wind, RH, temperature | `cgi-bin/request/hads.py?network=CA_DCP&stations=ID`; station list `CA_DCP.geojson` (filtered to names containing "RAWS") | Same IEM terms. Serial per-IP throttle (HTTP 429; the client backs off and retries). English units (mph, deg F). |
+| IEM ASOS/AWOS archive (Iowa State) | Airport hourly METAR: wind speed, direction, gust, RH, temperature, hourly precipitation (`p01i`) | `mesonet.agron.iastate.edu/cgi-bin/request/asos.py`; station list `/geojson/network/CA_ASOS.geojson` | Public domain, free for any lawful purpose, attribution appreciated ([disclaimer](https://mesonet.agron.iastate.edu/disclaimer.php)). Per-IP rate limit and a 1,000 station-year cap per request. |
+| IEM DCP/HADS archive | RAWS fire-weather stations relayed through NWS HADS (for example Jarbo Gap, Pike County Lookout, Santa Rosa, Hawkeye): wind, peak wind, RH, temperature, hourly precipitation (`PPHRGZ`, `PCIRGZ`) | `cgi-bin/request/hads.py?network=CA_DCP&stations=ID`; station list `CA_DCP.geojson` (filtered to names containing "RAWS") | Same IEM terms. Serial per-IP throttle (HTTP 429; the client backs off and retries). English units (mph, deg F). |
 | NWS `api.weather.gov` gridpoint forecast | "Now" scenarios | `/points/{lat},{lon}` then `forecastGridData` | Open data, no fee, public domain ([API docs](https://www.weather.gov/documentation/services-web-api)). Identifying `User-Agent` required, undisclosed rate limit. Do not present modified content as official NWS product. |
 | IEM DCP variable list | Whether a RAWS relays a wind-speed variable (SHEF `USIRG*`), checked before it is ranked | `json/dcp_vars.php?station=ID` | Same IEM terms. Cached on disk per station. |
 | Open-Meteo Historical Weather API, ECMWF ERA5 | Fallback hourly 10 m wind, gust, 2 m temperature and RH when no representative station has data, or forced with `station=reanalysis` | `archive-api.open-meteo.com/v1/archive?...&models=era5&wind_speed_unit=ms&timezone=GMT` | Free, no key, **non-commercial use only**, under 10,000 calls/day, 5,000/hour, 600/minute; data CC BY 4.0, attribute "Weather data by Open-Meteo.com" and Copernicus/ECMWF ERA5 (Hersbach et al. 2020) ([terms](https://open-meteo.com/en/terms), checked 2026-10-24). |
@@ -62,6 +62,14 @@ W.scenario_wind(lon, lat, start, hours, mode)                # dict, see below
   not guessed. Hourly direction is the speed-weighted vector mean, never an arithmetic mean of
   degrees.
 - Gust is the maximum reported in the hour; it is never synthesised from sustained speed.
+- Precipitation `precip_mm` is millimetres in the hour ending near the bin time (`null` = not
+  reported). Sources: RAWS via HADS `PPHRGZ` (inches over the hour ending at the report; without
+  it, the `PCIRGZ` accumulator difference to a report 45-75 min earlier), ASOS `p01i` (inches since
+  the last hourly reset; trace `T` reads 0), ERA5 `precipitation` (mm, sum of the preceding hour,
+  modelled), NWS gridpoint `quantitativePrecipitation` (mm per period, spread evenly over the
+  period's hours, an assumption). Inches convert at exactly 25.4 mm. The hour's value is the largest
+  amount reported in the bin, not a sum (each is already an hourly amount; summing would count the
+  same rain twice).
 - Gaps stay as `None` samples (`summary.missing_speed_samples`). Nothing is interpolated.
 - No height conversion in the module: ASOS, gridpoint and ERA5 winds are 10 m, RAWS 20 ft, the Rothermel
   input is the open 20 ft wind. `GET /api/weather/scenario` converts (see "Consumed by").
@@ -196,7 +204,7 @@ established. Climatology for the same Eaton point now picks Palmdale (PMD, 47 km
 across the range, warned as more than 30 km) over El Monte (EMT, 14 km, 795 m lower): the
 elevation term does not know about the ridge between.
 
-### Observation quality control (`qc_observations`, version `obs-qc/1`)
+### Observation quality control (`qc_observations`, version `obs-qc/2`)
 
 Every source (ASOS, RAWS via HADS, ERA5, NWS gridpoint, the climatology analog's station) goes
 through `qc_observations` before hourly binning. A failed value becomes `null`; it is never
@@ -212,6 +220,7 @@ its time, value and check) and each removal adds a sentence to `warnings`.
 | Step reference | previous accepted report at most 75 min earlier; a flagged value is never the reference | assumption |
 | RH persistence | RH range < 0.5 % over 24 h with >= 24 reports | Synoptic Data QC `sl_pers_check` |
 | Wind persistence | speed range < 0.25 m/s over 24 h with >= 24 reports; removes speed, direction and gust | Synoptic Data QC `sl_pers_check` and secondary persistence check |
+| Precipitation range (`obs-qc/2`) | 0 mm <= hourly amount <= 254 mm | Synoptic Data QC `sl_range_check`, "Precipitation 1hr" (read 2026-10-25). MADIS allows 0-44 in for accumulations; the stricter limit is used. Neither lists a step or persistence check for precipitation |
 
 Dew point is the Magnus form with the Alduchov and Eskridge (1996) coefficients (17.625, 243.04
 degC). Sources: https://docs.synopticdata.com/services/mesonet-data-qc and
@@ -430,6 +439,36 @@ TypeScript client and the apply helper are `app/src/world/conditions.ts`. Not wi
 | `dead10h`, `dead100h` | derived; forcing and starting state assumed | First-order timelag `dm/dt = (E - m)/tau`, `tau` = 10 h and 100 h, solved exactly each hour. `E` = that hour's 1-h table value (assumed: 1-h fuels reach equilibrium within the hour). Start = mean `E` of the first 24 forcing hours (assumed) | Timelag definition (Byram 1963; Fosberg 1970) |
 | `liveHerb`, `liveWoody` | derived from modelled (ERA5) weather | Growing Season Index from daily Tmin, VPD and daylength, 21-day mean, mapped linearly to herb 30-250 % and woody 60-200 % above a green-up GSI of 0.5, as in NFDRS 2016. See "Live fuel moisture from the Growing Season Index" below | Jolly, Nemani & Running 2005, *Global Change Biology* 11:619-632; NFDRS 2016 reference code (github.com/firelab/NFDRS4, `livefuelmoisture.cpp`) |
 | `liveHerb`, `liveWoody` (fallback) | assumed | Only when the GSI lead-in cannot be fetched (warning + `provenance.live_gsi.ok: false`): stage of development to moisture, fresh 300 %, maturing 200 %, mature 100 %, entering dormancy 50 %, cured 30 % (printed "less than 30, treat as a dead fuel"), on an assumed regional calendar (`PHENOLOGY_CALENDARS`) interpolated between mid-month anchors | Rothermel 1983 Table II-2 (p. 13); the calendars are planning assumptions, not data |
+| Rain on `dead1h`, `dead10h`, `dead100h` (`fuel-moisture/2`) | derived from the source's precipitation; hourly adaptation assumed | See "Rain" below | Bradshaw, Deeming, Burgan and Cohen 1984, *The 1978 National Fire-Danger Rating System: technical documentation*, USDA FS GTR INT-169, eq. 25, 32, 33, 36, 39 (pp. 13-14) |
+
+#### Rain (`fuel-moisture/2`)
+
+The 1978 NFDRS sets each period's boundary condition to the time-weighted mean of the EMC over its
+dry hours and a wet value over its `pd` hours of rain: `D = [(T - pd) EMC + W(pd) pd] / T`, with
+`W = 2.7 pd + 76` for the 10-h class (eq. 32, 16 h period, and eq. 33, 8 h; "from Fosberg (1972)";
+the same function is the 1,000-h eq. 41) and `W = 0.5 pd + 41` for the 100-h class (eq. 36, 24 h).
+The moisture then follows the basic diffusion equation `mc = mc0 + (D - mc0)(1 - zeta exp(-T/tau))`
+(eq. 25). Hourly, that mean becomes a boundary of `W(pd)` in each rain hour and the usual `E` (the
+hour's table value) in every other hour, integrated with `zeta = 1` (as eq. 26 uses) and `T = 1 h`.
+
+| Constant | Value | Source |
+| --- | --- | --- |
+| `RAIN_HOUR_MIN_MM` | 0.254 mm (0.01 in) in the hour makes it a rain hour | ASSUMPTION: one tip of the 0.01 in gauge RAWS and ASOS report in. The report's `pd` is an observed duration in hours, not an amount |
+| `RAIN_DURATION_WINDOW_HOURS` | `pd` = rain hours in the trailing 24 h | ASSUMPTION, eq. 36's 24 h period |
+| `RAIN_DURATION_MAX_HOURS` | `pd` at most 8 h (wet values at most 97.6 % and 45 %) | eq. 39 ("limited to a maximum of 8 hours", stated for an estimated duration); applying it to a counted one is an ASSUMPTION |
+| 1-h wet value | the 10-h `2.7 pd + 76` | ASSUMPTION: the report gives no rain rule for the 1-h class |
+| 1-h drying | table value plus a rain excess that decays by `exp(-1 h / 1 h)` each dry hour; dropped below 0.5 % | timelag definition (eq. 25); the 0.5 % cutoff (half the tables' 1 % step) is an ASSUMPTION |
+| 10-h / 100-h drying | the existing `tau` = 10 h / 100 h relaxation toward `E` | eq. 25, timelag definition |
+
+Hours with no rain in their history follow exactly the table path above (checked below), so a
+dry day does not change. Each hour carries `rain {precip_mm, rain_hour, rain_hours_24h, pd_used_h,
+wet_boundary_pct, dead1h_excess_pct, adjusted, no_rain_pct}`; `fine_fuel` stays the plain table
+lookup and `no_rain_pct` is what the hour would be without rain. The spin-up hours carry
+precipitation too, so rain in the 48 h before `start` wets the lagged classes. A missing
+precipitation report counts as dry and is warned about. The 1978 report's own 1-h and 10-h rules
+are daily (eq. 24, 26, 31); the "set to 35 % while raining" rule some NFDRS code uses is not in
+GTR INT-169 and is not used here. Nelson (2000) is the better hourly model (NFDRS 2016) but was
+out of scope for this change.
 
 Units: tables in deg F and percent (converted from the station's deg C at the boundary,
 `F = C * 9/5 + 32`); output fractions of oven-dry weight. The tables' clock bands are read in
@@ -444,10 +483,10 @@ Climatology analogs are relabelled to the scenario start by `sim.weather`; the m
 the analog's real clock (`provenance.table_clock.shift_hours`), so a night observation is never read
 as an afternoon one.
 
-Not modelled, and therefore biased: **precipitation and dew** (the report's own caution: the
-tables "assume that there has not been recent precipitation"; values after rain are too dry), cloud
-cover (pass `shading=shaded` for overcast hours), wetting/drying hysteresis, and live moisture from
-measurements. The day/night switch at 0800 and 2000 is a step, as in the tables: at the Camp
+Not modelled, and therefore biased: **dew** (the tables "assume that there has not been recent
+precipitation"; rain is handled as above, dew is not), cloud cover (pass `shading=shaded` for
+overcast hours; on a rainy day the exposed daytime tables still read 15-18 % at 100 % RH between
+showers), wetting/drying hysteresis, and live moisture from measurements. The day/night switch at 0800 and 2000 is a step, as in the tables: at the Camp
 station on 2018-11-08 the 1-h value goes from 4 % at 07:54 solar (Table E) to 8 % at 08:54 (Table A
 3 % + Table D early-morning correction 5 %). That is the published method, not smoothed here.
 
@@ -465,9 +504,14 @@ answer spins up from the 48 reanalysis hours before `start`. A station more than
 (`MAX_STATION_DISTANCE_KM`, assumption; only reachable through the climatology fallback or a
 forced station) is refused with `502 no_station_coverage`. The cache key includes the selection
 version, the QC version, the live-moisture version (`live-gsi/1`) and `station` (`CACHE_SCHEMA`
-`conditions/4`), so answers from before `station-rank/1`, `obs-qc/1` or `live-gsi/1` are not
-served. `model_version` reads `fuel-moisture/1+live-gsi/1`. Each hour has `rh_from` (a donor station id when
-the RH was filled after QC, else `null`); QC removals in the 48 spin-up hours add a warning too.
+`conditions/5`), so answers from before `station-rank/1`, `obs-qc/2`, `fuel-moisture/2` or
+`live-gsi/1` are not served. `model_version` reads `fuel-moisture/2+live-gsi/1`. Each hour has
+`rh_from` (a donor station id when the RH was filled after QC, else `null`), `precip_mm` and `rain`
+(above); QC removals in the 48 spin-up hours add a warning too. When rain changed any dead class, a
+warning says how many hours, the rain hours and amounts in the window and spin-up, the evidence class
+of the precipitation and the method, and `provenance.rain` has the same counts
+(`rain_hours`, `precip_total_mm`, `adjusted_hours`, `adjusted_from_utc`, `adjusted_to_utc`,
+`precip_missing_hours`, ...); `provenance.model.rain` cites the source.
 
 | Query | Meaning |
 | --- | --- |
@@ -491,8 +535,11 @@ chosen_by}`, `evidence {weather, wind_20ft, dead1h, dead10h_dead100h, live, site
   "t_utc": "2018-11-08T12:00:00Z",
   "wind_speed_20ft_ms": 14.305, "wind_speed_20ft_mph": 32.0,  // open 20 ft wind
   "wind_speed_reported_ms": 14.305, "wind_from_deg": 38.0, "gust_ms": 23.246,
-  "temp_c": 9.4, "rh_pct": 22.0, "n_obs": 1,
+  "temp_c": 9.4, "rh_pct": 22.0, "n_obs": 1, "precip_mm": 0.0,
   "moisture": { "dead1h": 0.05, "dead10h": 0.0566, "dead100h": 0.0538, "liveHerb": 0.3, "liveWoody": 0.5 },
+  "rain": { "precip_mm": 0.0, "rain_hour": false, "rain_hours_24h": 0, "pd_used_h": 0, "wet_boundary_pct": null,
+            "dead1h_excess_pct": 0.0, "adjusted": false,
+            "no_rain_pct": { "dead1h": 5.0, "dead10h": 5.66, "dead100h": 5.38 } },
   "fine_fuel": { "moisture_pct": 5.0, "period": "night", "reference_pct": 5, "correction_pct": 0, "table": "E",
                  "reference_is_lower_bound": false, "temp_outside_table": false, "local_solar_time": "2018-11-08T03:54" },
   "dead_lag_pct": { "dead10h": 5.66, "dead100h": 5.38, "held_through_gap": false },
@@ -622,6 +669,37 @@ methodology used by LACFD is described by Countryman and Dean (1979)"). Countrym
 W.A. 1979, *Measuring moisture content in living chaparral: a field user's manual*, USDA FS GTR
 PSW-36, speaks of a "critically low level" but its text gives no 60 % value. Cite a 60 % chamise
 threshold only with a source that prints it.
+
+### Measured: rain (2026-10-25, `fuel-moisture/2`)
+
+Atmospheric-river day, Tilden (`lon=-122.24 lat=37.90 start=2023-01-10T20:00:00Z hours=25
+mode=historical_replay region=berkeley-hills-tilden`), Oakland North RAWS ONOC1: 11 rain hours and
+12.45 mm in the window, 19 rain hours and 61.72 mm in the 48 h spin-up (HADS `PPHRGZ`).
+
+| Class (26 hours) | Before (`fuel-moisture/1`): min / median / max, hours > 25 % | After: min / median / max, hours > 25 % |
+| --- | --- | --- |
+| `dead1h` | 15.0 / 18.0 / 25.0 %, 0 h (25 is Table E's "25+" cap) | 18.0 / 41.9 / 96.7 %, 18 h |
+| `dead10h` | 18.6 / 20.5 / 21.4 %, 0 h | 35.5 / 48.8 / 65.8 %, 26 h |
+| `dead100h` | 19.7 / 19.9 / 20.0 % | 23.3 / 23.8 / 24.9 % |
+
+The 1-h class dries back to its table value (18-25 %) about 3-4 h after the last tip, so in the
+two dry spells (03-05Z and 12-14Z) the tables govern again. Head ROS from `app/src/fire/rothermel.ts`
+on flat ground with the unsheltered Albini and Baughman wind adjustment (a point check, not the
+grid run): TL6 median 0.65 to 0.00 m/min (spreading >= 0.01 m/min in 26 to 6 of 26 h, max 0.72),
+SH4 p95 5.08 to 3.03 m/min (26 to 10 h), GR2 0 before and after (its 1-h was already above the
+15 % extinction moisture).
+
+**Disagreement with an observation.** ONOC1 also reports its 10-h fuel stick (`MMIRGZZ`): 26 %
+in every hour of the window. The model's 10-h reads 35-66 %, 10-40 points wetter. The constants
+are the report's and were not tuned to close the gap. The stick reading is a measurement and
+is the better number for the hour. But its flat 26 % through 61 mm of rain suggests the sensor
+reads at a ceiling near fiber saturation. That is unconfirmed: check the sensor's range before
+using it as truth above about 25 %. For spread, both values are above TL6's 25 % extinction
+moisture.
+
+Dry day unchanged: ONOC1 2021-07-10T09:00Z, `lon=-122.24 lat=37.875`, 24 h. No rain hours in
+the window or spin-up. Every existing field of all 25 hours, the warnings and the summary match
+`fuel-moisture/1` exactly. TL6, SH4 and GR2 ROS are identical (median 0.45, 1.75 and 3.49 m/min).
 
 ### Applying an hour (`app/src/world/conditions.ts`)
 

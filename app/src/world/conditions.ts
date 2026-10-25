@@ -180,7 +180,19 @@ interface ApiHour {
   gust_ms: number | null;
   temp_c: number | null;
   rh_pct: number | null;
+  /** Millimetres in the hour ending near t_utc; null when the source did not report it. */
+  precip_mm?: number | null;
   moisture: NullableFuelMoisture;
+  /** Rain adjustment of the dead classes (sim/fuel_moisture.py, fuel-moisture/2); percent unless named. */
+  rain?: {
+    precip_mm: number | null;
+    rain_hour: boolean;
+    rain_hours_24h: number;
+    pd_used_h: number;
+    adjusted: boolean;
+    no_rain_pct: { dead1h: number | null; dead10h: number | null; dead100h: number | null } | null;
+  };
+  /** Always the plain Rothermel 1983 table lookup, before any rain adjustment. */
   fine_fuel: {
     moisture_pct: number;
     period: "day" | "night";
