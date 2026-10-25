@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType } from "react";
 import type { GeoPoint } from "../fire/spread";
 import type { ScheduledFireRun } from "../fire/scheduledTypes";
-import { formatElapsed } from "../fire/spread";
+import { formatElapsed, cellAt } from "../fire/spread";
+import { carriesFire } from "../demo/fireField";
+import { fetchScenarioWind, weatherSeriesFromRecord } from "../fire/scenarioWeather";
+import { observedGustFactor } from "../fire/ui/NaturalVariationControl";
 import ConfigPanel from "./ConfigPanel";
 import LiveDrillAction from "./LiveDrillAction";
 import PlaybackBar from "./PlaybackBar";
@@ -546,6 +549,130 @@ export default function SimulationStudioPage({
     setPlaying(false);
     run(scenario, { id: regionId, grid: regionGrid }, planCrews());
   }, [run, scenario, regionId, regionGrid, planCrews]);
+  // "Random scenario": one seed rebuilds the same ignitions, season, wind and variation. The run
+  // starts once crew bases for the new first fire have loaded (or after a short wait).
+  const [pendingRun, setPendingRun] = useState<{ scenario: StudioScenario; waited: boolean } | null>(null);
+  const [randomBusy, setRandomBusy] = useState(false);
+  useEffect(() => {
+    if (!pendingRun) return;
+    if (pendingRun.scenario === scenario && (suppressionBases || pendingRun.waited)) {
+      setPendingRun(null);
+      handleRun();
+      return;
+    }
+    if (pendingRun.waited) return;
+    const handle = window.setTimeout(() => setPendingRun((p) => (p ? { ...p, waited: true } : p)), 3000);
+    return () => window.clearTimeout(handle);
+  }, [pendingRun, scenario, suppressionBases, handleRun]);
+
+  const handleRandomScenario = useCallback(async () => {
+    if (!regionGrid || randomBusy) return;
+    setRandomBusy(true);
+    const seed = Math.floor(Math.random() * 2_147_483_647) + 1;
+    let state = seed >>> 0;
+    const rand = () => {
+      state = (state + 0x6d2b79f5) >>> 0;
+      let t = state;
+      t = Math.imul(t ^ (t >>> 15), t | 1);
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+    const grid = regionGrid;
+    // Assumption: most ignitions are human-caused near roads, so fires start on burnable ground
+    // within ~1 km of a road node when roads are loaded, else anywhere burnable on the board.
+    const pickCell = (): GeoPoint | null => {
+      const tryPoint = (lon: number, lat: number) => {
+        const cell = cellAt(grid, { longitude: lon, latitude: lat });
+        return cell >= 0 && carriesFire(grid.fuelCodes[cell]) ? { longitude: lon, latitude: lat } : null;
+      };
+      if (area && area.nodes.length > 0) {
+        for (let i = 0; i < 400; i++) {
+          const [lon, lat] = area.nodes[Math.floor(rand() * area.nodes.length)];
+          const r = 1000 * Math.sqrt(rand());
+          const a = rand() * 2 * Math.PI;
+          const p = tryPoint(
+            lon + (r * Math.sin(a)) / (111_320 * Math.cos((lat * Math.PI) / 180)),
+            lat + (r * Math.cos(a)) / 110_540,
+          );
+          if (p) return p;
+        }
+      }
+      for (let i = 0; i < 2000; i++) {
+        const cell = Math.floor(rand() * grid.width * grid.height);
+        if (!carriesFire(grid.fuelCodes[cell])) continue;
+        const col = cell % grid.width;
+        const row = (cell - col) / grid.width;
+        const x = grid.originX + col * grid.cellSizeX;
+        const y = grid.originY + row * grid.cellSizeY;
+        const lon = (x / 20037508.342789244) * 180;
+        const lat = (Math.atan(Math.exp((y / 20037508.342789244) * Math.PI)) * 360) / Math.PI - 90;
+        const p = tryPoint(lon, lat);
+        if (p) return p;
+      }
+      return null;
+    };
+    const count = rand() < 0.25 ? 2 : 1;
+    let ignitions: StudioScenario["ignitions"] = [];
+    for (let i = 0; i < count; i++) {
+      const point = pickCell();
+      if (point) ignitions = [...ignitions, createIgnition(ignitions, point, i === 0 ? 0 : 15 + Math.floor(rand() * 30))];
+    }
+    if (ignitions.length === 0) {
+      setRandomBusy(false);
+      showNotice("No burnable ground found on this board.");
+      return;
+    }
+    const month = 6 + Math.floor(rand() * 6); // Jun-Nov, assumed fire season
+    const percentile = [90, 95, 97][Math.floor(rand() * 3)];
+    const fallbackSpeed = 10 + Math.round(rand() * 25);
+    const fallbackFrom = Math.round(rand() * 8) * 45 % 360; // assumed: any compass octant
+    const base = withFirefightingOn(emptyScenario());
+    let next: StudioScenario = {
+      ...base,
+      name: `Random scenario, seed ${seed}`,
+      ignitions,
+      settings: {
+        ...base.settings,
+        windSpeedMph: fallbackSpeed,
+        windFromDegrees: fallbackFrom,
+        stochastic: { enabled: true, seed },
+      },
+    };
+    const first = ignitions[0].location;
+    let weatherNote = `assumed wind ${fallbackSpeed} mph (weather unavailable)`;
+    try {
+      const record = await fetchScenarioWind({
+        mode: "climatology_percentile",
+        lon: first.longitude,
+        lat: first.latitude,
+        startUtc: `2025-${String(month).padStart(2, "0")}-01T00:00:00Z`,
+        hours: Math.max(1, Math.ceil(base.settings.horizonMinutes / 60)),
+        percentile,
+      });
+      const converted = weatherSeriesFromRecord(record);
+      next = {
+        ...next,
+        weather: record,
+        settings: {
+          ...next.settings,
+          ...(converted ? { weatherSeries: converted.series } : {}),
+          stochastic: { enabled: true, seed, gustFactor: observedGustFactor(record) },
+          windSpeedMph: record.applied.speed20ftMph,
+          windFromDegrees: record.applied.fromDeg,
+        },
+      };
+      weatherNote = `climatology p${percentile}, month ${month}`;
+    } catch {
+      // The assumed wind above stands.
+    }
+    setRandomBusy(false);
+    setEvacuationOn(true);
+    applyScenario(next);
+    setSelectedId(null);
+    showNotice(`Random scenario (simulated), seed ${seed}: ${ignitions.length} fire(s), ${weatherNote}.`);
+    setPendingRun({ scenario: next, waited: false });
+  }, [regionGrid, randomBusy, area, applyScenario, showNotice]);
+
   const toggleClosure = useCallback(
     (edge: number) => {
       if (!area) return;
@@ -1167,6 +1294,7 @@ export default function SimulationStudioPage({
               onSelectIgnition={handleSelect}
               onScenarioChange={applyScenario}
               onRun={handleRun}
+              onRandomScenario={regionGrid && !running ? handleRandomScenario : undefined}
               onCancel={cancel}
               onClear={handleClear}
               onExport={handleExport}

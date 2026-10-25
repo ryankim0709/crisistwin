@@ -277,6 +277,8 @@ export interface ConfigPanelProps {
   /** Replace the scenario. The page decides whether the edit invalidates the result. */
   onScenarioChange: (scenario: StudioScenario) => void;
   onRun: () => void;
+  /** Builds and runs a seeded random scenario on the current board (simulated). */
+  onRandomScenario?: () => void;
   onCancel: () => void;
   onClear: () => void;
   onExport: () => void;

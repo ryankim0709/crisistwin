@@ -86,6 +86,7 @@ export default function ConfigPanel(props: ConfigPanelProps) {
     onSelectIgnition,
     onScenarioChange,
     onRun,
+    onRandomScenario,
     onCancel,
     onClear,
     onExport,
@@ -208,6 +209,18 @@ export default function ConfigPanel(props: ConfigPanelProps) {
     </Button>
   );
 
+  const randomButton = onRandomScenario ? (
+    <Button
+      variant="secondary"
+      size="sm"
+      onClick={onRandomScenario}
+      disabled={busy}
+      title="One seeded random fire with response and evacuation, run as a simulation. Ignitions near roads are an assumption."
+    >
+      Random scenario
+    </Button>
+  ) : null;
+
   const statusLine = [PHASE_TEXT[phase], stale ? "out of date" : null, draftStatus]
     .filter(Boolean)
     .join(" · ");
@@ -224,6 +237,7 @@ export default function ConfigPanel(props: ConfigPanelProps) {
           Scenario ›
         </Button>
         {runButton}
+        {randomButton}
         <p className="studio-status" role="status">
           {PHASE_TEXT[phase]}
           {stale ? " · Out of date" : ""}
@@ -758,6 +772,7 @@ export default function ConfigPanel(props: ConfigPanelProps) {
         )}
         <div className="studio-row">
           {runButton}
+          {randomButton}
           {busy && (
             <Button variant="secondary" size="sm" onClick={onCancel}>
               Cancel
