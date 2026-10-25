@@ -1,0 +1,99 @@
+/* Historical fire diorama (inside /fire). Layout reuses fire.css (fr-stage, fr-overlay,
+   fr-dock, fr-scrub); this file only adds the hf- pieces. Tokens only. */
+
+.hf-panel .fr-scenario-head h1 {
+  margin: 0;
+}
+
+.hf-row {
+  display: flex;
+  gap: var(--ct-space-2);
+  align-items: center;
+}
+
+.hf-row select {
+  flex: 1;
+  min-width: 0;
+}
+
+.hf-muted {
+  display: flex;
+  align-items: center;
+  gap: var(--ct-space-2);
+  margin: 0;
+  color: var(--ct-ink-muted);
+  font-size: var(--ct-text-sm);
+}
+
+.hf-readout {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ct-space-2);
+}
+
+.hf-tagline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ct-space-2);
+  margin: 0;
+  font-size: var(--ct-text-sm);
+  font-weight: var(--ct-weight-medium);
+}
+
+.hf-facts {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: var(--ct-space-1) var(--ct-space-3);
+  margin: 0;
+  font-size: var(--ct-text-sm);
+  line-height: var(--ct-leading-snug);
+}
+
+.hf-facts dt {
+  color: var(--ct-ink-muted);
+}
+
+.hf-facts dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.hf-sources {
+  font-size: var(--ct-text-xs);
+  color: var(--ct-ink-muted);
+}
+
+.hf-sources summary {
+  cursor: pointer;
+  color: var(--ct-ink);
+  font-size: var(--ct-text-sm);
+  font-weight: var(--ct-weight-medium);
+}
+
+.hf-sources ul {
+  display: grid;
+  gap: var(--ct-space-1);
+  margin: var(--ct-space-2) 0 0;
+  padding-left: var(--ct-space-4);
+}
+
+.hf-legend {
+  padding: var(--ct-space-3) var(--ct-space-4);
+}
+
+.hf-legend .ui-legend {
+  margin: 0;
+}
+
+.hf-dock .fr-speed-note {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--ct-space-2);
+}
+
+/* Perimeter snapshots are the only observed times on the rail. */
+.fr-scrub-tick.hf-snapshot-tick {
+  background: var(--ct-fire);
+}
