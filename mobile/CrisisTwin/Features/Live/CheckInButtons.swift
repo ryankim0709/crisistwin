@@ -89,7 +89,7 @@ struct CheckInButtons: View {
                     .minimumScaleFactor(0.8)
             }
             .font(.headline)
-            .padding(.horizontal, 14)
+            .padding(.horizontal, 16)
             .padding(.vertical, 6)
             .frame(maxWidth: .infinity, minHeight: 56)
             .contentShape(.capsule)
@@ -143,7 +143,7 @@ struct StillThereRow: View {
                 Spacer(minLength: 8)
                 answers
             }
-            VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 12) {
                 question
                 answers.padding(.leading, 40)
             }
@@ -172,7 +172,7 @@ struct StillThereRow: View {
     }
 
     private var answers: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 8) {
             Button("Yes") { answer(true) }
                 .accessibilityLabel("Yes, still there")
             Button("No") { answer(false) }
@@ -211,7 +211,7 @@ struct BoardQuestionRow: View {
                 Spacer(minLength: 8)
                 answers
             }
-            VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 12) {
                 label
                 answers.padding(.leading, 40)
             }
@@ -235,7 +235,7 @@ struct BoardQuestionRow: View {
     }
 
     private var answers: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 8) {
             ForEach(question.answers, id: \.self) { answer in
                 Button(answer.title) {
                     tick += 1

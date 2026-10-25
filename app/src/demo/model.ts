@@ -1,107 +1,113 @@
 /**
- * Command demo (/demo): a continuously running fire board on the Camp drill zones. Fires keep
+ * Command demo (/demo): a continuously running fire board on the active drill's zones (Camp by default). Fires keep
  * starting, firefighting units fight them and households evacuate, on a simulation clock with
  * no end state (24/7 monitoring). Pure: no React, network or LLM; seeded, so a seed, the same
  * environment and the same orders replay the same run. See docs/adr/0047-command-demo.md and,
  * for what is modelled and what is assumed, docs/command-demo-realism.md.
  *
  * Model, shown in the UI:
- * - Fire spread is Rothermel (1972) from the fuel, slope and wind at the fire's head
- *   (demo/realism.ts spreadRates, reusing fire/rothermel.ts). The wind is an hourly station
- *   series (GET /api/demo/wind) that changes over the clock. A fire is one ellipse with the
- *   ignition at its rear: each minute its head, back and flank grow by the Rothermel head,
- *   backing and flank rates, and its axis is the spread-weighted mean heading. A lumped
- *   simplification of FARSITE's Huygens wavelet propagation (Finney 1998): no per-vertex
- *   fuel or slope, and a wind shift turns the whole ellipse rather than growing a new head.
+ * - Fire spread is the simulator's cell solver, the same one /fire and Simulation Studio run
+ *   (fire/spread.ts simulateScheduledFireSpread: Rothermel 1972 surface spread with crown fire,
+ *   ember spotting and structure-to-structure spread at their defaults) on the drill's LANDFIRE
+ *   landscape, with every board fire as a source. demo/fireField.ts holds the solve and what is
+ *   read back from it; the page runs it off the main thread (useFireSolver) and the board clock
+ *   holds while a required solve is pending (fireSolveDue), so a run does not depend on machine
+ *   speed. A solve is required for a new fire, a contained or closed fire, a change of the hourly
+ *   wind sample or fuel moisture, and when the lookahead runs short; each continues from the
+ *   burned state at that minute (spread.ts ResumeFrom), and each uses the current hour's wind
+ *   for its whole lookahead.
  * - Containment race (as studio/initialAttack.ts and dispatch/fireAttack.ts): units on scene
  *   build line at their sourced production rate for the fuel and slope (realism.ts
- *   lineMetersPerMinute). The fire is contained when the line reaches its perimeter AND the
- *   head flame length is within the longest flame an on-scene unit's line holds (PMS 465
- *   Hauling chart: 4 ft hand tools, 8 ft engines and dozers). Until then the line is flank
- *   line and cannot exceed the perimeter. Mop-up MOPUP_MINUTES, then the fire is out.
- * - Scheduled ignitions arrive at the activity level's interval, forever; burning fires with a
- *   head intensity above the spotting threshold throw spot fires downwind. At most
+ *   lineMetersPerMinute). The fire is contained when the line reaches its perimeter (the
+ *   solver footprint's edge facing ground that can still burn, fireField.ts) AND the head flame
+ *   at its leading front cell is within the longest flame an on-scene unit's line holds (PMS 465
+ *   Hauling chart: 4 ft hand tools, 8 ft engines and dozers) and that cell is not crowning. Until
+ *   then the line is flank line and cannot exceed the perimeter. Mop-up MOPUP_MINUTES, then the
+ *   fire is out. A contained fire stops spreading in the solver from its containment minute.
+ * - Scheduled ignitions arrive at the activity level's interval, forever. Spot fires come from
+ *   the solver's ember spotting and belong to the fire that threw them. At most
  *   MAX_ACTIVE_FIRES burn or smoulder at once.
  * - Households: each zone's carless households (ACS) cannot drive out and stay home. Households
  *   with a vehicle leave on an evacuation order (ORDER_COMPLIANCE of them) or, with no order,
  *   on the fire cue when fire touches the zone (SHADOW_SHARE of them), each with an
  *   exponential departure delay of mean DEPARTURE_MEAN_MINUTES (Camp, Grajdura 2022), then
  *   drive their route's free-flow time. Households home when fire reaches the zone core are
- *   caught. Congestion is not modelled.
+ *   caught. "Touches" and "reaches" read the solver's arrival field over the zone's cells and at
+ *   its core cell. Congestion is not modelled.
  * - Units start at real CAL FIRE stations (GET /api/suppression/bases) or, without the bases
  *   file, at synthetic stations; they drive the road network for their apparatus class
  *   (POST /api/demo/crew_routes) after their turnout, or a straight line x 1.3 while no road
  *   time is known.
  * - A zone that was ordered out or overrun reopens once no fire has touched it for
  *   REOPEN_MINUTES and none is forecast to; caught households stay in the running total.
- *   Fires that are out leave the board after OUT_KEEP_MINUTES.
+ *   Fires that are out leave the board after OUT_KEEP_MINUTES (their burned ground stays).
  *
  * Units: minutes are simulation minutes from T+0; distances metres; areas hectares on output;
  * flame lengths feet (the Hauling chart's unit).
  */
 
-import { SPOTTING_MIN_FIRELINE_INTENSITY_BTU_PER_FOOT_PER_SECOND } from "../fire/spread";
-import { ellipsePerimeter } from "../studio/initialAttack";
+import { fuelLabel, isBurnable } from "../fire/fuelModels";
+import { mercatorToLonLat, type LandscapeGrid } from "../fire/landscape";
+import { cellAt } from "../fire/spread";
 import type { LonLat } from "../live/types";
+import {
+  LOOKAHEAD_MINUTES,
+  MAX_SOLVER_SOURCES,
+  NO_FRONT,
+  areaAt,
+  fireGeometry,
+  noSpreadReason,
+  perimeterAt,
+  rasterZone,
+  zoneArrivals,
+  type FireSolveRequest,
+  type FireSolveResult,
+  type FrontBehaviour,
+  type SolveSource,
+  type ZoneArrivals,
+  type ZoneCells,
+} from "./fireField";
 import {
   DEPARTURE_MEAN_MINUTES,
   FALLBACK_CIRCUITY,
-  FALLBACK_FUEL_CODE,
   FALLBACK_SPEED_KMH,
-  FALLBACK_WIND,
-  FALLBACK_WIND_FROM_DEG,
-  FALLBACK_WIND_SPEED_M_PER_S,
   KIND_PREFIX,
   ORDER_COMPLIANCE,
   ROSTER,
   SHADOW_SHARE,
-  SpreadCache,
   departedShare,
-  groundFrom,
   holdsFlameFeet,
   kindShort,
   lineMetersPerMinute,
-  spreadRates,
   turnoutMinutes,
+  windAt,
   type DemoApparatusKind,
   type MoistureId,
-  type SpreadRates,
+  type SpreadInputs,
 } from "./realism";
 
 /** Mean departure delay after the cue (Camp, sourced). The observation's departure figure. */
 export const DEPARTURE_SPREAD_MINUTES = DEPARTURE_MEAN_MINUTES;
-/** Wind direction of the fallback environment (realism.ts FALLBACK_WIND_FROM_DEG). */
-export const WIND_FROM_DEG = FALLBACK_WIND_FROM_DEG;
-/** A Type 3 engine's line in the fallback fuel on flat ground, m/min (PMS 465 p.164). */
-export const TEAM_LINE_M_PER_MIN = lineMetersPerMinute("engine_t3", FALLBACK_FUEL_CODE, 0);
-const FALLBACK_WIND_SPEEDS = { speedMetersPerSecond: FALLBACK_WIND_SPEED_M_PER_S, fromDegrees: FALLBACK_WIND_FROM_DEG };
-/** Back over head rate of the fallback environment (fallback fuel and wind, flat, dry). */
-export const BACK_RATIO = (() => {
-  const r = spreadRates(FALLBACK_FUEL_CODE, 0, 0, FALLBACK_WIND_SPEEDS, "dry");
-  return r.headMetersPerMinute > 0 ? r.backMetersPerMinute / r.headMetersPerMinute : 1;
-})();
 
 export const MOPUP_MINUTES = 10;
 export const OUT_KEEP_MINUTES = 30;
 export const REOPEN_MINUTES = 90;
-/** Forecasts (zone fire ETAs, containment estimates) look this far ahead, at current rates. */
+/** Forecasts (zone fire ETAs, containment estimates) look this far ahead in the solver's lookahead. */
 export const FORECAST_MINUTES = 120;
 /** A field report inside a fire, or one it reaches within this many minutes, joins that fire. */
 export const REPORT_JOIN_MINUTES = 5;
 export const MAX_ACTIVE_FIRES = 25;
 /** ASSUMPTION: units drive to the fire's heel, this far behind the burned edge, to anchor. */
 export const ANCHOR_OFFSET_M = 100;
-/** Size given to a fire at ignition so its outline is drawable, metres. */
-const MIN_DRAW_M = 15;
 const MAX_EVENTS = 200;
 const MAX_SEEN_REPORTS = 1000;
 const MAX_STEP_MINUTES = 1;
 const METERS_PER_DEG = 111_320;
 const SQUARE_METERS_PER_HECTARE = 10_000;
-const ELLIPSE_POINTS = 40;
 const ZONE_RING_POINTS = 40;
 const SYNTHETIC_STATION_COUNT = 3;
-const FORECAST_BISECTIONS = 12;
+/** The hourly wind series changes on these boundaries (realism.ts windAt). */
+const WIND_SAMPLE_MINUTES = 60;
 
 export type Activity = "quiet" | "active" | "severe";
 
@@ -114,18 +120,16 @@ export interface ActivityLevel {
   moisture: MoistureId;
   /** Minutes between scheduled ignitions (scenario assumption). */
   ignitionEvery: [number, number];
-  /** Burning fires at least this large can throw spot fires (scenario assumption). */
-  spotMinHa: number;
-  spotChancePerMinute: number;
 }
 
 export const ACTIVITY: Record<Activity, ActivityLevel> = {
-  quiet: { label: "Quiet", moisture: "moderate", ignitionEvery: [25, 45], spotMinHa: 60, spotChancePerMinute: 0.01 },
-  active: { label: "Active", moisture: "dry", ignitionEvery: [12, 20], spotMinHa: 40, spotChancePerMinute: 0.02 },
-  severe: { label: "Severe", moisture: "critical", ignitionEvery: [6, 12], spotMinHa: 25, spotChancePerMinute: 0.04 },
+  quiet: { label: "Quiet", moisture: "moderate", ignitionEvery: [25, 45] },
+  active: { label: "Active", moisture: "dry", ignitionEvery: [12, 20] },
+  severe: { label: "Severe", moisture: "critical", ignitionEvery: [6, 12] },
 };
 export const ACTIVITIES: Activity[] = ["quiet", "active", "severe"];
 
+/** "spot" is kept for older logs; spot fires now belong to the solver source that threw them. */
 export type FireSource = "scenario" | "spot" | "field_report" | "manual";
 export type FireStatus = "burning" | "contained" | "out";
 
@@ -136,19 +140,22 @@ export interface Fire {
   reportIds: string[];
   origin: LonLat;
   ignitedAt: number;
-  /** Current head spread rate, m/min (display; the spread uses `rates`). */
+  /** Whole board minute the solver lets it spread from (ceil of `ignitedAt`). */
+  startMinute: number;
+  /** Why it cannot spread (off the landscape, no fuel, already burned), or null; such a fire is not a solver source. */
+  noSpread: string | null;
+  /** Head spread rate at the leading front cell, m/min, rounded (display). */
   headRate: number;
-  /** Minutes of free growth so far (stops when contained). */
-  tau: number;
-  /** Distances grown from the ignition, metres: head, back, and the flank half-width. */
-  headM: number;
-  backM: number;
-  flankM: number;
-  /** Accumulated head-spread vector (east, north), metres; sets the ellipse axis. */
-  axisEastM: number;
-  axisNorthM: number;
-  /** Rothermel rates at the head, this minute. */
-  rates: SpreadRates;
+  /** The solver's Rothermel behaviour at the leading front cell, now. */
+  rates: FrontBehaviour;
+  /** Solver footprint now: burned area (ha), open perimeter (m) and its growth over the next minute (m/min). */
+  areaHa: number;
+  perimeterM: number;
+  perimeterGrowthMPerMin: number;
+  /** Ground distance from the ignition point to the farthest burned cell, metres. */
+  reachM: number;
+  /** Where units drive to: the heel, ANCHOR_OFFSET_M behind the burned edge. */
+  target: LonLat;
   /** Line built, metres. */
   lineM: number;
   status: FireStatus;
@@ -194,7 +201,7 @@ export interface ZoneState {
   households: number;
   /** Households with no vehicle (ACS): they cannot drive out. */
   noVehicle: number;
-  /** Largest outer ring, thinned; fire contact is tested on these vertices. */
+  /** Largest outer ring, thinned. */
   ring: LonLat[];
   core: LonLat;
   orderedAt: number | null;
@@ -202,7 +209,7 @@ export interface ZoneState {
   /** Fire-cue (shadow) evacuation with no order: when it started and the route taken. */
   shadowAt: number | null;
   shadowRoute: RouteOption | null;
-  /** Minute fire first touched the zone edge / reached its core. */
+  /** Minute fire first touched the zone / reached its core. */
   touchedAt: number | null;
   overrunAt: number | null;
   /** Last minute a fire touched the zone. */
@@ -225,25 +232,21 @@ export interface TravelLeg {
   basis: TravelBasis;
 }
 
-/** Everything the board reads from outside: spread inputs, stations, carless counts. */
+/** Everything the board reads from outside: landscape, wind, stations, carless counts. */
 export interface DemoEnvironment {
-  spread: SpreadCache;
+  /** Fuel/terrain lookups and the hourly wind. */
+  spread: SpreadInputs;
   /** Real stations by roster base; null = synthetic stations (bases file unavailable). */
   bases: { calfireStations: Station[]; localStations: Station[]; crewCamps: Station[] } | null;
   basesLabel: string;
   /** Carless households per zone id; missing zones count 0. */
   noVehicle: ReadonlyMap<string, number>;
   noVehicleLabel: string;
-}
-
-export function fallbackEnvironment(): DemoEnvironment {
-  return {
-    spread: new SpreadCache(groundFrom(null), FALLBACK_WIND),
-    bases: null,
-    basesLabel: "Synthetic stations (assumed: CAL FIRE bases file unavailable)",
-    noVehicle: new Map(),
-    noVehicleLabel: "Carless households unknown (counted as 0)",
-  };
+  /** LANDFIRE fuel, canopy and terrain the solver runs on (also the 3D board's ground). */
+  landscape: LandscapeGrid;
+  /** The prebuilt region it came from, or the drill area loaded live from LANDFIRE. */
+  landscapeRegion: { id: string; name: string };
+  landscapeSource: "stored" | "live";
 }
 
 export type EventKind = "ignition" | "contained" | "out" | "overrun" | "order" | "team" | "closed" | "zone" | "board";
@@ -252,6 +255,25 @@ export interface BoardEvent {
   kind: EventKind;
   actor: "board" | "agent" | "you";
   text: string;
+}
+
+/** The solver field the board runs on, with what the board reads from it per zone. */
+export interface FireField extends FireSolveResult {
+  /** Source index by fire id. */
+  sourceIndex: Map<string, number>;
+  /** Grid cell of each source's ignition point. */
+  originCells: number[];
+  zones: Map<string, ZoneArrivals>;
+  /** fireGeometry per fire, cached per whole minute. */
+  geometry: Map<string, { minute: number; value: ReturnType<typeof fireGeometry> }>;
+}
+
+export interface FireSolverState {
+  field: FireField | null;
+  /** Last solve failure, shown on the page; the clock holds until a solve succeeds. */
+  error: string | null;
+  /** Zones rasterised on the landscape (fixed per board). */
+  zoneCells: Map<string, ZoneCells>;
 }
 
 export interface Board {
@@ -266,6 +288,8 @@ export interface Board {
   stations: Station[];
   zones: ZoneState[];
   env: DemoEnvironment;
+  /** The solver's arrival field and its bookkeeping (fireField.ts). */
+  solver: FireSolverState;
   /** Latest zone routes (POST /api/demo/routes); shadow evacuees take the best one. */
   routes: ReadonlyMap<string, RouteOption[]>;
   /** Road legs by travelKey; filled by the page from POST /api/demo/crew_routes. */
@@ -319,145 +343,38 @@ export function distanceM(a: LonLat, b: LonLat): number {
   return Math.hypot(x, y);
 }
 
-/** Unit vector (east, north) of the fire's axis: the spread-weighted mean heading. */
-function axisOf(fire: Pick<Fire, "axisEastM" | "axisNorthM" | "rates">): [number, number] {
-  const n = Math.hypot(fire.axisEastM, fire.axisNorthM);
-  if (n > 1e-9) return [fire.axisEastM / n, fire.axisNorthM / n];
-  const th = (fire.rates.headingDegrees * Math.PI) / 180;
-  return [Math.sin(th), Math.cos(th)];
-}
-
-interface Shape {
-  head: number;
-  back: number;
-  flank: number;
-}
-
-/** The fire's ellipse `t` minutes from now, if its current rates persist. */
-function shapeIn(fire: Fire, t: number): Shape {
-  const grow = fire.status === "burning" ? t : 0;
-  return {
-    head: Math.max(MIN_DRAW_M, fire.headM + fire.rates.headMetersPerMinute * grow),
-    back: Math.max(MIN_DRAW_M / 2, fire.backM + fire.rates.backMetersPerMinute * grow),
-    flank: Math.max(MIN_DRAW_M / 2, fire.flankM + fire.rates.flankMetersPerMinute * grow),
-  };
-}
-
-function insideShape(fire: Fire, shape: Shape, p: LonLat): boolean {
-  const [ux, uy] = axisOf(fire);
-  const [ex, ny] = toLocal(fire.origin, p);
-  const x = ex * ux + ny * uy;
-  const y = -ex * uy + ny * ux;
-  const a = (shape.head + shape.back) / 2;
-  const c = (shape.head - shape.back) / 2;
-  const b = shape.flank;
-  return ((x - c) / a) ** 2 + (y / b) ** 2 <= 1;
-}
-
-/** Whether the fire covers `p` now. */
-export function fireCovers(fire: Fire, p: LonLat): boolean {
-  return insideShape(fire, shapeIn(fire, 0), p);
-}
-
-/**
- * Minutes until the fire covers `p` if its current rates persist (0 = covered now), or null
- * when not within `limit`. Bisection: the ellipse only grows.
- */
-export function waitMinutes(fire: Fire, p: LonLat, limit = FORECAST_MINUTES): number | null {
-  if (fireCovers(fire, p)) return 0;
-  if (fire.status !== "burning" || limit <= 0) return null;
-  const far = shapeIn(fire, limit);
-  const reach = Math.hypot(Math.max(far.head, far.back), far.flank);
-  if (distanceM(fire.origin, p) > reach || !insideShape(fire, far, p)) return null;
-  let lo = 0;
-  let hi = limit;
-  for (let i = 0; i < FORECAST_BISECTIONS; i += 1) {
-    const mid = (lo + hi) / 2;
-    if (insideShape(fire, shapeIn(fire, mid), p)) hi = mid;
-    else lo = mid;
-  }
-  return hi;
-}
-
-/**
- * Burning minutes (fire.tau scale) at which the fire covers `p`, at current rates; Infinity
- * when not within the forecast. A fire given only `origin` and `headRate` grows as a circle.
- */
-export function arrivalTau(fire: Pick<Fire, "origin" | "headRate"> & Partial<Fire>, p: LonLat): number {
-  if (fire.rates === undefined) {
-    const d = distanceM(fire.origin, p);
-    return d === 0 ? 0 : fire.headRate > 0 ? d / fire.headRate : Infinity;
-  }
-  const wait = waitMinutes(fire as Fire, p);
-  return wait === null ? Infinity : (fire.tau ?? 0) + wait;
+/** WGS84 centre of a landscape cell. */
+export function cellLonLat(grid: LandscapeGrid, cell: number): LonLat {
+  const x = cell % grid.width;
+  const y = (cell - x) / grid.width;
+  return mercatorToLonLat(grid.originX + x * grid.cellSizeX, grid.originY + y * grid.cellSizeY);
 }
 
 export function fireAreaHa(fire: Fire): number {
-  const s = shapeIn(fire, 0);
-  return (Math.PI * ((s.head + s.back) / 2) * s.flank) / SQUARE_METERS_PER_HECTARE;
+  return fire.areaHa;
 }
 
-function perimeterOf(shape: Shape): number {
-  const a = (shape.head + shape.back) / 2;
-  const b = shape.flank;
-  // Ramanujan's approximation, via studio/initialAttack.ts ellipsePerimeter(area, L:B).
-  return ellipsePerimeter(Math.PI * a * b, Math.max(a, b) / Math.min(a, b));
+/** Open perimeter of the fire's solver footprint now, metres. */
+export function firePerimeterM(fire: Fire): number {
+  return fire.perimeterM;
 }
 
-/** Perimeter `t` minutes from now at current rates, metres. */
-export function firePerimeterM(fire: Fire, t = 0): number {
-  return perimeterOf(shapeIn(fire, t));
+/** Perimeter `t` minutes from now in the solver's lookahead, metres (the current one once contained). */
+export function perimeterIn(board: Board, fire: Fire, t: number): number {
+  const field = board.solver.field;
+  const s = field?.sourceIndex.get(fire.id);
+  if (!field || s === undefined) return fire.perimeterM;
+  return perimeterAt(field, s, board.minute + (fire.status === "burning" ? t : 0));
 }
 
-/** Perimeter growth this minute, m/min (0 once contained). */
-export function perimeterGrowth(fire: Fire | number): number {
-  if (typeof fire === "number") {
-    // A head rate alone: the fallback environment's ellipse shape at that head rate.
-    const back = fire * BACK_RATIO;
-    const r = spreadRates(FALLBACK_FUEL_CODE, 0, 0, FALLBACK_WIND_SPEEDS, "dry");
-    const a = (fire + back) / 2;
-    const b = a / r.lengthToBreadth;
-    return ellipsePerimeter(Math.PI * a * b, r.lengthToBreadth);
-  }
-  if (fire.status !== "burning") return 0;
-  return firePerimeterM(fire, 1) - firePerimeterM(fire, 0);
+/** Perimeter growth over the next minute, m/min (0 once contained). */
+export function perimeterGrowth(fire: Fire): number {
+  return fire.status === "burning" ? fire.perimeterGrowthMPerMin : 0;
 }
 
-/** Closed outline of the fire at its current size. */
-export function fireRing(fire: Fire, points = ELLIPSE_POINTS): LonLat[] {
-  const s = shapeIn(fire, 0);
-  const [ux, uy] = axisOf(fire);
-  const a = (s.head + s.back) / 2;
-  const c = (s.head - s.back) / 2;
-  const ring: LonLat[] = [];
-  for (let i = 0; i < points; i += 1) {
-    const th = (2 * Math.PI * i) / points;
-    const x = c + a * Math.cos(th);
-    const y = s.flank * Math.sin(th);
-    ring.push(fromLocal(fire.origin, [x * ux - y * uy, x * uy + y * ux]));
-  }
-  ring.push(ring[0]);
-  return ring;
-}
-
-/** The fire's head point now. */
-export function headPoint(fire: Fire): LonLat {
-  const [ux, uy] = axisOf(fire);
-  return fromLocal(fire.origin, [ux * fire.headM, uy * fire.headM]);
-}
-
-/** Where units drive to: the heel, ANCHOR_OFFSET_M behind the burned back edge. */
+/** Where units drive to: the heel, ANCHOR_OFFSET_M behind the burned edge. */
 export function crewTarget(fire: Fire): LonLat {
-  const [ux, uy] = axisOf(fire);
-  const back = shapeIn(fire, 0).back + ANCHOR_OFFSET_M;
-  return fromLocal(fire.origin, [-ux * back, -uy * back]);
-}
-
-/** Ignition point of a spot fire `dist` metres beyond the head, offset `side` across. */
-function downwindOf(fire: Fire, dist: number, side: number): LonLat {
-  const [ux, uy] = axisOf(fire);
-  const along = fire.headM + dist;
-  return fromLocal(fire.origin, [along * ux - side * uy, along * uy + side * ux]);
+  return fire.target;
 }
 
 export function thinRing(ring: LonLat[], max = ZONE_RING_POINTS): LonLat[] {
@@ -475,6 +392,174 @@ export function pointInRing(p: LonLat, ring: LonLat[]): boolean {
     if (yi > p[1] !== yj > p[1] && p[0] < ((xj - xi) * (p[1] - yi)) / (yj - yi) + xi) inside = !inside;
   }
   return inside;
+}
+
+// ---- the solver field ----
+
+/** The field the board runs on, or null before the first fire is solved. */
+export function fireField(board: Board): FireField | null {
+  return board.solver.field;
+}
+
+function stopMinute(fire: Fire): number | null {
+  if (fire.status === "burning") return null;
+  return fire.containedAt ?? fire.outAt;
+}
+
+/** Wind and moisture at the board minute, as the solver takes them. */
+function weatherNow(board: Board): { speed: number; from: number; moisture: MoistureId; key: string } {
+  const w = windAt(board.env.spread.wind, board.minute);
+  const moisture = ACTIVITY[board.activity].moisture;
+  return { speed: w.speedMetersPerSecond, from: w.fromDegrees, moisture, key: `${w.speedMetersPerSecond}|${w.fromDegrees}|${moisture}` };
+}
+
+function fieldWeatherKey(field: FireSolveResult): string {
+  return `${field.windSpeedMetersPerSecond}|${field.windFromDegrees}|${field.moisture}`;
+}
+
+/**
+ * Why the board needs a new solve before its clock may move, or null. Pure; `step` holds while
+ * this is non-null, so every solve happens at a board-defined minute.
+ */
+export function fireSolveDue(board: Board): string | null {
+  const { field, error } = board.solver;
+  if (error) return "the last fire solve failed";
+  const spreading = board.fires.filter((f) => f.status === "burning" && f.noSpread === null);
+  if (!field) return spreading.length > 0 ? `new fire ${spreading[0].id}` : null;
+  for (const f of spreading) if (!field.sourceIndex.has(f.id)) return `new fire ${f.id}`;
+  for (const f of board.fires) {
+    if (f.status === "burning") continue;
+    const s = field.sourceIndex.get(f.id);
+    if (s !== undefined && field.sources[s].stopMinute !== stopMinute(f)) return `${f.id} ${f.status === "contained" ? "contained" : "closed"}`;
+  }
+  if (spreading.length === 0) return null;
+  if (weatherNow(board).key !== fieldWeatherKey(field)) return "hourly wind or fuel moisture changed";
+  if (board.minute + FORECAST_MINUTES > field.horizonMinutes) return "lookahead renewed";
+  return null;
+}
+
+/** The solve the board needs now (call when fireSolveDue is non-null and no solve failed). */
+export function buildFireSolveRequest(board: Board): FireSolveRequest {
+  const field = board.solver.field;
+  const weather = weatherNow(board);
+  const horizonMinutes = Math.ceil(board.minute) + LOOKAHEAD_MINUTES;
+  let candidates = board.fires.filter(
+    (f) => f.noSpread === null && f.startMinute < horizonMinutes && (f.status === "burning" || field?.sourceIndex.has(f.id)),
+  );
+  if (candidates.length > MAX_SOLVER_SOURCES) {
+    // Drop the oldest stopped fires: their burned ground stays, as ground of no listed fire.
+    const burning = candidates.filter((f) => f.status === "burning");
+    const stopped = candidates.filter((f) => f.status !== "burning").slice(-(MAX_SOLVER_SOURCES - burning.length));
+    const keep = new Set([...burning, ...stopped]);
+    candidates = candidates.filter((f) => keep.has(f));
+  }
+  const sources: SolveSource[] = candidates.map((f) => ({
+    fireId: f.id,
+    location: f.origin,
+    startMinute: f.startMinute,
+    stopMinute: stopMinute(f),
+  }));
+  let resume: FireSolveRequest["resume"] = null;
+  if (field) {
+    const remap = new Int8Array(field.sources.length).fill(-1);
+    sources.forEach((s, i) => {
+      const old = field.sourceIndex.get(s.fireId);
+      if (old !== undefined) remap[old] = i;
+    });
+    const arrivalMinutes = field.arrivalMinutes.slice();
+    const sourceIndexByCell = new Int8Array(arrivalMinutes.length);
+    for (let i = 0; i < arrivalMinutes.length; i++) {
+      const old = field.sourceIndexByCell[i];
+      const next = old >= 0 ? remap[old] : -1;
+      sourceIndexByCell[i] = next;
+      // A stopped fire's cells past its stop are not history (the board stops before it moves on).
+      const stop = next >= 0 ? sources[next].stopMinute : null;
+      if (stop !== null && arrivalMinutes[i] > stop) arrivalMinutes[i] = Number.POSITIVE_INFINITY;
+    }
+    resume = { arrivalMinutes, sourceIndexByCell, earlierBehaviour: field.behaviour, earlierWindSpeedMph: field.windSpeedMph };
+  }
+  return {
+    key: `${board.seed}|${board.minute}|${weather.key}|${sources.map((s) => `${s.fireId}:${s.stopMinute}`).join(",")}`,
+    fromMinute: field ? board.minute : null,
+    horizonMinutes,
+    windSpeedMetersPerSecond: weather.speed,
+    windFromDegrees: weather.from,
+    moisture: weather.moisture,
+    sources,
+    resume,
+  };
+}
+
+/**
+ * Installs a solve. False (nothing changed) when it was asked at a different board minute
+ * than now (a restarted or moved board); the page then asks again.
+ */
+export function applyFireSolve(board: Board, result: FireSolveResult, requestedAtMinute: number): boolean {
+  if (requestedAtMinute !== board.minute) return false;
+  const grid = board.env.landscape;
+  const sourceIndex = new Map(result.sources.map((s, i) => [s.fireId, i]));
+  const zones = new Map<string, ZoneArrivals>();
+  for (const [id, cells] of board.solver.zoneCells) zones.set(id, zoneArrivals(result, cells));
+  board.solver.field = {
+    ...result,
+    sourceIndex,
+    originCells: result.sources.map((s) => cellAt(grid, { longitude: s.location[0], latitude: s.location[1] })),
+    zones,
+    geometry: new Map(),
+  };
+  board.solver.error = null;
+  for (const fire of board.fires) refreshFire(board, fire);
+  return true;
+}
+
+/** Records a failed solve; the clock stays held and the page retries. */
+export function fireSolveFailed(board: Board, message: string): void {
+  if (board.solver.error === message) return;
+  board.solver.error = message;
+  log(board, "board", "board", `Fire model failed: ${message}`);
+}
+
+/** Upwind of `p` by `meters`, toward the bearing the wind blows from. */
+function upwindOf(board: Board, p: LonLat, meters: number): LonLat {
+  const th = (windAt(board.env.spread.wind, board.minute).fromDegrees * Math.PI) / 180;
+  return fromLocal(p, [Math.sin(th) * meters, Math.cos(th) * meters]);
+}
+
+/** Recomputes a fire's footprint snapshot (area, perimeter, front, heel) from the field at the board minute. */
+function refreshFire(board: Board, fire: Fire): void {
+  const field = board.solver.field;
+  const s = field?.sourceIndex.get(fire.id);
+  if (!field || s === undefined) {
+    fire.areaHa = fire.perimeterM = fire.perimeterGrowthMPerMin = fire.reachM = 0;
+    fire.rates = NO_FRONT;
+    fire.headRate = 0;
+    fire.target = upwindOf(board, fire.origin, ANCHOR_OFFSET_M);
+    return;
+  }
+  const grid = board.env.landscape;
+  const minute = board.minute;
+  fire.areaHa = areaAt(field, grid, s, minute) / SQUARE_METERS_PER_HECTARE;
+  fire.perimeterM = perimeterAt(field, s, minute);
+  fire.perimeterGrowthMPerMin = fire.status === "burning" ? perimeterAt(field, s, minute + 1) - fire.perimeterM : 0;
+  const whole = Math.floor(minute);
+  let cached = field.geometry.get(fire.id);
+  if (!cached || cached.minute !== whole) {
+    cached = { minute: whole, value: fireGeometry(field, grid, s, field.originCells[s], whole) };
+    field.geometry.set(fire.id, cached);
+  }
+  const g = cached.value;
+  fire.rates = fire.status === "burning" ? g.front : { ...g.front, headMetersPerMinute: 0 };
+  fire.headRate = Math.round(fire.rates.headMetersPerMinute * 10) / 10;
+  fire.reachM = g.reachMeters;
+  if (g.heelCell < 0) {
+    fire.target = upwindOf(board, fire.origin, ANCHOR_OFFSET_M);
+  } else {
+    const heel = cellLonLat(grid, g.heelCell);
+    const lead = g.front.cell >= 0 ? cellLonLat(grid, g.front.cell) : fire.origin;
+    const [x, y] = toLocal(lead, heel);
+    const d = Math.hypot(x, y);
+    fire.target = d > 1 ? fromLocal(heel, [(x / d) * ANCHOR_OFFSET_M, (y / d) * ANCHOR_OFFSET_M]) : upwindOf(board, heel, ANCHOR_OFFSET_M);
+  }
 }
 
 // ---- setup ----
@@ -543,8 +628,36 @@ function buildTeams(zones: BaseZone[], env: DemoEnvironment): { teams: Team[]; s
   return { teams, stations: [...used.values()] };
 }
 
-export function createBoard(zones: BaseZone[], activity: Activity, seed: number, env: DemoEnvironment = fallbackEnvironment()): Board {
+/** Zones rasterised on the landscape's cells (cell centres inside the thinned ring, plus core and ring cells). */
+function rasterZones(grid: LandscapeGrid, zones: ZoneState[]): Map<string, ZoneCells> {
+  const lonOfCol = new Float64Array(grid.width);
+  for (let c = 0; c < grid.width; c += 1) lonOfCol[c] = mercatorToLonLat(grid.originX + c * grid.cellSizeX, grid.originY)[0];
+  const latOfRow = new Float64Array(grid.height);
+  for (let r = 0; r < grid.height; r += 1) latOfRow[r] = mercatorToLonLat(grid.originX, grid.originY + r * grid.cellSizeY)[1];
+  return new Map(zones.map((z) => [z.id, rasterZone(grid, z.ring, z.core, lonOfCol, latOfRow)]));
+}
+
+export function createBoard(zones: BaseZone[], activity: Activity, seed: number, env: DemoEnvironment): Board {
   const { teams, stations } = buildTeams(zones, env);
+  const zoneStates: ZoneState[] = zones.map((z) => {
+    const households = Math.max(0, Math.round(z.households));
+    return {
+      id: z.id,
+      name: z.name,
+      households,
+      noVehicle: Math.min(households, Math.max(0, Math.round(env.noVehicle.get(z.id) ?? 0))),
+      ring: thinRing(z.ring),
+      core: z.core,
+      orderedAt: null,
+      route: null,
+      shadowAt: null,
+      shadowRoute: null,
+      touchedAt: null,
+      overrunAt: null,
+      lastFireAt: null,
+      caught: 0,
+    };
+  });
   const board: Board = {
     seed,
     activity,
@@ -555,26 +668,9 @@ export function createBoard(zones: BaseZone[], activity: Activity, seed: number,
     fires: [],
     teams,
     stations,
-    zones: zones.map((z) => {
-      const households = Math.max(0, Math.round(z.households));
-      return {
-        id: z.id,
-        name: z.name,
-        households,
-        noVehicle: Math.min(households, Math.max(0, Math.round(env.noVehicle.get(z.id) ?? 0))),
-        ring: thinRing(z.ring),
-        core: z.core,
-        orderedAt: null,
-        route: null,
-        shadowAt: null,
-        shadowRoute: null,
-        touchedAt: null,
-        overrunAt: null,
-        lastFireAt: null,
-        caught: 0,
-      };
-    }),
+    zones: zoneStates,
     env,
+    solver: { field: null, error: null, zoneCells: rasterZones(env.landscape, zoneStates) },
     routes: new Map(),
     travel: new Map(),
     seenReports: [],
@@ -620,34 +716,34 @@ export function activeFires(board: Board): Fire[] {
   return board.fires.filter((f) => f.status !== "out");
 }
 
-function ratesAt(board: Board, p: LonLat): SpreadRates {
-  return board.env.spread.at(p, board.minute, ACTIVITY[board.activity].moisture);
-}
-
+/** Starts a fire at `origin`; `at` is its ignition minute (default now; scheduled ignitions pass their scheduled minute). */
 export function ignite(
   board: Board,
   origin: LonLat,
   source: FireSource,
   actor: BoardEvent["actor"],
   reportId?: string,
+  at: number = board.minute,
 ): Fire | null {
   if (activeFires(board).length >= MAX_ACTIVE_FIRES) return null;
   board.fireCount += 1;
-  const rates = ratesAt(board, origin);
+  const grid = board.env.landscape;
+  const noSpread = noSpreadReason(grid, board.solver.field?.arrivalMinutes ?? null, origin, board.minute);
   const fire: Fire = {
     id: `F${board.fireCount}`,
     source,
     reportIds: reportId ? [reportId] : [],
     origin,
-    ignitedAt: board.minute,
-    headRate: Math.round(rates.headMetersPerMinute * 10) / 10,
-    tau: 0,
-    headM: 0,
-    backM: 0,
-    flankM: 0,
-    axisEastM: 0,
-    axisNorthM: 0,
-    rates,
+    ignitedAt: at,
+    startMinute: Math.ceil(at),
+    noSpread,
+    headRate: 0,
+    rates: NO_FRONT,
+    areaHa: 0,
+    perimeterM: 0,
+    perimeterGrowthMPerMin: 0,
+    reachM: 0,
+    target: origin,
     lineM: 0,
     status: "burning",
     containedAt: null,
@@ -655,35 +751,98 @@ export function ignite(
     closedBy: null,
   };
   board.fires.push(fire);
+  refreshFire(board, fire);
   const zone = zoneAt(board, origin);
+  const cell = cellAt(grid, { longitude: origin[0], latitude: origin[1] });
   log(
     board,
     "ignition",
     actor,
-    `${SOURCE_TEXT[source]}: ${fire.id}${zone ? ` in ${zone.name}` : ""}, head ${fire.headRate} m/min, flame ${rates.headFlameFeet.toFixed(0)} ft.`,
+    `${SOURCE_TEXT[source]}: ${fire.id}${zone ? ` in ${zone.name}` : ""}${cell >= 0 ? `, ${fuelLabel(grid.fuelCodes[cell])}` : ""}${noSpread ? ` (${noSpread})` : ""}.`,
   );
   return fire;
 }
 
-/** A random point inside a random zone (between its core and one of its vertices). */
+/** Candidates a scheduled ignition tries before giving up on finding wildland fuel. */
+const IGNITION_CANDIDATES = 24;
+/** How far beyond a zone's edge (outward from its core) a scheduled ignition may land, m. */
+export const IGNITION_OUTSIDE_MAX_M = 1500;
+
+/**
+ * A scheduled ignition point near a community. Candidates alternate, starting inside: inside a
+ * random zone (between its core and a vertex), then in a ring up to IGNITION_OUTSIDE_MAX_M beyond
+ * a vertex, pointing away from the core (toward the wildland around a town). The first candidate on a
+ * Scott & Burgan fuel model wins (most WUI fires start in vegetation; developed ground burns in the
+ * solver only by structure spread). If none of IGNITION_CANDIDATES is burnable, the first in-zone
+ * candidate is used (the solver may still refuse it, and the fire is then labelled as unable to
+ * spread). All draws come from the board's seeded generator.
+ */
 function randomIgnitionPoint(board: Board): LonLat | null {
   if (board.zones.length === 0) return null;
-  const zone = board.zones[Math.floor(nextRandom(board) * board.zones.length)];
-  const vertex = zone.ring[Math.floor(nextRandom(board) * zone.ring.length)];
-  if (!vertex) return zone.core;
-  const u = 0.15 + 0.6 * nextRandom(board);
-  return [zone.core[0] + (vertex[0] - zone.core[0]) * u, zone.core[1] + (vertex[1] - zone.core[1]) * u];
+  let fallback: LonLat | null = null;
+  for (let i = 0; i < IGNITION_CANDIDATES; i++) {
+    const zone = board.zones[Math.floor(nextRandom(board) * board.zones.length)];
+    const vertex = zone.ring[Math.floor(nextRandom(board) * zone.ring.length)];
+    const u = nextRandom(board);
+    let p: LonLat;
+    if (!vertex) p = zone.core;
+    else if (i % 2 === 0) {
+      const t = 0.15 + 0.6 * u;
+      p = [zone.core[0] + (vertex[0] - zone.core[0]) * t, zone.core[1] + (vertex[1] - zone.core[1]) * t];
+    } else {
+      const [x, y] = toLocal(zone.core, vertex);
+      const r = Math.hypot(x, y);
+      const out = r > 1 ? (r + IGNITION_OUTSIDE_MAX_M * u) / r : 1;
+      p = fromLocal(zone.core, [x * out, y * out]);
+    }
+    fallback ??= p;
+    if (noSpreadReason(board.env.landscape, board.solver.field?.arrivalMinutes ?? null, p, board.minute) === null &&
+      isVegetated(board, p)) return p;
+  }
+  return fallback;
+}
+
+/** On a Scott & Burgan fuel model (vegetation), not developed or non-burnable ground. */
+function isVegetated(board: Board, p: LonLat): boolean {
+  return isBurnable(board.env.spread.ground.fuelCodeAt(p));
+}
+
+/** Whether the fire can spread in the solver (it is on the landscape, on fuel, on unburned ground). */
+export function headOnWildlandFuel(fire: Fire): boolean {
+  return fire.noSpread === null;
+}
+
+/** Minutes until `fire` reaches `p` in the solver's lookahead (0 = burned now), or null when not within `limit`. */
+export function waitMinutes(board: Board, fire: Fire, p: LonLat, limit = FORECAST_MINUTES): number | null {
+  const field = board.solver.field;
+  const s = field?.sourceIndex.get(fire.id);
+  if (!field || s === undefined) return null;
+  const cell = cellAt(board.env.landscape, { longitude: p[0], latitude: p[1] });
+  if (cell < 0 || field.sourceIndexByCell[cell] !== s) return null;
+  const wait = field.arrivalMinutes[cell] - board.minute;
+  if (wait <= 0) return 0;
+  return fire.status === "burning" && wait <= limit ? wait : null;
+}
+
+/** Whether `fire` started in the zone, or reaches it (any cell or its core) within `limit` minutes. */
+export function fireReachesZone(board: Board, fire: Fire, zone: ZoneState, limit: number): boolean {
+  if (pointInRing(fire.origin, zone.ring)) return true;
+  const field = board.solver.field;
+  const s = field?.sourceIndex.get(fire.id);
+  const za = field?.zones.get(zone.id);
+  if (!field || s === undefined || !za) return false;
+  return za.earliestBySource[s] - board.minute <= limit || (za.coreSource === s && za.coreArrival - board.minute <= limit);
 }
 
 /**
- * Turns a fire_seen field report into a fire, or joins it to the fire already there (inside
- * it, or reached within REPORT_JOIN_MINUTES). Each report is used once.
+ * Turns a fire_seen field report into a fire, or joins it to the fire already there (burned
+ * there, or reached within REPORT_JOIN_MINUTES). Each report is used once.
  */
 export function addReportFire(board: Board, reportId: string, coord: LonLat): Fire | null {
   if (board.seenReports.includes(reportId)) return null;
   board.seenReports.push(reportId);
   if (board.seenReports.length > MAX_SEEN_REPORTS) board.seenReports.shift();
-  const near = activeFires(board).find((f) => waitMinutes(f, coord, REPORT_JOIN_MINUTES) !== null);
+  const near = activeFires(board).find((f) => waitMinutes(board, f, coord, REPORT_JOIN_MINUTES) !== null);
   if (near) {
     near.reportIds.push(reportId);
     log(board, "ignition", "board", `Field report joined to ${near.id}.`);
@@ -819,7 +978,7 @@ export function applyOrder(
   return null;
 }
 
-/** Puts a fire out by hand; its units are freed. */
+/** Puts a fire out by hand; its units are freed. It stops spreading in the solver from now. */
 export function closeFire(board: Board, fireId: string): string | null {
   const fire = board.fires.find((f) => f.id === fireId);
   if (!fire || fire.status === "out") return `${fireId} is already out.`;
@@ -907,6 +1066,11 @@ function onSceneWork(board: Board, fire: Fire): { lineMPerMin: number; holdsFt: 
   return { lineMPerMin, holdsFt, count };
 }
 
+/** Whether a line holding flames up to `holdsFt` holds the fire's head now (no crown fire there). */
+function lineHoldsHead(fire: Fire, holdsFt: number): boolean {
+  return holdsFt > 0 && !fire.rates.crowning && fire.rates.headFlameFeet <= holdsFt;
+}
+
 /** A unit's line on this fire's fuel and slope, m/min. */
 export function unitLineOn(board: Board, team: Team, fire: Fire | null): number {
   const p = fire?.origin ?? team.position;
@@ -914,28 +1078,28 @@ export function unitLineOn(board: Board, team: Team, fire: Fire | null): number 
   return lineMetersPerMinute(team.kind, board.env.spread.ground.fuelCodeAt(p), slope.slopeTangent * 100);
 }
 
-function growFire(board: Board, fire: Fire, dt: number): void {
-  const r = ratesAt(board, headPoint(fire));
-  fire.rates = r;
-  fire.headRate = Math.round(r.headMetersPerMinute * 10) / 10;
-  fire.tau += dt;
-  fire.headM += r.headMetersPerMinute * dt;
-  fire.backM += r.backMetersPerMinute * dt;
-  fire.flankM += r.flankMetersPerMinute * dt;
-  const th = (r.headingDegrees * Math.PI) / 180;
-  fire.axisEastM += r.headMetersPerMinute * dt * Math.sin(th);
-  fire.axisNorthM += r.headMetersPerMinute * dt * Math.cos(th);
+/** Fires not out whose solver source index is known: the ones that can touch zones. */
+function activeSources(board: Board): Map<number, Fire> {
+  const field = board.solver.field;
+  const out = new Map<number, Fire>();
+  if (!field) return out;
+  for (const f of activeFires(board)) {
+    const s = field.sourceIndex.get(f.id);
+    if (s !== undefined) out.set(s, f);
+  }
+  return out;
 }
 
-function stepOnce(board: Board, dt: number): void {
+function stepOnce(board: Board, dt: number, landOn: number | null): void {
   const level = ACTIVITY[board.activity];
   const wholeMinute = Math.floor(board.minute + dt) > Math.floor(board.minute);
-  board.minute += dt;
+  board.minute = landOn ?? board.minute + dt;
 
   while (board.nextIgnitionAt <= board.minute) {
+    const at = board.nextIgnitionAt;
     const p = randomIgnitionPoint(board);
-    if (p) ignite(board, p, "scenario", "board");
-    board.nextIgnitionAt = board.minute + between(board, level.ignitionEvery);
+    if (p) ignite(board, p, "scenario", "board", undefined, at);
+    board.nextIgnitionAt = at + between(board, level.ignitionEvery);
   }
 
   for (const team of board.teams) {
@@ -949,24 +1113,16 @@ function stepOnce(board: Board, dt: number): void {
     } else release(board, team);
   }
 
-  const spots: LonLat[] = [];
   for (const fire of board.fires) {
+    refreshFire(board, fire);
     if (fire.status === "burning") {
-      growFire(board, fire, dt);
       const work = onSceneWork(board, fire);
-      const perimeter = firePerimeterM(fire);
       // Line cannot exceed the perimeter; flank line is outflanked as the perimeter grows.
-      fire.lineM = Math.min(perimeter, fire.lineM + work.lineMPerMin * dt);
-      if (work.count > 0 && fire.lineM >= perimeter && fire.rates.headFlameFeet <= work.holdsFt) {
+      fire.lineM = Math.min(fire.perimeterM, fire.lineM + work.lineMPerMin * dt);
+      if (work.count > 0 && fire.lineM >= fire.perimeterM && lineHoldsHead(fire, work.holdsFt)) {
         fire.status = "contained";
         fire.containedAt = board.minute;
-        log(board, "contained", "board", `${fire.id} contained at ${fireAreaHa(fire).toFixed(1)} ha.`);
-      } else if (
-        fireAreaHa(fire) >= level.spotMinHa &&
-        fire.rates.firelineIntensityBtuPerFootPerSecond >= SPOTTING_MIN_FIRELINE_INTENSITY_BTU_PER_FOOT_PER_SECOND &&
-        nextRandom(board) < level.spotChancePerMinute * dt
-      ) {
-        spots.push(downwindOf(fire, 300 + 900 * nextRandom(board), (nextRandom(board) - 0.5) * 600));
+        log(board, "contained", "board", `${fire.id} contained at ${fire.areaHa.toFixed(1)} ha.`);
       }
     } else if (fire.status === "contained" && fire.containedAt !== null && board.minute - fire.containedAt >= MOPUP_MINUTES) {
       fire.status = "out";
@@ -977,19 +1133,28 @@ function stepOnce(board: Board, dt: number): void {
       log(board, "out", "board", `${fire.id} is out; its units are free.`);
     }
   }
-  for (const p of spots) ignite(board, p, "spot", "board");
 
   const kept: Fire[] = [];
   for (const fire of board.fires) {
     if (fire.status === "out" && fire.outAt !== null && board.minute - fire.outAt >= OUT_KEEP_MINUTES) {
-      board.removedBurnedHa += fireAreaHa(fire);
+      board.removedBurnedHa += fire.areaHa;
     } else kept.push(fire);
   }
   board.fires = kept;
 
-  const active = activeFires(board);
+  const field = board.solver.field;
+  const active = activeSources(board);
   for (const zone of board.zones) {
-    if (active.some((f) => zone.ring.some((v) => fireCovers(f, v)))) {
+    const za = field?.zones.get(zone.id);
+    if (!za) continue;
+    let touched = false;
+    for (const s of active.keys()) {
+      if (za.earliestBySource[s] <= board.minute) {
+        touched = true;
+        break;
+      }
+    }
+    if (touched) {
       zone.touchedAt ??= board.minute;
       zone.lastFireAt = board.minute;
       // Fire cue with no order: the shadow share leaves on the zone's best route, if any.
@@ -1002,7 +1167,7 @@ function stepOnce(board: Board, dt: number): void {
         }
       }
     }
-    if (zone.overrunAt === null && active.some((f) => fireCovers(f, zone.core))) {
+    if (zone.overrunAt === null && za.coreArrival <= board.minute && active.has(za.coreSource)) {
       zone.overrunAt = board.minute;
       zone.lastFireAt = board.minute;
       zone.caught = zone.households - departed(zone, board.minute);
@@ -1019,12 +1184,25 @@ function stepOnce(board: Board, dt: number): void {
   if (wholeMinute) reopenZones(board);
 }
 
-/** Advance the clock by `minutes`, in steps of at most one minute. */
+/**
+ * Advance the clock by `minutes`, in steps of at most one minute, landing exactly on each
+ * scheduled ignition and each hourly wind boundary. Stops (the rest is not stepped) as soon as
+ * the fire field needs a new solve (fireSolveDue), so solves happen at board-defined minutes.
+ */
 export function step(board: Board, minutes: number): void {
   let left = minutes;
   while (left > 1e-9) {
-    const dt = Math.min(MAX_STEP_MINUTES, left);
-    stepOnce(board, dt);
+    if (fireSolveDue(board) !== null) return;
+    let dt = Math.min(MAX_STEP_MINUTES, left);
+    const hour = (Math.floor(board.minute / WIND_SAMPLE_MINUTES) + 1) * WIND_SAMPLE_MINUTES;
+    const ignition = board.nextIgnitionAt > board.minute ? board.nextIgnitionAt : Infinity;
+    const boundary = Math.min(hour, ignition);
+    let landOn: number | null = null;
+    if (board.minute + dt >= boundary - 1e-9) {
+      dt = boundary - board.minute;
+      landOn = boundary;
+    }
+    stepOnce(board, dt, landOn);
     left -= dt;
   }
 }
@@ -1040,26 +1218,25 @@ export interface UnitWork {
 
 /**
  * Minutes until units arriving at `arrivals` (minutes from now, 0 = on scene) contain `fire`,
- * or null when they never catch it within FORECAST_MINUTES. Current spread rates and head
- * flame persist. `units[i]` describes arrival i; missing entries are Type 3 engines in the
- * fallback fuel.
+ * or null when they never catch it within FORECAST_MINUTES. The perimeter is the solver's
+ * lookahead; the head flame (and crowning) at the leading cell is taken to persist.
+ * `units[i]` describes arrival i.
  */
-export function containedIn(fire: Fire, arrivals: number[], units: UnitWork[] = []): number | null {
+export function containedIn(board: Board, fire: Fire, arrivals: number[], units: UnitWork[]): number | null {
   if (fire.status !== "burning") return fire.status === "contained" ? 0 : null;
   if (arrivals.length === 0) return null;
-  const work = arrivals.map((_, i) => units[i] ?? { lineMPerMin: TEAM_LINE_M_PER_MIN, holdsFt: holdsFlameFeet("engine_t3") });
   let line = fire.lineM;
   for (let t = 1; t <= FORECAST_MINUTES; t += 1) {
     let holds = 0;
     for (let i = 0; i < arrivals.length; i += 1) {
-      if (arrivals[i] < t) {
-        line += work[i].lineMPerMin;
-        holds = Math.max(holds, work[i].holdsFt);
+      if (arrivals[i] < t && units[i]) {
+        line += units[i].lineMPerMin;
+        holds = Math.max(holds, units[i].holdsFt);
       }
     }
-    const perimeter = firePerimeterM(fire, t);
+    const perimeter = perimeterIn(board, fire, t);
     line = Math.min(line, perimeter);
-    if (holds > 0 && line >= perimeter && fire.rates.headFlameFeet <= holds) return t;
+    if (holds > 0 && line >= perimeter && lineHoldsHead(fire, holds)) return t;
   }
   return null;
 }
@@ -1079,6 +1256,7 @@ function workOf(board: Board, team: Team, fire: Fire): UnitWork {
 export function currentContainment(board: Board, fire: Fire): number | null {
   const assigned = board.teams.filter((t) => t.fireId === fire.id);
   return containedIn(
+    board,
     fire,
     assigned.map((t) => teamArrival(board, t, fire)),
     assigned.map((t) => workOf(board, t, fire)),
@@ -1111,6 +1289,7 @@ export function containOptions(board: Board, fire: Fire, max = 4): ContainOption
     out.push({
       teams: pick.map((p) => p.team.id),
       contained_in_min: containedIn(
+        board,
         fire,
         [...assigned, ...pick.map((p) => p.eta)],
         [...assignedWork, ...pick.map((p) => workOf(board, p.team, fire))],
@@ -1121,24 +1300,26 @@ export function containOptions(board: Board, fire: Fire, max = 4): ContainOption
 }
 
 export interface ZoneForecast {
-  /** Minutes until fire reaches the zone edge / core; 0 = there; null = not within FORECAST_MINUTES. */
+  /** Minutes until fire reaches the zone (any of its cells) / its core cell; 0 = there; null = not within FORECAST_MINUTES. */
   edgeEta: number | null;
   coreEta: number | null;
 }
 
-/** Fire ETAs at each zone at current rates; a fire stops spreading at its estimated containment. */
+/**
+ * Fire ETAs at each zone from the solver's arrival field (earliest arrival over the zone's cells
+ * and at its core). A burning fire's arrivals count only up to its estimated containment with
+ * the units assigned; a contained fire's only where it has already burned.
+ */
 export function zoneForecasts(board: Board): Map<string, ZoneForecast> {
-  const fires = activeFires(board).map((f) => {
+  const field = board.solver.field;
+  const limits = new Map<number, number>();
+  for (const [s, f] of activeSources(board)) {
     const stop = f.status === "contained" ? 0 : currentContainment(board, f);
-    return { fire: f, limit: Math.min(stop ?? FORECAST_MINUTES, FORECAST_MINUTES) };
-  });
-  const eta = (p: LonLat): number | null => {
-    let best: number | null = null;
-    for (const { fire, limit } of fires) {
-      const wait = waitMinutes(fire, p, best === null ? limit : Math.min(limit, best));
-      if (wait !== null && (best === null || wait < best)) best = wait;
-    }
-    return best;
+    limits.set(s, Math.min(stop ?? FORECAST_MINUTES, FORECAST_MINUTES));
+  }
+  const eta = (arrival: number, limit: number): number | null => {
+    const wait = arrival - board.minute;
+    return wait <= 0 ? 0 : wait <= limit ? wait : null;
   };
   const out = new Map<string, ZoneForecast>();
   for (const zone of board.zones) {
@@ -1146,13 +1327,17 @@ export function zoneForecasts(board: Board): Map<string, ZoneForecast> {
       out.set(zone.id, { edgeEta: 0, coreEta: 0 });
       continue;
     }
+    const za = field?.zones.get(zone.id);
     let edge: number | null = null;
-    for (const v of zone.ring) {
-      const e = eta(v);
-      if (e !== null && (edge === null || e < edge)) edge = e;
-      if (edge === 0) break;
+    let core: number | null = null;
+    if (za) {
+      for (const [s, limit] of limits) {
+        const e = eta(za.earliestBySource[s], limit);
+        if (e !== null && (edge === null || e < edge)) edge = e;
+      }
+      const coreLimit = limits.get(za.coreSource);
+      if (coreLimit !== undefined) core = eta(za.coreArrival, coreLimit);
     }
-    const core = eta(zone.core);
     out.set(zone.id, { edgeEta: edge === null ? null : Math.round(edge), coreEta: core === null ? null : Math.round(core) });
   }
   return out;
@@ -1201,7 +1386,8 @@ export function totals(board: Board, forecasts?: Map<string, ZoneForecast>): Tot
   for (const fire of board.fires) {
     if (fire.status === "burning") t.burning += 1;
     else if (fire.status === "contained") t.contained += 1;
-    t.burnedHa += fireAreaHa(fire);
+    // Each burned cell belongs to one fire, so the areas add without double counting.
+    t.burnedHa += fire.areaHa;
   }
   return t;
 }

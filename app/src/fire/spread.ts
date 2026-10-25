@@ -753,6 +753,10 @@ const ARRIVAL_SURFACE = 0;
 const ARRIVAL_SPOTTING = 1;
 const ARRIVAL_STRUCTURE = 2;
 
+/** State of a cell fixed by `ResumeFrom`. */
+const FIXED_SPREADS = 1;
+const FIXED_INERT = 2;
+
 /** Fire type in a cell; indexes the `CrownFireBreakdown`. */
 const CROWN_SURFACE = 0;
 const CROWN_PASSIVE = 1;
@@ -818,6 +822,77 @@ export interface ControlLines {
 }
 
 /**
+ * Continue a scheduled run from an earlier run's arrival field instead of from bare ground.
+ * Opt-in (the /demo board re-solves this way when its hourly wind or fuel moisture changes, or
+ * a fire starts or is contained); without it the solver is unchanged.
+ *
+ * - Every cell with `arrivalMinutes[i] <= fromMinute` is already burned: it keeps that arrival
+ *   and `sourceIndexByCell[i]`, settles in arrival order like any other cell, and is never
+ *   reburned or re-timed.
+ * - Such a cell spreads on with this run's rates, progress preserved: a step from it toward a
+ *   neighbour has, by `fromMinute`, covered the share (fromMinute - arrival) x earlier rate /
+ *   step length (at most all of it) at the earlier run's rate in that direction
+ *   (`earlierBehaviour`), and covers the rest at this run's rate from `fromMinute`. Ember flight
+ *   is credited the same way at the earlier wind (`earlierWindSpeedMph`). So with unchanged
+ *   settings the resumed run reproduces the uninterrupted one exactly, after a change every
+ *   step in progress finishes at the new rate (FARSITE-style continuity of the front), and no
+ *   cell newly burns before `fromMinute`.
+ * - A fixed cell that spread as an active crown fire in the earlier run (`earlierBehaviour`
+ *   crownType 2) carries an active crown fire on into neighbours whose canopy can sustain it
+ *   at this run's weather, as an uninterrupted run would.
+ * - It does not spread when its source index is -1 (burned by a fire that is no longer a
+ *   source: burned ground only) or its source's `outFromMinuteBySource` is at or before
+ *   `fromMinute` (put out). Such cells still count as reached.
+ * - The arrival breakdown counts fixed cells as surface spread.
+ * - A source whose `startMinute` is before `fromMinute` must lie on a fixed cell (it started in
+ *   the earlier run); a fixed cell is never re-seeded by a source.
+ *
+ * Every step costs a non-negative time and every candidate from a fixed cell is at least
+ * `fromMinute`, which is at least that cell's arrival, so cells still settle in non-decreasing
+ * arrival order and no arrival precedes the arrival of the cell it came from (the
+ * minimum-travel-time invariant).
+ */
+export interface ResumeFrom {
+  /** Minutes from T+0; must be finite and before the horizon. */
+  fromMinute: number;
+  /** Earlier arrival per cell, row-major like `fuelCodes`; Infinity where not burned. */
+  arrivalMinutes: Float32Array | Float64Array;
+  /** Index into this run's `input.sources` per cell, or -1 (see above). */
+  sourceIndexByCell: Int8Array | Int16Array | Int32Array;
+  /** The earlier run's `cellBehaviour` (ask it with `reportCellBehaviour`). */
+  earlierBehaviour: CellBehaviour;
+  /** The earlier run's open 20-foot wind, mph (ember flight speed). */
+  earlierWindSpeedMph: number;
+}
+
+/**
+ * The per-cell fire behaviour the solver propagated, row-major like `fuelCodes`. Opt-in output
+ * of `simulateScheduledFireSpread` (`reportCellBehaviour`), for callers that describe a fire's
+ * front with the same numbers the solver used. Values describe the cell's outgoing spread at
+ * the run's wind and moisture; 0 where the cell carries no fire.
+ */
+export interface CellBehaviour {
+  /** Head rate of spread, metres per minute (crown rate where the cell crowns). */
+  headRateMetersPerMinute: Float32Array;
+  /** Direction of maximum spread, radians clockwise from true north. */
+  headingRadians: Float32Array;
+  /** Spread-ellipse eccentricity; length-to-breadth is 1 / sqrt(1 - e^2). */
+  eccentricity: Float32Array;
+  /** Floor on the directional rate (no-wind no-slope backing rate), metres per minute. */
+  minDirectionalRateMetersPerMinute: Float32Array;
+  /** Surface head-fire flame length, feet (Byram 1959). */
+  headFlameFeet: Float32Array;
+  /** 0 surface, 1 passive crown (torching), 2 active crown. */
+  crownType: Uint8Array;
+}
+
+/** Optional behaviour of `simulateScheduledFireSpread`; omitted, the run is unchanged. */
+export interface ScheduledSolveExtensions {
+  resume?: ResumeFrom | null;
+  reportCellBehaviour?: boolean;
+}
+
+/**
  * Byram (1959): flame length L = 0.45 I^0.46 (feet, Btu/ft/s), and fireline intensity I is
  * proportional to the rate of spread for a given fuel consumption, so the flame facing a
  * line in a direction spreading at rate R is L_head (R / R_head)^0.46. A flank or backing
@@ -846,10 +921,12 @@ interface SpreadSolution {
   totals: SpreadRunTotals;
   /** Resolution the field was solved at; only `FireRun` reports it today. */
   resolution: FireRunResolution;
+  /** The per-cell behaviour arrays the relaxation read (final, after crown continuation). */
+  cells: CellBehaviour;
 }
 
 /** Inclusive bounding box of reached cells, grid columns and rows. */
-interface CellBox {
+export interface CellBox {
   minX: number;
   maxX: number;
   minY: number;
@@ -879,6 +956,7 @@ export function simulateFireSpread(landscape: LandscapeGrid, scenario: FireScena
     landscape,
     scenario,
     [{ location: scenario.origin, startMinute: 0 }],
+    null,
     null,
     null,
     (problems) => {
@@ -932,6 +1010,7 @@ export function simulateScheduledFireSpread(
   input: ScheduledFireInput,
   controlLines: ControlLines | null = null,
   outFromMinuteBySource: readonly number[] | null = null,
+  extensions: ScheduledSolveExtensions | null = null,
 ): ScheduledFireRun {
   const startedAt = performance.now();
   assertScheduledInput(input);
@@ -942,6 +1021,7 @@ export function simulateScheduledFireSpread(
     sources,
     controlLines,
     outFromMinuteBySource,
+    extensions?.resume ?? null,
     (problems) => {
       throw new InvalidIgnitionsError(
         problems.map((problem) =>
@@ -973,7 +1053,8 @@ export function simulateScheduledFireSpread(
         ? {
             status: "reached-before-start",
             reachedMinute: arrivalMinutes,
-            reachedBySourceId: sources[solution.firstSource[cell]].id,
+            // "" only on a resumed run, for ground burned by a fire that is no longer a source.
+            reachedBySourceId: sources[solution.firstSource[cell]]?.id ?? "",
           }
         : { status: "ignited", ignitedMinute: source.startMinute };
     return { sourceId: source.id, outcome, conditions: solution.ignitions[index] };
@@ -1012,7 +1093,22 @@ export function simulateScheduledFireSpread(
     sourceIndexByCell: Int8Array.from(solution.firstSource, (source, cell) =>
       solution.arrival[cell] <= settings.horizonMinutes ? source : -1,
     ),
+    ...(extensions?.reportCellBehaviour ? { cellBehaviour: solution.cells } : {}),
   };
+}
+
+/**
+ * Marching-squares outline of the cells with `arrival <= thresholdMinutes`, exactly as the
+ * solver contours its frames (GeoJSON polygons with holes, WGS84). `box` must bound those
+ * cells (inclusive grid columns and rows); squares outside it are not scanned.
+ */
+export function contourArrival(
+  landscape: LandscapeGrid,
+  arrival: Float64Array,
+  thresholdMinutes: number,
+  box: CellBox,
+): FirePerimeter[] {
+  return contour(landscape, arrival, thresholdMinutes, box);
 }
 
 /** Contract checks from `scheduledTypes.ts` that do not need the landscape. */
@@ -1082,7 +1178,9 @@ function tallyFrames(
       if (arrival[cell] > minutes) break;
       next++;
       reachedCells++;
-      reachedCellsBySource[firstSource[cell]]++;
+      // -1 only for resumed cells burned by a fire that is no longer a source (`ResumeFrom`).
+      const source = firstSource[cell];
+      if (source >= 0) reachedCellsBySource[source]++;
       const x = cell % width;
       const y = (cell - x) / width;
       if (x < minX) minX = x;
@@ -1115,6 +1213,7 @@ function solveSpread(
   sources: readonly SolverSource[],
   controlLines: ControlLines | null,
   outFromMinuteBySource: readonly number[] | null,
+  resume: ResumeFrom | null,
   rejectSources: (problems: readonly SolverSourceProblem[]) => never,
 ): SpreadSolution {
   const { width, height, fuelCodes, slopeTangent, upslopeDegrees, groundCellSizeMeters } =
@@ -1385,12 +1484,56 @@ function solveSpread(
   const settledOrder = new Int32Array(cellCount);
   let settledCount = 0;
   const heap = new TimeHeap(Math.min(cellCount, 1 << 16));
+
+  // Resumed run (`ResumeFrom`): fixed cells enter first, at their own arrival. Without a
+  // resume `noArrivalBefore` is -Infinity and `fixedState` is null, so nothing below changes.
+  const noArrivalBefore = resume ? resume.fromMinute : Number.NEGATIVE_INFINITY;
+  /** 0 not fixed, FIXED_SPREADS fixed and spreading on, FIXED_INERT fixed and spreading no further. */
+  const fixedState = resume ? new Uint8Array(cellCount) : null;
+  if (resume && fixedState) {
+    if (!Number.isFinite(resume.fromMinute) || resume.fromMinute >= scenario.horizonMinutes) {
+      throw new Error(
+        `A resumed run must start before its ${scenario.horizonMinutes}-minute horizon, not at ${resume.fromMinute}.`,
+      );
+    }
+    if (
+      resume.arrivalMinutes.length !== cellCount ||
+      resume.sourceIndexByCell.length !== cellCount ||
+      resume.earlierBehaviour.headRateMetersPerMinute.length !== cellCount
+    ) {
+      throw new Error("The resumed arrival field does not match the landscape grid.");
+    }
+    for (let i = 0; i < cellCount; i++) {
+      const at = resume.arrivalMinutes[i];
+      if (!(at <= resume.fromMinute)) continue;
+      const source = resume.sourceIndexByCell[i];
+      if (source >= sources.length) {
+        throw new Error(`Resumed cell ${i} names source ${source}, but the run has ${sources.length}.`);
+      }
+      const out =
+        source >= 0
+          ? (outFromMinuteBySource?.[source] ?? Number.POSITIVE_INFINITY)
+          : Number.NEGATIVE_INFINITY;
+      arrival[i] = at;
+      firstSource[i] = source;
+      fixedState[i] = out <= resume.fromMinute ? FIXED_INERT : FIXED_SPREADS;
+      arrivedFromActiveCrown[i] = resume.earlierBehaviour.crownType[i] === CROWN_ACTIVE ? 1 : 0;
+      heap.push(at, i);
+    }
+  }
+
   // Each source enters the field at its own start minute, in input order. Strict `<` keeps
   // the earlier-listed of two sources on one cell at one minute, and the relaxation below
   // also uses strict `<`, so a fire arriving exactly at a source's start leaves the cell
   // with that source: the "ignited" tie rule in scheduledTypes.ts.
   sourceCells.forEach((originCell, sourceIndex) => {
     const startMinute = sources[sourceIndex].startMinute;
+    if (fixedState && fixedState[originCell] !== 0) return;
+    if (startMinute < noArrivalBefore) {
+      throw new Error(
+        `Source ${sourceIndex} starts at minute ${startMinute}, before the resumed run's minute ${noArrivalBefore}, on ground the earlier run had not burned.`,
+      );
+    }
     if (startMinute < arrival[originCell]) {
       arrival[originCell] = startMinute;
       firstSource[originCell] = sourceIndex;
@@ -1466,16 +1609,63 @@ function solveSpread(
     Math.floor(Math.max(spotting.maxDistanceMeters, 0) / groundCellSizeMeters),
   );
 
+  /**
+   * Arrival over a step that leaves a fixed (resumed) cell, progress preserved (`ResumeFrom`):
+   * the share of the step covered by `fromMinute` at the earlier run's directional rate, the
+   * rest at this run's rate. Only called on resumed runs.
+   */
+  const resumedStepArrival = (
+    cell: number,
+    n: number,
+    departedMinute: number,
+    newStepMinutes: number,
+  ): number => {
+    const earlier = resume!.earlierBehaviour;
+    const earlierHead = earlier.headRateMetersPerMinute[cell];
+    let done = 0;
+    if (earlierHead > 0) {
+      const e = earlier.eccentricity[cell];
+      let earlierRate =
+        e > 0
+          ? (earlierHead * (1 - e)) / (1 - e * Math.cos(bearings[n] - earlier.headingRadians[cell]))
+          : earlierHead;
+      const earlierFloor = earlier.minDirectionalRateMetersPerMinute[cell];
+      if (earlierRate < earlierFloor) earlierRate = earlierFloor;
+      if (earlierRate > 0) {
+        done = ((noArrivalBefore - departedMinute) * earlierRate) / distances[n];
+      }
+    }
+    return noArrivalBefore + (1 - Math.min(1, Math.max(0, done))) * newStepMinutes;
+  };
+  const earlierEmberSpeedMetersPerMinute = resume
+    ? ((resume.earlierWindSpeedMph * METERS_PER_MILE) / 60) * SPOTTING_EMBER_SPEED_FRACTION
+    : 0;
+  /** Ember arrival from a fixed cell, flight and incubation credited at the earlier wind. */
+  const resumedSpotArrival = (
+    departedMinute: number,
+    newSpotMinutes: number,
+    flightMeters: number,
+  ): number => {
+    const earlierSpotMinutes =
+      earlierEmberSpeedMetersPerMinute > 0
+        ? flightMeters / earlierEmberSpeedMetersPerMinute + SPOTTING_IGNITION_DELAY_MINUTES
+        : Number.POSITIVE_INFINITY;
+    const done = (noArrivalBefore - departedMinute) / earlierSpotMinutes;
+    return noArrivalBefore + (1 - Math.min(1, Math.max(0, done))) * newSpotMinutes;
+  };
+
   let reachedEdge = false;
   let reachedEdgeMinute: number | null = null;
 
   while (heap.length > 0) {
     const { time, cell } = heap.pop();
     if (settled[cell]) continue;
+    const fixed = fixedState ? fixedState[cell] : 0;
     // A fire put out at minute m spreads no further: a cell it would reach after m is
     // dropped, and stays free for another, still burning fire to reach later. Stale heap
-    // entries for a dropped cell are skipped by the exact-time check.
-    if (outFromMinuteBySource) {
+    // entries for a dropped cell are skipped by the exact-time check. Fixed (resumed) cells
+    // are history and are never dropped.
+    if (outFromMinuteBySource && fixed === 0) {
       if (time !== arrival[cell]) continue;
       const out = outFromMinuteBySource[firstSource[cell]] ?? Number.POSITIVE_INFINITY;
       if (time > out) {
@@ -1487,6 +1677,7 @@ function solveSpread(
     if (time > scenario.horizonMinutes) break;
     settled[cell] = 1;
     settledOrder[settledCount++] = cell;
+    if (fixed === FIXED_INERT) continue;
 
     // Select this cell's outgoing crown state exactly once, right here at settle time:
     // self-initiated (already in `headRate`/`eccentricity`/`crownType` from the
@@ -1540,7 +1731,10 @@ function solveSpread(
         e > 0 ? (rate * (1 - e)) / (1 - e * Math.cos(bearings[n] - headingRadians[cell])) : rate;
       if (rateToward < floor) rateToward = floor;
       if (rateToward <= 0) continue;
-      const candidate = time + distances[n] / rateToward;
+      const candidate =
+        fixed === 0
+          ? time + distances[n] / rateToward
+          : resumedStepArrival(cell, n, time, distances[n] / rateToward);
       // Built control line on the step (destination or any cell stepped over) stops it. An
       // adjacent step may still burn into the line when the flame facing it in this
       // direction is longer than the line holds (see `ControlLines`). Crown fire (passive or
@@ -1602,8 +1796,12 @@ function solveSpread(
         // ordinary surface solver takes over.
         if (!crossedGap || settled[target] || headRate[target] <= 0) break;
         const flightMeters = step * groundCellSizeMeters;
+        const spotMinutes =
+          flightMeters / emberSpeedMetersPerMinute + SPOTTING_IGNITION_DELAY_MINUTES;
         const candidate =
-          time + flightMeters / emberSpeedMetersPerMinute + SPOTTING_IGNITION_DELAY_MINUTES;
+          fixed === 0
+            ? time + spotMinutes
+            : resumedSpotArrival(time, spotMinutes, flightMeters);
         // Embers do not take hold in line built by the time they would ignite.
         if (holdFrom && holdFrom[target] <= candidate) break;
         if (candidate < arrival[target]) {
@@ -1725,6 +1923,14 @@ function solveSpread(
       resampling: landscape.resampling,
       maxStepMeters: Math.max(...distances),
       spottingReachCeilingMeters: spottingActive ? maxSpotCells * groundCellSizeMeters : 0,
+    },
+    cells: {
+      headRateMetersPerMinute: headRate,
+      headingRadians,
+      eccentricity,
+      minDirectionalRateMetersPerMinute: minDirectionalRate,
+      headFlameFeet,
+      crownType,
     },
   };
 }

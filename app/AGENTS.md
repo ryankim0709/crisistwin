@@ -14,7 +14,8 @@ app/src/
   fire/             /fire        fire spread model (landing page, 3D diorama + maps)
   studio/           /simulation  Simulation Studio (fire + evacuation run)
   dispatch/         /dispatch    Claude dispatch agent on top of the studio
-  demo/             /demo        command demo (24/7 fire board + Claude commander)
+  live/             /live        live command: drill triage + guidance, with the simulated board
+  demo/             simulated command board + Claude commander run by /live (/demo redirects)
   replay/           /replay, /simulate  historical replay and agent simulation
   diorama/          /diorama     scripted 3D evacuation diorama (synthetic)
   pages/            planning pages (evacuation, comparison, incidents, stress tests)

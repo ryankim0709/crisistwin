@@ -17,15 +17,12 @@ struct HomeView: View {
         NavigationStack {
             ScrollViewReader { proxy in
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 16) {
                         header
-                            .padding(.bottom, 4)
                         content
                         Color.clear.frame(height: 1).id("home-bottom")
                     }
-                    .padding(.horizontal, 16)
-                    .padding(.top, 8)
-                    .padding(.bottom, 24)
+                    .ctScreenPadding()
                 }
                 .task {
                     if DebugLaunch.screen == "exercise" {
@@ -56,9 +53,24 @@ struct HomeView: View {
     /// The incident name with the Exercise tag inline; tapping either explains the tag.
     private var header: some View {
         VStack(alignment: .leading, spacing: 4) {
-            HomeBrandLogo()
-                .frame(height: 30)
-                .padding(.bottom, 10)
+            HStack(alignment: .center, spacing: 12) {
+                HomeBrandLogo()
+                    .frame(height: 30)
+                Spacer(minLength: 8)
+                Button { router.openVoice() } label: {
+                    Label("Talk to report", systemImage: "mic.fill")
+                        .font(.subheadline.weight(.semibold))
+                        .lineLimit(1)
+                        .padding(.horizontal, 16)
+                        .frame(minHeight: 44)
+                        .contentShape(.capsule)
+                }
+                .buttonStyle(.plain)
+                .glassEffect(.regular.interactive(), in: .capsule)
+                .accessibilityLabel("Talk to report")
+                .accessibilityHint("Opens the voice assistant")
+            }
+            .padding(.bottom, 8)
             if store.isExercise {
                 Button { explainExercise = true } label: { title }
                     .buttonStyle(.plain)
@@ -85,7 +97,7 @@ struct HomeView: View {
     }
 
     private var title: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 10) {
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
             Text(store.incidentTitle ?? "My area")
                 .font(.largeTitle.weight(.bold))
                 .foregroundStyle(Color.ctInk)
@@ -150,7 +162,7 @@ struct HomeView: View {
             HomeFamilyPanel()
             if store.activeGuidance == nil { HomeReadinessCard() }
         } else {
-            VStack(spacing: 10) {
+            VStack(spacing: 12) {
                 Image(systemName: "checkmark.shield")
                     .font(.system(size: 40, weight: .regular))
                     .foregroundStyle(Color.ctSuccess)
@@ -182,7 +194,7 @@ struct HomeView: View {
 
     private var locationOff: some View {
         let denied = location.authorization == .denied || location.authorization == .restricted
-        return VStack(alignment: .leading, spacing: 14) {
+        return VStack(alignment: .leading, spacing: 12) {
             Label("Turn on location to see guidance for where you are", systemImage: "location.slash")
                 .foregroundStyle(Color.ctInk)
                 .fixedSize(horizontal: false, vertical: true)
@@ -204,7 +216,7 @@ struct HomeView: View {
         let board = store.boardQuestions
         if !items.isEmpty || !board.isEmpty {
             HomePanel(title: "Still there?") {
-                VStack(alignment: .leading, spacing: 14) {
+                VStack(alignment: .leading, spacing: 12) {
                     ForEach(items) { StillThereRow(item: $0) }
                     ForEach(board) { BoardQuestionRow(question: $0) }
                 }
@@ -286,7 +298,7 @@ struct CTPillButtonStyle: ButtonStyle {
         configuration.label
             .font(.headline)
             .foregroundStyle(prominent ? Color.ctSurface : Color.ctBrand)
-            .padding(.horizontal, 18)
+            .padding(.horizontal, 16)
             .frame(maxWidth: fullWidth ? .infinity : nil, minHeight: height)
             .background(prominent ? Color.ctBrand : Color.ctBrandSoft, in: .capsule)
             .opacity(configuration.isPressed ? 0.8 : 1)
@@ -301,7 +313,7 @@ struct ExerciseTag: View {
         Text("Exercise")
             .font(.caption.weight(.semibold))
             .foregroundStyle(Color.ctWarning)
-            .padding(.horizontal, 9)
+            .padding(.horizontal, 8)
             .padding(.vertical, 4)
             .background(Color.ctWarningSoft, in: .capsule)
             .overlay(Capsule().strokeBorder(Color.ctWarning.opacity(0.35), lineWidth: 1))
@@ -351,7 +363,7 @@ private struct WayOutCard: View {
             .accessibilityLabel("Map of your area")
             .accessibilityHint("Opens the map")
 
-            VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 12) {
                 if guidance.hasRoute {
                     VStack(alignment: .leading, spacing: 6) {
                         if let via = guidance.viaText {
@@ -394,7 +406,7 @@ private struct WayOutCard: View {
                 .frame(width: 34, height: 34)
                 .background(Color.ctRoute, in: .circle)
                 .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 3) {
+            VStack(alignment: .leading, spacing: 2) {
                 Text(guidance.destination?.shortName ?? "Destination")
                     .font(.body.weight(.semibold))
                     .foregroundStyle(Color.ctInk)
@@ -498,7 +510,7 @@ struct HomeMiniMap: View {
 
     /// Words, never color alone: what the shapes are.
     private var legend: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 12) {
             if store.situation?.fire.geometry != nil {
                 key(color: .ctFire, text: "Fire")
             }
@@ -511,7 +523,7 @@ struct HomeMiniMap: View {
         }
         .font(.caption2.weight(.semibold))
         .foregroundStyle(Color.ctInk)
-        .padding(.horizontal, 10)
+        .padding(.horizontal, 12)
         .padding(.vertical, 6)
         .background(Color.ctSurface.opacity(0.92), in: .capsule)
         .dynamicTypeSize(...DynamicTypeSize.xLarge)
@@ -691,7 +703,7 @@ private struct HomeNearbyPanel: View {
         let facts = HomeFacts(store: store, route: route)
         if !facts.isEmpty {
             HomePanel(title: "Near you") {
-                VStack(alignment: .leading, spacing: 14) {
+                VStack(alignment: .leading, spacing: 12) {
                     if let fire = facts.fire {
                         TimelineView(.periodic(from: .now, by: 30)) { context in
                             HomeFactRow(
@@ -765,7 +777,7 @@ struct GuidanceChangesList: View {
 
     var body: some View {
         let entries = [GuidanceHistoryEntry(previous: current)] + history
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 12) {
             ForEach(entries) { entry in
                 HStack(alignment: .firstTextBaseline, spacing: 12) {
                     Text("v\(entry.version)")
@@ -868,7 +880,7 @@ struct PlanSummaryPanel: View {
     var body: some View {
         Button { router.tab = .plan } label: {
             HomePanel(title: "Your plan") {
-                VStack(alignment: .leading, spacing: 14) {
+                VStack(alignment: .leading, spacing: 12) {
                     row("mappin.and.ellipse", "Meeting point", plan.plan.primary?.name ?? "Not set")
                     row("person.3", "Family", family.family?.name ?? "Not set up")
                     row("phone", "Emergency contacts", plan.plan.contacts.isEmpty ? "None yet" : "\(plan.plan.contacts.count)")
@@ -911,7 +923,7 @@ private struct HomeReadinessCard: View {
         let point = plan.plan.primary?.name
         let familyName = family.family?.name
         HomePanel(title: "Ready") {
-            VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 12) {
                 row(point == nil ? "mappin.slash" : "mappin.and.ellipse", point ?? "No meeting point")
                 row(familyName == nil ? "person.3" : "checkmark.circle.fill", familyName ?? "No family yet")
             }

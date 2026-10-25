@@ -8,7 +8,7 @@ import {
 } from "maplibre-gl";
 import { useEffect, useRef, useState } from "react";
 import { LEVEL_COLOR, MAP_COLOR } from "../live/CommandMap";
-import { fireHatch, loadStyle } from "../live/mapStyle";
+import { SATELLITE_STYLE, fireHatch } from "../live/mapStyle";
 import { labelPoint } from "../live/format";
 import type { CommandZone, Destination, LonLat } from "../live/types";
 import { fireRing, teamPosition, type Board, type ZoneForecast } from "./model";
@@ -187,7 +187,7 @@ function installLayers(map: MapLibreMap): void {
     source: "dm-zones",
     paint: {
       "fill-color": STATE_MATCH(zoneColor) as never,
-      "fill-opacity": STATE_MATCH({ overrun: 0.22, ordered: 0.12, threatened: 0.1, quiet: 0.02 }) as never,
+      "fill-opacity": STATE_MATCH({ overrun: 0.22, ordered: 0.12, threatened: 0.1, quiet: 0 }) as never,
     },
   });
   map.addLayer({
@@ -197,7 +197,7 @@ function installLayers(map: MapLibreMap): void {
     paint: {
       "line-color": STATE_MATCH(zoneColor) as never,
       "line-width": STATE_MATCH({ overrun: 3, ordered: 2.5, threatened: 2, quiet: 0.6 }) as never,
-      "line-opacity": STATE_MATCH({ overrun: 1, ordered: 0.9, threatened: 0.9, quiet: 0.5 }) as never,
+      "line-opacity": STATE_MATCH({ overrun: 1, ordered: 0.9, threatened: 0.9, quiet: 0 }) as never,
     },
   });
   map.addLayer({
@@ -337,6 +337,11 @@ function installLayers(map: MapLibreMap): void {
   });
 }
 
+const CLEARED_SOURCES = [
+  "dm-zones", "dm-zone-labels", "dm-routes", "dm-fires", "dm-fire-labels", "dm-team-lines",
+  "dm-teams", "dm-stations", "dm-dest", "dm-sel-area", "dm-sel-point",
+];
+
 export default function DemoMap({
   zones, destinations, board, version, forecasts, selected, igniteMode, onSelect, onIgnite,
 }: Props) {
@@ -353,7 +358,8 @@ export default function DemoMap({
   useEffect(() => {
     const controller = new AbortController();
     let map: MapLibreMap | null = null;
-    loadStyle(controller.signal).then((style) => {
+    // Satellite imagery, as the Studio map view; the style is local, so this resolves at once.
+    Promise.resolve(SATELLITE_STYLE).then((style) => {
       if (controller.signal.aborted || !container.current) return;
       map = new MapLibreMap({
         container: container.current,
@@ -408,9 +414,20 @@ export default function DemoMap({
     container.current?.classList.toggle("dm-map--ignite", igniteMode);
   }, [igniteMode]);
 
+  // A different drill: frame its zones again once the new board is drawn.
+  const zonesKey = zones.map((z) => z.id).join("|");
+  useEffect(() => {
+    fitted.current = false;
+  }, [zonesKey]);
+
   useEffect(() => {
     const map = mapRef.current;
-    if (!ready || !map || !board) return;
+    if (!ready || !map) return;
+    if (!board) {
+      // Between boards (drill switch): do not leave the previous drill's marks on the map.
+      for (const id of CLEARED_SOURCES) (map.getSource(id) as GeoJSONSource | undefined)?.setData(collection([]));
+      return;
+    }
     const z = buildZones(zones, board, forecasts);
     const f = buildFires(board);
     const t = buildTeams(board);
@@ -442,7 +459,7 @@ export default function DemoMap({
     }
     // `board` is mutated in place; `version` is what signals a change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ready, version, forecasts, selected, zones, destinations]);
+  }, [ready, version, forecasts, selected, zones, destinations, board]);
 
   // Move the camera only when the selection changes, not on each board update.
   const selKey = selected ? `${selected.kind}:${selected.id}` : null;

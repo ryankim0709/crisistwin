@@ -1,5 +1,9 @@
-import { useEffect, useRef, useState } from "react";
-import { Button, IconButton, Notice, SegmentedControl, Tag } from "../ui";
+import { useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
+import { Button, EvidenceTag, IconButton, Notice, SegmentedControl, Tag, buttonClass } from "../ui";
+import { simClock } from "../demo/format";
+import { ACTIVITIES, ACTIVITY } from "../demo/model";
+import { BOARD_SPEEDS, MONITORING, type CommandBoard } from "../demo/useCommandBoard";
+import { WEATHER_PRESETS } from "../demo/useDemoEnvironment";
 import { drillAction } from "./api";
 import { drillClock, drillDate, drillNowAt, elapsed } from "./format";
 import type { ActiveIncident } from "./active";
@@ -137,6 +141,105 @@ function Menu({
   );
 }
 
+/** Closes a <details> popover on an outside click or Escape. */
+function useDismiss(ref: RefObject<HTMLDetailsElement | null>) {
+  useEffect(() => {
+    const close = (e: Event) => {
+      const el = ref.current;
+      if (!el?.open) return;
+      if (e instanceof KeyboardEvent ? e.key === "Escape" : !el.contains(e.target as Node)) el.open = false;
+    };
+    document.addEventListener("click", close);
+    document.addEventListener("keydown", close);
+    return () => {
+      document.removeEventListener("click", close);
+      document.removeEventListener("keydown", close);
+    };
+  }, [ref]);
+}
+
+/**
+ * The simulated board's controls: AI monitoring, the board clock (its own simulated time, not
+ * the drill clock), and a "Conditions" popover for fire activity, wind and restart.
+ */
+export function BoardControls({ board: cb }: { board: CommandBoard }) {
+  const ref = useRef<HTMLDetailsElement>(null);
+  useDismiss(ref);
+  const { board, windNow } = cb;
+  return (
+    <div className="lc-board-ctl" role="group" aria-label="Simulated board">
+      <EvidenceTag kind="simulated" />
+      <span className="lc-board-monitor">
+        <span className="lc-board-label" aria-hidden="true">
+          AI monitoring
+        </span>
+        <SegmentedControl
+          label="AI monitoring"
+          options={MONITORING}
+          value={cb.autopilot ? "on" : "off"}
+          onChange={(value) => cb.setAutopilot(value === "on")}
+        />
+      </span>
+      {board ? (
+        <>
+          <span className="lc-clock" aria-label={`Simulated board clock ${simClock(board.minute)}`} title="Simulated board clock">
+            <span className="lc-num">{simClock(board.minute)}</span>
+          </span>
+          <Button size="sm" variant="secondary" onClick={() => cb.setRunning((r) => !r)} aria-pressed={!cb.running}>
+            {cb.running ? "Pause" : "Resume"}
+          </Button>
+          <SegmentedControl label="Board clock speed" options={BOARD_SPEEDS} value={cb.speed} onChange={cb.setSpeed} />
+          <Button
+            size="sm"
+            variant={cb.igniteMode ? "primary" : "secondary"}
+            aria-pressed={cb.igniteMode}
+            onClick={() => cb.setIgniteMode((m) => !m)}
+          >
+            {cb.igniteMode ? "Click the map to start a fire" : "Add fire"}
+          </Button>
+          <details ref={ref} className="lc-board-more">
+            <summary className={buttonClass({ variant: "ghost", size: "sm" })}>Conditions</summary>
+            <div className="lc-menu-pop lc-board-pop" role="group" aria-label="Simulated board conditions">
+              <span className="lc-board-label">Fire activity</span>
+              <SegmentedControl
+                label="Fire activity"
+                options={ACTIVITIES.map((a) => ({ value: a, label: ACTIVITY[a].label, title: `${ACTIVITY[a].label} fire activity` }))}
+                value={cb.activity}
+                onChange={cb.changeActivity}
+              />
+              <span className="lc-board-label">Wind</span>
+              <SegmentedControl
+                label="Wind"
+                options={WEATHER_PRESETS.map((p) => ({ value: p.value, label: p.label, title: p.title }))}
+                value={cb.weather}
+                onChange={cb.setWeather}
+              />
+              {windNow ? (
+                <span className="lc-dim lc-num" title={board.env.spread.wind.label}>
+                  Wind now {windNow.speedMetersPerSecond.toFixed(1)} m/s from {Math.round(windNow.fromDegrees)}°
+                </span>
+              ) : null}
+              <Button
+                size="sm"
+                variant="ghost"
+                title={`Seed ${board.seed}`}
+                onClick={() => {
+                  if (ref.current) ref.current.open = false;
+                  cb.restart();
+                }}
+              >
+                Restart board
+              </Button>
+            </div>
+          </details>
+        </>
+      ) : (
+        <span className="lc-dim">Board loading…</span>
+      )}
+    </div>
+  );
+}
+
 export default function WorkspaceHeader({
   data,
   twin,
@@ -149,6 +252,7 @@ export default function WorkspaceHeader({
   token,
   active,
   onSwitched,
+  children,
 }: {
   data: CommandResponse | null;
   twin: TwinMonitor | null;
@@ -161,6 +265,8 @@ export default function WorkspaceHeader({
   token: string | null;
   active: ActiveIncident | null;
   onSwitched: () => void;
+  /** Extra header controls (the simulated board's), after the drill controls. */
+  children?: ReactNode;
 }) {
   const [error, setError] = useState<string | null>(null);
   const drill = data?.drill ?? null;
@@ -226,6 +332,7 @@ export default function WorkspaceHeader({
           </div>
         </>
       ) : null}
+      {children}
       <span className="lc-head-end">
         {connectionError || age > STALE_AFTER_MS ? (
           <span className="lc-stale" role="status" title={connectionError ?? undefined}>

@@ -596,6 +596,16 @@ final class LiveStore {
         }
     }
 
+    /// Sends one voice turn (`POST incidents/{id}/voice`): recorded or typed words in, a transcript,
+    /// a reply and at most one proposed action out. Nothing is stored server-side, and the action
+    /// is only a proposal until the person confirms it.
+    func voiceTurn(_ request: VoiceTurnRequest) async throws -> VoiceTurnResponse {
+        let incidentId = incidentId
+        return try await authorized {
+            try await $0.voiceTurn(incidentId: incidentId, request: request, token: $1)
+        }
+    }
+
     /// Accepts a check task (`POST tasks/{id}` with `accepted`); the task stays in `tasks` with
     /// status `accepted`. Throws on 409 when another responder took it.
     func acceptTask(_ task: CheckTask) async throws {

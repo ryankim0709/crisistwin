@@ -5,6 +5,26 @@ import { BASEMAP_STYLE_URL, FALLBACK_STYLE, type BasemapStyle } from "../replay/
 
 const STYLE_TIMEOUT_MS = 10_000;
 
+/**
+ * USGS aerial imagery, the same tiles as the /fire and Simulation Studio map views
+ * (StudioMap.tsx SATELLITE_STYLE), plus the OpenFreeMap glyphs our symbol labels need.
+ */
+export const SATELLITE_STYLE: BasemapStyle = {
+  version: 8,
+  glyphs: "https://tiles.openfreemap.org/fonts/{fontstack}/{range}.pbf",
+  sources: {
+    imagery: {
+      type: "raster",
+      tiles: ["https://basemap.nationalmap.gov/arcgis/rest/services/USGSImageryOnly/MapServer/tile/{z}/{y}/{x}"],
+      tileSize: 256,
+      maxzoom: 16,
+      attribution:
+        '<a href="https://www.usgs.gov/programs/national-geospatial-program/national-map">USDA / USGS The National Map</a> · Aerial imagery',
+    },
+  },
+  layers: [{ id: "imagery", type: "raster", source: "imagery" }],
+};
+
 export async function loadStyle(signal: AbortSignal): Promise<BasemapStyle> {
   const timeout = new AbortController();
   const timer = window.setTimeout(() => timeout.abort(), STYLE_TIMEOUT_MS);

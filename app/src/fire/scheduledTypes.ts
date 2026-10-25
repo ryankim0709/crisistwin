@@ -9,6 +9,7 @@
 
 import type {
   ArrivalBreakdown,
+  CellBehaviour,
   CrownFireBreakdown,
   CrownFireStatus,
   FirePerimeter,
@@ -62,7 +63,7 @@ export type IgnitionOutcome =
   | {
       status: "reached-before-start";
       reachedMinute: number;
-      /** The source whose fire got there first. */
+      /** The source whose fire got there first ("" for burned ground of a resumed run, spread.ts ResumeFrom). */
       reachedBySourceId: string;
     };
 
@@ -123,6 +124,11 @@ export interface ScheduledFireRun {
    * (same layout as `arrivalMinutes`). Lets callers isolate one fire's footprint.
    */
   sourceIndexByCell: Int8Array;
+  /**
+   * The solver's per-cell behaviour, only when `reportCellBehaviour` was asked for
+   * (`ScheduledSolveExtensions` in spread.ts).
+   */
+  cellBehaviour?: CellBehaviour;
 }
 
 export type IgnitionProblemReason = "outside-landscape" | "non-burnable";

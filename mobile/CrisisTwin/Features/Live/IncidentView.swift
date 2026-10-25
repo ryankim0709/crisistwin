@@ -2,7 +2,7 @@ import SwiftUI
 
 /// The Map tab (ADR 0012): the full-bleed `IncidentMap`, the guidance drawer above the accessory,
 /// and the floating controls. Each has one reserved place, so nothing collides at any drawer
-/// height: the legend top-leading (the system compass takes top-trailing), follow and Report
+/// height: the legend top-leading (the system compass takes top-trailing), follow, Voice and Report
 /// stacked on the right edge riding just above the drawer, and the drawer at the bottom. The
 /// controls step aside when the drawer leaves them no room. No navigation bar; the Exercise tag
 /// lives in the drawer's header. Reads `LiveStore`, `LocationProvider` and `AppRouter`.
@@ -23,8 +23,8 @@ struct IncidentView: View {
     private static let inset: CGFloat = 8
     private static let gap: CGFloat = 12
     private static let controlSize: CGFloat = 56
-    /// Follow and Report, stacked.
-    private static let controlsHeight: CGFloat = controlSize * 2 + gap
+    /// Follow, Voice and Report, stacked.
+    private static let controlsHeight: CGFloat = controlSize * 3 + gap * 2
 
     private var myLocation: LonLat? {
         location.lastLocation.map { LonLat(lon: $0.coordinate.longitude, lat: $0.coordinate.latitude) }
@@ -88,6 +88,7 @@ struct IncidentView: View {
         GlassEffectContainer(spacing: Self.gap) {
             VStack(alignment: .trailing, spacing: Self.gap) {
                 followButton
+                voiceButton
                 reportButton
             }
         }
@@ -108,6 +109,21 @@ struct IncidentView: View {
         .disabled(!location.isAuthorized)
         .accessibilityLabel(router.following ? "Stop following" : "Follow my location")
         .sensoryFeedback(.selection, trigger: router.following)
+    }
+
+    private var voiceButton: some View {
+        Button {
+            router.openVoice()
+        } label: {
+            Label("Voice", systemImage: "mic.fill")
+                .font(.headline)
+                .padding(.horizontal, 20)
+                .frame(height: Self.controlSize)
+                .contentShape(.capsule)
+        }
+        .buttonStyle(.plain)
+        .glassEffect(.regular.interactive(), in: .capsule)
+        .accessibilityLabel("Talk to the voice assistant")
     }
 
     private var reportButton: some View {

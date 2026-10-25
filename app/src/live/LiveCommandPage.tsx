@@ -1,12 +1,36 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
-import { Button, Field, IconButton, Kbd, LoadingState, Notice } from "../ui";
+import type { Map as MapLibreMap } from "maplibre-gl";
+import {
+  Button,
+  EvidenceTag,
+  Field,
+  IconButton,
+  Kbd,
+  LoadingState,
+  Metric,
+  MetricGrid,
+  Notice,
+  SegmentedControl,
+  Tag,
+  type SegmentedOption,
+} from "../ui";
+import AgentConsole from "../demo/AgentConsole";
+import BoardLists from "../demo/BoardLists";
+import { attachBoardLayers, type BoardLayerInput, type BoardLayers, type BoardSelection } from "../demo/boardMapLayers";
+import DemoDiorama from "../demo/DemoDiorama";
+import { nf, simClock } from "../demo/format";
+import { ACTIVITY } from "../demo/model";
+import { CONGESTION_LABEL, TRAVEL_LABEL } from "../demo/observation";
+import SelectedPanel from "../demo/SelectedPanel";
+import { useCommandBoard } from "../demo/useCommandBoard";
+import "../demo/demo.css";
 import ActivityLog from "./ActivityLog";
 import { useTriageKeys } from "./useTriageKeys";
 import "./activity.css";
 import { useTaskRoute } from "./useTaskRoute";
 import { fetchActive } from "./active";
 import { DEFAULT_INCIDENT_ID, LiveError, readToken, runImpact, SERVER_TOKEN, writeToken } from "./api";
-import CommandMap, { LAYER_KEYS, type LayerKey, type MapFocus } from "./CommandMap";
+import CommandMap, { EXTRA_LAYERS_BEFORE_ID, LAYER_KEYS, type LayerKey, type MapFocus } from "./CommandMap";
 import EvacuationPicture from "./EvacuationPicture";
 import MapLegend from "./MapLegend";
 import ProposalPanel from "./ProposalPanel";
@@ -20,7 +44,7 @@ import SelectedItem, { type ImpactState, type RunAction } from "./SelectedItem";
 import { useCommand } from "./useCommand";
 import { usePoll } from "./usePoll";
 import { useTwin } from "./useTwin";
-import WorkspaceHeader from "./WorkspaceHeader";
+import WorkspaceHeader, { BoardControls } from "./WorkspaceHeader";
 import "./live.css";
 
 const HIGHLIGHT_MS = 2_500;
@@ -32,6 +56,21 @@ const LAYER_LABEL: Record<LayerKey, string> = {
   roads: "Roads",
   shelters: "Shelters",
 };
+type LeftTab = "reports" | "board";
+const LEFT_TABS: SegmentedOption<LeftTab>[] = [
+  { value: "reports", label: "Reports", title: "Field reports from the live drill" },
+  { value: "board", label: "Fires & units", title: "Simulated fires and firefighting units" },
+];
+type StageView = "map" | "diorama";
+const VIEW_STORAGE_KEY = "crisistwin.live.view";
+
+function loadView(): StageView {
+  try {
+    return window.localStorage.getItem(VIEW_STORAGE_KEY) === "diorama" ? "diorama" : "map";
+  } catch {
+    return "map";
+  }
+}
 
 function TokenForm({
   error,
@@ -160,6 +199,8 @@ export default function LiveCommandPage() {
   // The hosted instance's one active incident; re-read every 30 s and right after a switch. If it
   // cannot be read, the console falls back to the default incident rather than staying blank.
   const active = usePoll(token, fetchActive, ACTIVE_POLL_MS, "Live API");
+  // A Studio package has no 2018 ground or response record (docs/adr/0047-active-incident.md).
+  const isPackage = active.data?.source === "package";
   const incidentId = active.data?.incident_id ?? DEFAULT_INCIDENT_ID;
   const incidentToken = active.loading ? null : token;
   const command = useCommand(incidentToken, incidentId);
@@ -213,6 +254,19 @@ export default function LiveCommandPage() {
   const unauthorized = command.error?.unauthorized ?? false;
   const data = unauthorized ? null : command.data;
   const twinData = data ? twin.data : null;
+  // The simulated board (fires, units, households) and the AI commander, on the drill's zones.
+  const cb = useCommandBoard({ token, incidentId, data });
+  const setBoardSelection = cb.setSelection;
+  const [leftTab, setLeftTab] = useState<LeftTab>("reports");
+  const [view, setView] = useState<StageView>(loadView);
+  const chooseView = useCallback((next: StageView) => {
+    setView(next);
+    try {
+      window.localStorage.setItem(VIEW_STORAGE_KEY, next);
+    } catch {
+      // Storage can be unavailable (private mode); the choice then lasts for this visit only.
+    }
+  }, []);
   const serverNow =
     data && command.receivedAt !== null
       ? new Date(data.generated_at).getTime() + (now - command.receivedAt)
@@ -235,12 +289,67 @@ export default function LiveCommandPage() {
   const taskRoute = useTaskRoute(data ? token : null, routeTask);
 
   // A map click selects an item outside the current filter too; the queue keeps it listed.
-  const select = useCallback((id: string | null) => {
-    setSelectedId(id);
-    setActionError(null);
-    setFocus(null);
-    setImpact((cur) => (cur && cur.itemId === id ? cur : null));
+  // Live items and board items are selected separately; selecting one clears the other.
+  const select = useCallback(
+    (id: string | null) => {
+      setSelectedId(id);
+      setActionError(null);
+      setFocus(null);
+      setImpact((cur) => (cur && cur.itemId === id ? cur : null));
+      if (id !== null) {
+        setBoardSelection(null);
+        setLeftTab("reports");
+      }
+    },
+    [setBoardSelection],
+  );
+  const selectBoard = useCallback(
+    (sel: BoardSelection | null) => {
+      setBoardSelection(sel);
+      if (sel) {
+        select(null);
+        if (sel.kind !== "zone") setLeftTab("board");
+      }
+    },
+    [setBoardSelection, select],
+  );
+
+  // The board's map layers, drawn on the live map (demo/boardMapLayers.ts). The handlers and the
+  // latest input sit in refs: CommandMap calls onMapReady once, at load.
+  const boardLayers = useRef<BoardLayers | null>(null);
+  const boardInput: BoardLayerInput = {
+    board: cb.board,
+    forecasts: cb.forecasts,
+    routes: cb.routes.routes,
+    selection: cb.selection,
+    igniteMode: cb.igniteMode,
+  };
+  const boardInputRef = useRef(boardInput);
+  const boardHandlers = useRef({ onSelect: selectBoard, onIgnite: cb.onIgnite });
+  useEffect(() => {
+    boardHandlers.current = { onSelect: selectBoard, onIgnite: cb.onIgnite };
+  });
+  useEffect(() => {
+    boardInputRef.current = boardInput;
+    boardLayers.current?.update(boardInput);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the board is mutated in place; version marks changes
+  }, [cb.board, cb.version, cb.forecasts, cb.routes.routes, cb.selection, cb.igniteMode]);
+  const onMapReady = useCallback((map: MapLibreMap) => {
+    const layers = attachBoardLayers(map, EXTRA_LAYERS_BEFORE_ID, {
+      onSelect: (sel) => boardHandlers.current.onSelect(sel),
+      onIgnite: (coord) => boardHandlers.current.onIgnite(coord),
+    });
+    boardLayers.current = layers;
+    layers.update(boardInputRef.current);
+    return () => {
+      layers.dispose();
+      boardLayers.current = null;
+    };
   }, []);
+  const interceptClick = useCallback(
+    (e: Parameters<BoardLayers["claimsClick"]>[0]) => boardLayers.current?.claimsClick(e) ?? false,
+    [],
+  );
 
   const onRunImpact = async () => {
     if (!token || !selected?.segmentId) return;
@@ -315,8 +424,28 @@ export default function LiveCommandPage() {
 
   const impactResult = impact && selected && impact.itemId === selected.id ? impact.result : null;
 
+  const board = cb.board;
+  const t = cb.totals;
+  // The 3D view draws the prebuilt LANDFIRE region covering the drill; without one only the map shows.
+  const landscape = cb.landscape;
+  const showDiorama = view === "diorama" && board !== null && landscape !== null;
+  const viewOptions: SegmentedOption<StageView>[] = [
+    { value: "map", label: "Map" },
+    {
+      value: "diorama",
+      label: "3D diorama",
+      disabled: !landscape,
+      title: landscape
+        ? `Stylized 3D miniature of ${board?.env.landscapeRegion?.name ?? "the drill region"} (simulated board only)`
+        : board
+          ? "No prebuilt 3D landscape covers this drill, so only the map is available"
+          : "Waiting for the simulated board to load",
+    },
+  ];
+  const drillName = data?.incident?.name ?? active.data?.name ?? "this drill";
+
   return (
-    <div className={`lc-root ui-theme-dark${data ? "" : " lc-root--gate"}`}>
+    <div className={`lc-root dm-root${data ? "" : " lc-root--gate"}`}>
       <WorkspaceHeader
         data={data}
         twin={twinData}
@@ -329,20 +458,30 @@ export default function LiveCommandPage() {
         token={token}
         active={active.data}
         onSwitched={active.refresh}
-      />
+      >
+        {data ? <BoardControls board={cb} /> : null}
+      </WorkspaceHeader>
       {data ? (
-        <ReviewQueue
-          items={listed}
-          showRecord={showRecord}
-          onShowRecord={setShowRecord}
-          filter={filter}
-          onFilter={setFilter}
-          selectedId={selectedId}
-          onSelect={select}
-          serverNow={serverNow}
-        />
+        <div className="lc-col lc-queue lc-left">
+          <SegmentedControl label="Left column" options={LEFT_TABS} value={leftTab} onChange={setLeftTab} className="lc-left-tabs" />
+          {leftTab === "reports" ? (
+            <ReviewQueue
+              items={listed}
+              showRecord={showRecord}
+              onShowRecord={setShowRecord}
+              hasRecord={!isPackage}
+              filter={filter}
+              onFilter={setFilter}
+              selectedId={selectedId}
+              onSelect={select}
+              serverNow={serverNow}
+            />
+          ) : (
+            <BoardLists board={cb} onSelect={selectBoard} />
+          )}
+        </div>
       ) : null}
-      <main className="lc-stage">
+      <main className={`lc-stage${showDiorama ? " lc-stage--diorama" : ""}`}>
         <CommandMap
           data={data}
           twin={twinData}
@@ -353,14 +492,36 @@ export default function LiveCommandPage() {
           impact={impactResult}
           taskRoute={taskRoute?.route?.route?.line ?? null}
           onSelect={select}
+          onMapReady={onMapReady}
+          interceptClick={interceptClick}
         />
-        {data ? (
+        {data && !showDiorama ? (
           <LayerToggles
             layers={layers}
             onToggle={(k) => setLayers((l) => ({ ...l, [k]: !l[k] }))}
           />
         ) : null}
-        {data ? <MapLegend /> : null}
+        {data && !showDiorama ? <MapLegend record={!isPackage} board={!!board} /> : null}
+        {/* The map stays mounted under the diorama, so its view and board layers survive a switch. */}
+        {showDiorama && board && landscape ? (
+          <DemoDiorama
+            board={board}
+            version={cb.version}
+            field={cb.field}
+            landscape={landscape}
+            regionName={board.env.landscapeRegion?.name ?? null}
+            forecasts={cb.forecasts}
+            wind={cb.windNow}
+            selected={cb.selection}
+            igniteMode={cb.igniteMode}
+            onIgnite={cb.onIgnite}
+          />
+        ) : null}
+        {data ? (
+          <div className="dm-view">
+            <SegmentedControl label="View" options={viewOptions} value={showDiorama ? "diorama" : "map"} onChange={chooseView} />
+          </div>
+        ) : null}
         {gate}
       </main>
       {data ? (
@@ -369,6 +530,49 @@ export default function LiveCommandPage() {
             <div style={{ display: "flex", justifyContent: "flex-end", padding: "4px 8px 0" }}>
               <ShortcutHint />
             </div>
+            {board ? (
+              <AgentConsole
+                agent={cb.agent}
+                autopilot={cb.autopilot}
+                onAutopilot={cb.setAutopilot}
+                hold={cb.hold}
+                onHold={cb.setHold}
+                name={cb.name}
+              />
+            ) : (
+              <section className="dm-section" aria-label="AI incident commander">
+                <LoadingState>Loading the simulated board…</LoadingState>
+              </section>
+            )}
+            {cb.notice ? (
+              <div className="dm-section">
+                <Notice tone="warning" compact>
+                  {cb.notice}
+                </Notice>
+              </div>
+            ) : null}
+            {cb.routes.error ? (
+              <div className="dm-section">
+                <Notice tone="danger" compact>
+                  Board routes unavailable: {cb.routes.error}
+                </Notice>
+              </div>
+            ) : null}
+            {board && cb.selection ? (
+              <p className="lc-board-note lc-board-sel-note">
+                <EvidenceTag kind="simulated" /> Selected on the simulated board
+              </p>
+            ) : null}
+            {board && cb.selection ? (
+              <SelectedPanel
+                board={board}
+                selection={cb.selection}
+                forecasts={cb.forecasts}
+                routes={cb.routes.routes}
+                actions={cb.actions}
+                onClose={() => selectBoard(null)}
+              />
+            ) : null}
             <ProposalPanel
               data={data}
               twin={twinData}
@@ -419,12 +623,69 @@ export default function LiveCommandPage() {
                 if (coord) setFocus({ id: `zone:${id}`, coord });
               }}
             />
-            <ResponseRecord items={data.response_record ?? []} />
+            {isPackage ? null : <ResponseRecord items={data.response_record ?? []} />}
             <ActivityLog
               decisions={data.decisions ?? []}
               serverNow={serverNow}
               onSelect={selectFromLog}
             />
+            {board && t ? (
+              <>
+                <details className="dm-section lc-board-sec" open>
+                  <summary>
+                    <h2>Simulated board totals</h2>
+                    <EvidenceTag kind="simulated" />
+                  </summary>
+                  <MetricGrid>
+                    <Metric label="Households out" value={nf(t.out)} detail={`${nf(t.enRoute)} on the road now`} />
+                    <Metric label="At risk, no order" value={nf(cb.threatenedHome)} detail="households in zones fire may reach" />
+                    <Metric label="Caught by fire" value={nf(t.caughtTotal)} detail="households, whole run" />
+                    <Metric label="No vehicle, at risk" value={nf(t.noVehicleAtRisk)} detail="households needing transport" />
+                    <Metric label="Fires out" value={nf(t.firesOutTotal)} detail={`${nf(t.burnedHa)} ha burned`} />
+                  </MetricGrid>
+                </details>
+                <details className="dm-section lc-board-sec">
+                  <summary>
+                    <h2>Board activity</h2>
+                    <EvidenceTag kind="simulated" />
+                  </summary>
+                  <ol className="dm-log">
+                    {board.events.slice(0, 60).map((e, i) => (
+                      <li key={`${e.minute}-${i}-${e.text}`}>
+                        <span className="lc-num lc-dim">{simClock(e.minute)}</span>
+                        <span>
+                          {e.actor !== "board" ? (
+                            <Tag tone={e.actor === "agent" ? "info" : "brand"}>{e.actor === "agent" ? "Claude" : "You"}</Tag>
+                          ) : null}{" "}
+                          {e.text}
+                        </span>
+                      </li>
+                    ))}
+                  </ol>
+                </details>
+                <details className="dm-section lc-board-sec">
+                  <summary>
+                    <h2>Board model inputs</h2>
+                  </summary>
+                  <ul className="dm-note dm-inputs">
+                    <li>Wind: {board.env.spread.wind.label}; {board.env.spread.wind.heightNote}.</li>
+                    <li>Fuel: {board.env.spread.ground.fuelLabel}; moisture {ACTIVITY[cb.activity].moisture} (Scott &amp; Burgan 2005).</li>
+                    <li>Terrain: {board.env.spread.ground.terrainLabel}.</li>
+                    <li>Stations: {board.env.basesLabel}.</li>
+                    <li>
+                      Travel: {TRAVEL_LABEL}
+                      {cb.crewRoutes.error ? ` (road times unavailable: ${cb.crewRoutes.error})` : ""}.
+                    </li>
+                    <li>Carless households: {board.env.noVehicleLabel}.</li>
+                    <li>Congestion: {CONGESTION_LABEL}.</li>
+                  </ul>
+                </details>
+                <p className="dm-note dm-footnote">
+                  Simulated board: fires, units and households are simulated in this browser on the {drillName} zones and
+                  roads; only fire reports come from the drill. Not operational guidance.
+                </p>
+              </>
+            ) : null}
           </div>
         </aside>
       ) : null}

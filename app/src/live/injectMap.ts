@@ -31,7 +31,7 @@ export function installInjectLayers(map: MapLibreMap): void {
     id: "lc-nosignal-line",
     type: "line",
     source: "lc-nosignal",
-    paint: { "line-color": GREY, "line-width": 2, "line-dasharray": [2, 2] },
+    paint: { "line-color": "#FFFFFF", "line-width": 2, "line-dasharray": [2, 2] },
   });
   map.addLayer({
     id: "lc-nosignal-label",

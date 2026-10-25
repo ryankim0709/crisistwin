@@ -174,8 +174,8 @@ struct Slab: View {
     var body: some View {
         let level = guidance.level
         Button(action: open) {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack(alignment: .firstTextBaseline, spacing: 10) {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
                     Image(systemName: level.symbol)
                         .contentTransition(.symbolEffect(.replace))
                         .accessibilityHidden(true)

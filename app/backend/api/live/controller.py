@@ -64,7 +64,7 @@ DEFAULT_RATIONALE_MODEL = "claude-opus-5-5"
 RATIONALE_TIMEOUT_S = 10.0
 RATIONALE_MAX_OUTPUT_TOKENS = 1500
 RATIONALE_MAX_CHARS = 800
-DECIDED_PROPOSALS_IN_COMMAND = 20
+DECIDED_PROPOSALS_IN_COMMAND = 5
 
 RATIONALE_SYSTEM_PROMPT = """\
 You write the short rationale a human controller reads before approving or rejecting \

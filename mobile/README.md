@@ -123,6 +123,30 @@ it locally, start the backend and drill as described in
 [`app/backend/README.md`](../app/backend/README.md); Debug points at
 `http://localhost:8000`.
 
+### Voice
+
+A mic button on Map (above **Report**) and an entry on Home open a voice sheet. The person
+speaks; the phone records a short 16 kHz mono WAV and sends it with a little context (zone name,
+the guidance text the screen shows, the pending proposal and the last 6 turns) to
+`POST /api/live/incidents/{id}/voice`, which transcribes it with Cartesia, lets Claude pick one
+proposed action and returns a spoken reply. Contract, limits and errors:
+[live-reports.md "Voice mode"](../docs/live-reports.md#voice-mode). The phone plays the server's
+audio, or speaks the reply with the on-device voice when the server sent none (no Cartesia key,
+or synthesis failed). Coordinates are not sent to the voice endpoint.
+
+The model only proposes. The phone asks before it sends any report or check-in, and a confirmed
+one goes through the existing report outbox or the check-in endpoint, so a report keeps the
+normal offline queue and gets its location on the phone when it is sent. While a proposal waits
+for an answer, the phone starts listening again by itself. The model can also open Home, Map,
+Reports, Plan or start directions.
+
+The app asks for microphone permission the first time voice mode records (usage string
+`NSMicrophoneUsageDescription` in `Info.plist`). The backend needs `ANTHROPIC_API_KEY` for any
+turn and `CARTESIA_API_KEY` for recorded audio (see
+[`app/backend/README.md`](../app/backend/README.md#voice-mode-post-apiliveincidentsidvoice));
+without them the endpoint answers 503. Code: `Features/Voice/` (`VoiceModels`, `VoiceAudio`,
+`VoiceAgent`, `VoiceView`). Voice mode has not been built or run on a simulator or device yet.
+
 ### Task board and road observations (ADR 0041)
 
 The phone reads the public `GET incidents/{id}/board` with each situation poll and picks its
@@ -235,6 +259,7 @@ mobile/
       Live/              Field-report models, store, outbox, location, map, report and responder views
       Broadcast/         Web simulation feed: broadcast model, poller, map and household guidance
       Family/            Family model, Keychain membership, server store, family view
+      Voice/             Voice mode: wire models, microphone and playback, agent controller, sheet
     Resources/           Info.plist and adaptive color assets
 ```
 
@@ -320,7 +345,8 @@ instead; that has not been run on a simulator. It has not been checked on a
 physical device.
 
 Live drill and Family have not been built or run; the new backend endpoints have not been
-exercised.
+exercised. Voice mode has not been built or run on a simulator or device, and its backend
+endpoint has not been called with live provider keys.
 
 My Plan was run on the same simulator: Apple Maps search, tap-to-place, save,
 reload after relaunch, the contact picker, and the share-sheet fallback were

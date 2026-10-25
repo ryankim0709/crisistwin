@@ -1,12 +1,65 @@
 /* /demo command demo: reuses the /live workspace grid (live.css, lc-*); this sheet adds the
    demo's own panels. Tokens only; map colours live in DemoMap.tsx. */
 
+/* The demo header carries the clock, speed, activity and wind controls: let it wrap onto a
+   second row instead of clipping them. */
+.dm-root {
+  grid-template-rows: auto minmax(0, 1fr);
+}
 .dm-head {
-  gap: var(--ct-space-3);
-  overflow-x: auto;
+  flex-wrap: wrap;
+  gap: var(--ct-space-2) var(--ct-space-3);
+  min-height: 48px;
+  padding-block: var(--ct-space-2);
+}
+.dm-monitor {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ct-space-2);
+}
+.dm-monitor-label {
+  font-size: var(--ct-text-sm);
+  font-weight: var(--ct-weight-semibold);
+  white-space: nowrap;
 }
 .dm-root .lc-col-scroll {
   padding-bottom: var(--ct-space-6);
+}
+.dm-section-head.dm-console-head {
+  align-items: flex-start;
+}
+.dm-console-head > div {
+  flex: 1;
+  min-width: 0;
+}
+.dm-console-head .ui-eyebrow {
+  margin: 0;
+}
+.dm-console-head .dm-tags {
+  flex-direction: column;
+  align-items: flex-end;
+}
+.dm-section-head.dm-console-head h2 {
+  font-size: var(--ct-text-xl);
+  font-weight: var(--ct-weight-bold);
+}
+.dm-autopilot {
+  flex: 1;
+}
+
+/* Shift totals: two compact tiles per row in the 380px column (as .dio-recap-items). */
+.dm-root .ui-metrics {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--ct-space-2);
+  margin: 0;
+}
+.dm-root .ui-metric {
+  gap: var(--ct-space-1);
+  padding: var(--ct-space-3);
+}
+.dm-root .ui-metric strong {
+  font-size: var(--ct-text-2xl);
+  letter-spacing: 0;
 }
 .dm-section {
   display: grid;
@@ -182,4 +235,109 @@
   display: grid;
   grid-template-columns: 64px minmax(0, 1fr);
   gap: var(--ct-space-2);
+}
+
+/* Map / 3D toggle, bottom centre of the stage (the map legend is bottom left, its scale bar
+   and the 3D legend bottom right), as the Studio's. */
+.dm-view {
+  position: absolute;
+  bottom: var(--ct-space-3);
+  left: 50%;
+  z-index: var(--ct-z-overlay);
+  transform: translateX(-50%);
+}
+.dm-view .ui-segmented {
+  background: var(--ct-surface-glass-strong);
+  box-shadow: var(--ct-shadow-md);
+}
+
+/* 3D diorama view (DemoDiorama.tsx). Scene labels use the scene's own `fdx-` classes. */
+.dm-diorama {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  background: var(--ct-surface-muted);
+}
+.dm-diorama__scene {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  isolation: isolate;
+}
+.dm-diorama__card.ui-panel {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  z-index: var(--ct-z-overlay);
+  display: flex;
+  flex-direction: column;
+  gap: var(--ct-space-3);
+  width: min(380px, calc(100% - 32px));
+  font-size: var(--ct-text-md);
+  line-height: var(--ct-leading-normal);
+  transform: translate(-50%, -50%);
+}
+.dm-diorama__card p {
+  margin: 0;
+}
+.dm-diorama__card-title {
+  font-size: var(--ct-text-lg);
+  font-weight: var(--ct-weight-bold);
+}
+.dm-diorama__detail {
+  color: var(--ct-ink-muted);
+  font-size: var(--ct-text-xs);
+}
+.dm-diorama__tools {
+  position: absolute;
+  top: var(--ct-space-3);
+  right: var(--ct-space-3);
+  z-index: var(--ct-z-overlay);
+  display: flex;
+  gap: var(--ct-space-1);
+}
+.dm-diorama__legend {
+  position: absolute;
+  right: var(--ct-space-3);
+  bottom: var(--ct-space-3);
+  z-index: var(--ct-z-overlay);
+  display: flex;
+  flex-direction: column-reverse;
+  align-items: flex-end;
+  gap: var(--ct-space-2);
+  max-height: calc(100% - 2 * var(--ct-space-3) - 48px);
+}
+.dm-diorama__legend-list.ui-panel {
+  display: grid;
+  gap: var(--ct-space-2);
+  width: 250px;
+  min-height: 0;
+  overflow-y: auto;
+  font-size: var(--ct-text-sm);
+}
+.dm-diorama__legend-list svg {
+  flex: none;
+}
+.dm-diorama__legend-note {
+  margin: 0;
+  color: var(--ct-ink-muted);
+  font-size: var(--ct-text-xs);
+}
+.dm-diorama__credit {
+  position: absolute;
+  bottom: var(--ct-space-1);
+  left: var(--ct-space-3);
+  z-index: 1;
+  max-width: calc(50% - 160px);
+  margin: 0;
+  overflow: hidden;
+  color: var(--ct-ink-subtle);
+  font-size: var(--ct-text-2xs);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+@media (max-width: 900px) {
+  .dm-diorama__credit {
+    display: none;
+  }
 }

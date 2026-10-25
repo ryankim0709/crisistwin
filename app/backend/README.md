@@ -156,15 +156,21 @@ examples are in [ADR 0029](../../docs/adr/0029-mobile-data-store.md).
 ### Command demo (`/api/demo/…`)
 
 `api/demo.py` serves the `/demo` page ([ADR 0047](../../docs/adr/0047-command-demo.md); wire
-shapes in `app/src/demo/contracts.ts`). Both endpoints are anonymous for the local demo, answer
+shapes in `app/src/demo/contracts.ts`). The board follows the live active incident: every
+`/api/demo/…` endpoint (also `wind`, `environment`, `crew_routes`; see
+[command-demo-realism](../../docs/command-demo-realism.md)) takes an optional `?incident=<id>`.
+Absent means Camp (`camp-2018-drill`); allowed are Camp and the active incident (the live API's
+rule), anything else is 404 `not_found`. `environment` also returns `stations` and `stations_source`
+(the package's OpenStreetMap fire stations; `[]` for Camp), the board's fallback when the CAL FIRE
+bases file is absent. Both endpoints below are anonymous for the local demo, answer
 `Cache-Control: no-store` and return errors as `{"error", "detail"}`. The game itself runs in the
 browser; nothing here is stored.
 
-- `POST /api/demo/routes` `{fires: [ring, ...]}` (at most 60 closed `[lon, lat]` rings of 4-200
+- `POST /api/demo/routes[?incident=]` `{fires: [ring, ...]}` (at most 60 closed `[lon, lat]` rings of 4-200
   points; body at most 300 kB; 120/min) returns `{zones: [{zone_id, options}], evidence_class:
   "simulated"}`: each drill zone's best route and up to 3 alternatives around the fires, from
   `livecore.routing` over the drill road graph. Distances are metres, `eta_min` minutes.
-- `POST /api/demo/decide` `{observation}` (at most 200 kB; 40/min) streams `application/x-ndjson`
+- `POST /api/demo/decide[?incident=]` `{observation}` (at most 200 kB; 40/min) streams `application/x-ndjson`
   like `/api/dispatch/decide`: `thinking`/`text` lines, then one `orders` or `error` line. Claude
   can `send_crew`, `release_crew` or `order_evacuation`; each order is validated against the ids
   in the observation (at most 20 per decision). Needs `ANTHROPIC_API_KEY` (else 503
@@ -235,6 +241,44 @@ scenario × strategy × seed in lockstep on the drill clock, scored with the AAR
 one `RunManifest` per run and a paired comparison table. Simulated planning experiments; see
 [batch-runner.md](../../docs/batch-runner.md) and ADR `0049-batch-runner.md`.
 
+### Voice mode (`POST /api/live/incidents/<id>/voice`)
+
+One turn of the phone's voice mode: speech in, a spoken reply and at most one proposed phone
+action out. Any live bearer token works; 12 turns per minute per device; nothing from a turn is
+stored. Code: `api/live/voice.py` (endpoint, validation, prompt) and `api/cartesia.py`
+(Cartesia speech-to-text `ink-whisper` and text-to-speech over stdlib `urllib`). Claude only
+proposes; the phone asks the person before it sends a report or check-in through the ordinary
+endpoints. Request and response shapes, action types, limits, error codes and what leaves the
+phone: [docs/live-reports.md "Voice mode"](../../docs/live-reports.md#voice-mode).
+
+Environment (server-side only, never `VITE_*`; placeholders in `app/.env.example`):
+
+| Variable | Required | Meaning |
+| --- | --- | --- |
+| `ANTHROPIC_API_KEY` | yes | Paid. Without it every voice turn answers 503 `voice_unavailable` |
+| `CARTESIA_API_KEY` | for audio | Paid Cartesia key for speech-to-text and text-to-speech. Without it, audio turns answer 503 `voice_unavailable`; `text` turns work and return `tts: "skipped"` |
+| `CARTESIA_VOICE_ID` | no | Cartesia voice for replies. Default: Cartesia's documented example voice (`DEFAULT_VOICE_ID` in `api/cartesia.py`) |
+| `CARTESIA_TTS_MODEL` | no | Default `sonic-3.6` |
+| `VOICE_MODEL` | no | Claude model that interprets the turn. Default `claude-opus-5-5` |
+
+Try it without a microphone, using a `text` turn (no audio, no Cartesia call). Start the backend
+and drill as in "Local run" above, with `ANTHROPIC_API_KEY` exported, then:
+
+```sh
+TOKEN=$(curl -s -X POST http://localhost:8000/api/live/devices | python3 -c 'import json,sys; print(json.load(sys.stdin)["token"])')
+curl -s -X POST http://localhost:8000/api/live/incidents/camp-2018-drill/voice \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"text": "pentz road is completely blocked", "speak": false,
+       "context": {"zone": "Paradise Zone 4", "role": "civilian", "guidance": null,
+                   "pending": null, "history": []}}'
+```
+
+The answer has `transcript`, `reply` (for example "Report a fully blocked road here. Send it?"),
+`action` (a `report` proposal, nothing is sent), `audio_b64: null`, `tts: "skipped"` and
+`evidence_class: "ai_interpretation"`. The wording and action come from the model and vary.
+Each call is paid Anthropic usage. This has not been run against a live key from this
+documentation change.
+
 ### Incident intelligence (`/api/intel/…`)
 
 Public agency pages, fetched by the Apify Actor in `actors/incident-intel/`, become source
@@ -279,7 +323,8 @@ uv pip compile requirements-dev.in --constraint requirements.txt --python-versio
 Review and keep both generated lockfiles. Installation uses pip; uv is only
 needed when changing the Python dependency set. Atlas credentials stay local, and only
 the optional explain, dispatch and intel extraction endpoints need a provider key
-(`ANTHROPIC_API_KEY`); intel runs need `APIFY_TOKEN`/`APIFY_ACTOR_ID`.
+(`ANTHROPIC_API_KEY`); intel runs need `APIFY_TOKEN`/`APIFY_ACTOR_ID`; voice mode also needs
+`ANTHROPIC_API_KEY`, and `CARTESIA_API_KEY` for audio.
 Optional existing contract tests mock the MongoDB boundary; they still require a
 syntactically valid `MONGODB_URI` environment variable to load Django settings.
 

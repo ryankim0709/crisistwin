@@ -55,7 +55,9 @@ def bases_path() -> Path:
     env = os.environ.get(ENV_PATH)
     if env:
         return Path(env)
-    return Path(__file__).resolve().parents[3] / "tools" / "ca_fire_bases.json"
+    from .live.twin_service import REPO_ROOT  # /repo in Docker, where only app/backend is /app
+
+    return REPO_ROOT / "tools" / "ca_fire_bases.json"
 
 
 def load_bases() -> dict | None:

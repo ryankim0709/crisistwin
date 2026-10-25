@@ -35,6 +35,8 @@
     </array>
     <key>NSCameraUsageDescription</key>
     <string>The camera scans a CrisisTwin join QR code. Nothing is recorded or saved.</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Voice mode records what you say so it can be turned into a report or check-in. The recording is sent to the CrisisTwin server and transcribed by Cartesia; it is not saved.</string>
     <key>LSRequiresIPhoneOS</key>
     <true/>
     <key>UIApplicationSceneManifest</key>

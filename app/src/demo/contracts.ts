@@ -2,9 +2,13 @@
  * Wire contract between the /demo page and app/backend/api/demo.py (+ demo_realism.py). Change
  * both sides and docs/command-demo-realism.md together.
  *
+ * Every /api/demo/* endpoint takes an optional query parameter `incident=<incident_id>` (see
+ * `demoUrl`): absent means the Camp drill; an unknown or non-active incident is a 404
+ * `{ error, detail }`. The page follows the live active incident (live/active.ts) and passes it.
+ *
  * POST /api/demo/routes: `{ fires: LonLat[][] }` (closed rings of the fires that are not out,
  * at most 60, each 4..200 points) -> `RoutesResponse`. Routes come from the live planner's
- * router over the Camp drill roads (livecore.routing), avoiding the posted fire areas.
+ * router over the incident's drill roads (livecore.routing), avoiding the posted fire areas.
  *
  * POST /api/demo/decide: `{ observation: DemoObservation }` (at most 200 kB) ->
  * application/x-ndjson, `DecisionEvent` lines ending with one "orders" or "error" line, as
@@ -13,7 +17,8 @@
  * POST /api/demo/crew_routes: `CrewRoutesRequest` -> `CrewRoutesResponse`. Road travel for
  * firefighting units over the drill roads their apparatus class may use (livecore.inbound).
  * GET /api/demo/wind?mode=historical_replay|climatology_percentile -> `WindResponse`.
- * GET /api/demo/environment -> `EnvironmentResponse` (Camp terrain grid, carless households).
+ * GET /api/demo/environment -> `EnvironmentResponse` (drill centre, Camp terrain grid, carless households, package fire stations).
+ * Wind is searched from the incident's centre.
  *
  * Every number in an observation is simulator output (demo/model.ts), sourced data
  * (demo/realism.ts) or a labelled assumption; the agent only chooses among the ids it lists.
@@ -24,6 +29,7 @@
  * m/s, direction the wind blows FROM in degrees true; flame lengths feet.
  */
 
+import { DEFAULT_INCIDENT_ID } from "../live/api";
 import type { LonLat } from "../live/types";
 import type { RouteOption, TeamStatus, FireSource, FireStatus, TravelBasis } from "./model";
 import type { DemoApparatusKind } from "./realism";
@@ -33,6 +39,12 @@ export const DECIDE_URL = "/api/demo/decide";
 export const CREW_ROUTES_URL = "/api/demo/crew_routes";
 export const WIND_URL = "/api/demo/wind";
 export const ENVIRONMENT_URL = "/api/demo/environment";
+
+/** `url` for `incident`: Camp is the server default, so it is sent without the parameter. */
+export function demoUrl(url: string, incidentId: string): string {
+  if (incidentId === DEFAULT_INCIDENT_ID) return url;
+  return `${url}${url.includes("?") ? "&" : "?"}incident=${encodeURIComponent(incidentId)}`;
+}
 
 export interface RoutesResponse {
   zones: { zone_id: string; options: RouteOption[] }[];
@@ -93,7 +105,9 @@ export interface WindResponse {
 }
 
 export interface EnvironmentResponse {
-  /** Camp USGS 3DEP slope on a regular grid (row 0 = south), or null when unavailable. */
+  /** Centre of the incident's drill zones, WGS84 [lon, lat]. */
+  center?: LonLat;
+  /** Camp USGS 3DEP slope on a regular grid (row 0 = south); null for other incidents or when unavailable. */
   terrain: {
     origin_lon: number;
     origin_lat: number;
@@ -110,8 +124,12 @@ export interface EnvironmentResponse {
   } | null;
   terrain_detail: string | null;
   /** Carless households per drill zone id (ACS, from the replay bundle's demand table). */
-  households_no_vehicle: Record<string, number>;
+  households_no_vehicle: Record<string, number>; // {} when unknown (non-Camp)
   households_no_vehicle_source: string | null;
+  /** Fire stations of a Studio drill package (OpenStreetMap, observed); [] for Camp or when absent. */
+  stations?: { id: string; name: string; lon: number; lat: number }[];
+  /** Provenance of `stations`; null when there are none. */
+  stations_source?: string | null;
 }
 
 export interface FireObservation {
