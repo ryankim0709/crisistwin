@@ -119,7 +119,7 @@ type CrewPath = {
 /** A crew walking in from its parked vehicle to its work point between two board minutes. */
 type Hike = { teamId: string; from: LonLat; to: LonLat; t0: number; t1: number };
 
-const GROUND_GLYPHS: readonly GroundGlyph[] = ["engine", "tender", "dozer", "crew_carrier"];
+const GROUND_GLYPHS: readonly GroundGlyph[] = ["engine", "tender", "dozer", "crew_carrier", "ambulance"];
 const AIR_GLYPHS: readonly AirGlyph[] = ["helicopter", "airtanker", "air_attack"];
 const LIFT = 0.9;
 const ZONE_LIFT = 0.6;
@@ -634,7 +634,7 @@ export class DemoBoardOverlay implements BoardOverlay, DemoOverlayApi {
     const hikes: Hike[] = [];
     for (const team of board?.teams ?? []) {
       if (team.status !== "on_scene" || team.workStartAt === null || team.workStartAt <= board!.minute) continue;
-      if (vehicleFamily(team.kind) === "dozer") continue;
+      if (team.kind === "ambulance" || vehicleFamily(team.kind) === "dozer") continue;
       const activity = unitActivity(board!, team);
       if (activity.kind !== "hiking_in" || !activity.workPoint) continue;
       const t0 = Math.min(team.arriveAt ?? board!.minute, board!.minute);
@@ -1134,7 +1134,7 @@ export class DemoBoardOverlay implements BoardOverlay, DemoOverlayApi {
         // inward is [east, north]; the board's z runs south.
         inward: len > 0 ? { x: w.inward[0] / len, z: -w.inward[1] / len } : { x: 0, z: 0 },
         kind: w.kind,
-        color: new THREE.Color(CREW_COLORS[team ? vehicleFamily(team.kind) : "hand_crew"]),
+        color: new THREE.Color(CREW_COLORS[team && team.kind !== "ambulance" ? vehicleFamily(team.kind) : "hand_crew"]),
         phase: previous?.phase ?? (hashString(key) % 628) / 100,
         progress,
       });

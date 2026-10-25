@@ -16,23 +16,26 @@
  * board.simComms.injuries; lead D's simComms.ts turns them into 911 / radio messages.
  *
  * Response: send_rescue with an inj-* id (liveOrders.ts routes it here) sends the closest free
- * engine that can drive there (legStatus: road access by apparatus class, the road router's
- * legs, the same trip machinery as model.dispatch). The board fleet has no ambulance or rescue
- * unit (response/fleet.ts, realism.ts DemoApparatusKind), so engines respond: Berkeley FD staffs
- * every engine with a paramedic (City of Berkeley, Fire Department page,
+ * ALS ambulance that can drive there (response/fleet.ts EmsSeed units on the board, kind
+ * "ambulance", routed as the lightest road class, realism.ts AMBULANCE_ACCESS), by the road
+ * router's legs and the same trip machinery as model.dispatch. When no ambulance is free or none
+ * can reach the injury by road, the closest free engine goes instead (Berkeley FD staffs every
+ * engine with a paramedic, City of Berkeley, Fire Department page,
  * https://berkeleyca.gov/your-government/about-us/departments/fire-department: "All of Berkeley's
- * seven fire engines, two trucks, and four ambulances are staffed with paramedics"). BFD's four
- * ALS ambulances are not on the board: ASSUMPTION, a serious or critical patient is handed to an
- * ambulance off the board at the end of the engine's on-scene time ("transported"). After
- * EMS_ON_SCENE_MIN on scene the engine drives home (boardResponse.sendHome). A critical patient
- * nobody reached dies at a seeded time (CRITICAL_UNTREATED_MEDIAN_DEATH_MIN median).
+ * seven fire engines, two trucks, and four ambulances are staffed with paramedics"); an engine
+ * cannot transport, so ASSUMPTION: it hands a serious or critical patient to an ambulance off the
+ * board at the end of its on-scene time ("transported"). After EMS_ON_SCENE_MIN on scene a
+ * transporting ambulance leaves for the hospital (not on the board: no hospital layer), is out of
+ * service for AMBULANCE_TURNAROUND_MIN, then is back in quarters; an engine drives home
+ * (boardResponse.sendHome). A critical patient nobody reached dies at a seeded time
+ * (CRITICAL_UNTREATED_MEDIAN_DEATH_MIN median).
  *
  * Units: board minutes, persons, metres, [lon, lat]. Everything here is evidence "simulated".
  */
 
 import { deriveStream, uniform, type RngStream } from "../response/rng";
 import { travelVariation } from "../response/travel";
-import { sendHome } from "./boardResponse";
+import { sendHome, statusFree } from "./boardResponse";
 import {
   activeRoute,
   congestionFactor,
@@ -119,9 +122,22 @@ export const MAX_PARTY = 3;
 export const MAX_PARTIES_PER_BURST = 8;
 /** Smoke injuries on the road happen on the first part of the route (share of its length): ASSUMPTION, near the zone the fire is in. */
 const SMOKE_ROUTE_SHARE = 0.3;
-/** Engines (paramedic-staffed, see the module note) respond; a rescue/ambulance kind, if a fleet ever adds one, goes first. */
-const RESCUE_FIRST = /ambulance|medic|rescue/;
+/** Ambulances respond first; paramedic-staffed engines (see the module note) are the fallback. */
 const ENGINE = /^engine/;
+/**
+ * Out of service after taking a patient to hospital, minutes: transport out and back plus offload.
+ * ASSUMPTION: no hospital layer on the board, so the drive is HOSPITAL_TRANSPORT_MIN (10 min each
+ * way, an urban East Bay hospital within a few miles; not measured). Offload is the California
+ * ambulance patient offload time ceiling, AB 40 (2023), Health and Safety Code 1797.120.6: each
+ * local EMS agency's standard is at most 30 min, 90% of the time (SMC EMS bulletin 24-05; Sacramento
+ * County DHS); used here as the value for every transport, so it is conservative.
+ */
+export const HOSPITAL_TRANSPORT_MIN = 20;
+export const HOSPITAL_OFFLOAD_MIN = 30;
+export const AMBULANCE_TURNAROUND_MIN = HOSPITAL_TRANSPORT_MIN + HOSPITAL_OFFLOAD_MIN;
+/** Nearest free ambulances whose road legs are fetched ahead for each waiting injury, and injuries so served per request batch. */
+export const RESCUE_PREFETCH_UNITS = 2;
+export const RESCUE_PREFETCH_INJURIES = 6;
 const METERS_PER_MILE = 1609.344;
 
 // ---- board-side state ----
@@ -408,11 +424,21 @@ export function onRescue(board: Board, teamId: string): boolean {
   return boardInjuries(board).some((inj) => inj.assignedUnitId === teamId && inj.status === "unit_en_route");
 }
 
+/** Whether a unit can be sent to a patient now: a free ambulance, or (fallback) a free paramedic engine. */
+function rescueCandidate(board: Board, t: Team): boolean {
+  if (onRescue(board, t.id)) return false;
+  if (t.kind === "ambulance") return statusFree(t);
+  return ENGINE.test(t.kind) && dispatchable(t);
+}
+
+/** Ambulances are tried first (rank 0), engines second (rank 1). */
+const rescueRank = (t: Team) => (t.kind === "ambulance" ? 0 : 1);
+
 /**
- * send_rescue on an inj-* id: the closest free unit that can respond (a rescue kind if the fleet
- * has one, else a paramedic engine) and can drive there by its apparatus class, by its road leg
+ * send_rescue on an inj-* id: the closest free ambulance that can drive there by its road leg
  * (or the ASSUMPTION straight-line estimate while the leg is not known; it waits where it stands
- * until the road router answers, as model.dispatch). Returns null or why it cannot go.
+ * until the road router answers, as model.dispatch); when no ambulance is free or none can reach
+ * the injury by road, the closest free engine that can. Returns null or why it cannot go.
  */
 export function sendRescue(board: Board, injuryId: string, actor: "agent" | "you", reason = ""): string | null {
   const inj = boardInjuries(board).find((i) => i.id === injuryId);
@@ -420,23 +446,25 @@ export function sendRescue(board: Board, injuryId: string, actor: "agent" | "you
   const d = s.details[injuryId];
   if (!inj || !d) return `Unknown injury ${injuryId}.`;
   if (inj.status !== "waiting") return `${injuryId} is ${inj.status.replace(/_/g, " ")}${inj.assignedUnitId ? ` (${inj.assignedUnitId})` : ""}.`;
-  const kinds = (t: Team) => (RESCUE_FIRST.test(t.kind) ? 0 : ENGINE.test(t.kind) ? 1 : -1);
-  const free = board.teams.filter((t) => dispatchable(t) && kinds(t) >= 0 && !onRescue(board, t.id));
-  if (free.length === 0) return `No free engine to send to ${injuryId}.`;
+  const free = board.teams.filter((t) => rescueCandidate(board, t));
+  if (free.length === 0) return `No free ambulance or engine to send to ${injuryId}.`;
   let best: { team: Team; minutes: number; rank: number } | null = null;
   let why: string | null = null;
+  let ambulanceWhy: string | null = null;
+  const ambulancesFree = free.filter((t) => t.kind === "ambulance").length;
   for (const team of free) {
     const leg = legStatus(board, team, d.destKey, inj.coord);
     if (leg.route === "none") {
       why ??= leg.reason.replace(/_/g, " ");
+      if (team.kind === "ambulance") ambulanceWhy ??= leg.reason.replace(/_/g, " ");
       continue;
     }
-    const rank = kinds(team);
+    const rank = rescueRank(team);
     if (!best || rank < best.rank || (rank === best.rank && (leg.minutes < best.minutes || (leg.minutes === best.minutes && team.id < best.team.id)))) {
       best = { team, minutes: leg.minutes, rank };
     }
   }
-  if (!best) return `No free engine can drive to ${injuryId}${why ? ` (${why})` : ""}.`;
+  if (!best) return `No free ambulance or engine can drive to ${injuryId}${why ? ` (${why})` : ""}.`;
   const team = best.team;
   startRescueTrip(board, s, team, inj.coord, d.destKey);
   inj.status = "unit_en_route";
@@ -445,13 +473,47 @@ export function sendRescue(board: Board, injuryId: string, actor: "agent" | "you
   d.onSceneAt = d.doneAt = null;
   const eta = Math.max(0, Math.ceil((team.arriveAt ?? board.minute) - board.minute));
   const what = `${inj.people} ${inj.severity} ${inj.cause.replace(/_/g, " ")} patient${inj.people === 1 ? "" : "s"}`;
+  // An engine went: say why no ambulance did.
+  const fallback =
+    team.kind === "ambulance"
+      ? ""
+      : ambulancesFree === 0
+        ? " (engine: no ambulance free)"
+        : ` (engine: no free ambulance can drive there${ambulanceWhy ? `, ${ambulanceWhy}` : ""})`;
   logEvent(
     board,
     "team",
     actor,
-    `${team.id} sent to ${injuryId} (${what})${reason ? `: ${reason.slice(0, 120)}` : ""}; ${team.travel === "pending" ? `waiting for its road route (about ${eta} min estimated)` : `on scene in ${eta} min`}.`,
+    `${team.id}${fallback} sent to ${injuryId} (${what})${reason ? `: ${reason.slice(0, 120)}` : ""}; ${team.travel === "pending" ? `waiting for its road route (about ${eta} min estimated)` : `on scene in ${eta} min`}.`,
   );
   return null;
+}
+
+/**
+ * Road legs worth asking for before an order: for each waiting injury (at most
+ * RESCUE_PREFETCH_INJURIES, oldest first), the RESCUE_PREFETCH_UNITS nearest free ambulances'
+ * legs to it (straight line), so the ambulance's road time, or that its road class cannot reach
+ * the spot, is known when the commander sends help (useCrewRoutes crewRouteRequests).
+ */
+export function rescueLegWants(board: Board): { team: Team; from: LonLat; destKey: string; to: LonLat }[] {
+  const out: { team: Team; from: LonLat; destKey: string; to: LonLat }[] = [];
+  const s = (board as InjuryBoard).injuryRun;
+  if (!s) return out;
+  const free = board.teams.filter((t) => t.kind === "ambulance" && rescueCandidate(board, t));
+  if (free.length === 0) return out;
+  const origin = new Map(free.map((t) => [t.id, tripStart(board, t).from] as const));
+  const waiting = boardInjuries(board)
+    .filter((i) => i.status === "waiting" && s.details[i.id])
+    .slice(0, RESCUE_PREFETCH_INJURIES);
+  for (const inj of waiting) {
+    const destKey = s.details[inj.id].destKey;
+    const near = free
+      .filter((t) => legStatus(board, t, destKey, inj.coord).route !== "none")
+      .sort((a, b) => distanceM(origin.get(a.id)!, inj.coord) - distanceM(origin.get(b.id)!, inj.coord) || a.id.localeCompare(b.id))
+      .slice(0, RESCUE_PREFETCH_UNITS);
+    for (const team of near) out.push({ team, from: origin.get(team.id)!, destKey, to: inj.coord });
+  }
+  return out;
 }
 
 /** The trip machinery of model.dispatch, with no fire: turnout, a returning unit turning back, road leg or pending, congestion x seeded variation (the injury stream). */
@@ -488,6 +550,24 @@ function startRescueTrip(board: Board, s: InjuryRunState, team: Team, to: LonLat
   }
 }
 
+/**
+ * A transporting ambulance leaves the board for the hospital: out of service (board.teams status,
+ * responseTick brings it back to "available" at the end) for AMBULANCE_TURNAROUND_MIN, drawn at its
+ * quarters meanwhile since the hospital is not on the board.
+ */
+function toHospital(board: Board, team: Team): void {
+  team.status = "out_of_service";
+  team.outOfServiceUntil = board.minute + AMBULANCE_TURNAROUND_MIN;
+  team.position = team.home;
+  team.target = null;
+  team.route = null;
+  team.legKey = null;
+  team.travel = null;
+  team.departAt = team.rollAt = team.arriveAt = null;
+  team.accessKnown = false;
+  team.coverStation = null;
+}
+
 /** Rescue arrivals, on-scene completion, re-tasked or unroutable rescues, and deaths (every clock step, before model.ts lands en-route units at fires). */
 function stepResponse(board: Board, s: InjuryRunState): void {
   const now = board.minute;
@@ -518,14 +598,27 @@ function stepResponse(board: Board, s: InjuryRunState): void {
       } else if (d.onSceneAt !== null && d.doneAt !== null && now >= d.doneAt - 1e-9) {
         const transported = inj.severity !== "minor" || uniform(s.rng) < MINOR_TRANSPORT_FRACTION;
         inj.status = transported ? "transported" : "treated";
+        const patients = `${inj.id}'s patient${inj.people === 1 ? "" : "s"}`;
+        if (team.kind === "ambulance" && transported) {
+          toHospital(board, team);
+          logEvent(
+            board,
+            "team",
+            "board",
+            `${team.id} leaves with ${patients} for hospital (not on the board); out of service about ${AMBULANCE_TURNAROUND_MIN} min (transport ${HOSPITAL_TRANSPORT_MIN} + offload ${HOSPITAL_OFFLOAD_MIN}, assumed), then back in quarters (simulated).`,
+          );
+          continue;
+        }
         sendHome(board, team);
         logEvent(
           board,
           "team",
           "board",
-          transported
-            ? `${team.id} hands ${inj.id}'s patient${inj.people === 1 ? "" : "s"} to an ambulance (not on the board) and heads back (simulated).`
-            : `${team.id} treated ${inj.id} on scene and heads back (simulated).`,
+          team.kind === "ambulance"
+            ? `${team.id} treated ${inj.id} on scene (no transport) and heads back (simulated).`
+            : transported
+              ? `${team.id} hands ${patients} to an ambulance (not on the board; assumed) and heads back (simulated).`
+              : `${team.id} treated ${inj.id} on scene and heads back (simulated).`,
         );
         continue;
       }
@@ -592,4 +685,91 @@ export function injuryScore(board: Board): InjuryScore {
     else if (inj.status === "transported") out.transportedPeople += inj.people;
   }
   return out;
+}
+
+// ---- EMS capacity (observation response.ems) ----
+
+/** One ambulance for the commander: where it stands, what it is doing, when it is free. */
+export interface EmsUnitObservation {
+  id: string;
+  department: string;
+  station_id: string;
+  /** "available", "responding" (driving to a patient), "treating" (on scene), "returning", "at_hospital" (turnaround, out of service), or "out_of_service" (other). */
+  state: "available" | "responding" | "treating" | "returning" | "at_hospital" | "out_of_service";
+  /** inj-* id of the patient it is responding to or treating, or the last one it took to hospital. */
+  injury_id: string | null;
+  /** Minutes until it is on scene (responding), done (treating), free again (at_hospital, out_of_service) or home (returning); null otherwise. */
+  free_or_arrives_in_min: number | null;
+}
+
+export interface EmsObservation {
+  /** ALS ambulances on the board (response.ems seeds at stations on it; response/departments.ts rosters). */
+  ambulances: number;
+  /** Ambulances in the fleet's roster at stations off the board (cannot be sent). */
+  off_board: number;
+  available: number;
+  responding: number;
+  treating: number;
+  at_hospital: number;
+  /** Minutes out of service per hospital transport: transport + offload (ASSUMPTION, AMBULANCE_TURNAROUND_MIN). */
+  hospital_turnaround_min: number;
+  /** Patients waiting for a unit now. */
+  patients_waiting: number;
+  units: EmsUnitObservation[];
+  note: string;
+}
+
+/** Ambulance availability for the observation's response section. */
+export function emsObservation(board: Board): EmsObservation {
+  const minute = board.minute;
+  const injuries = boardInjuries(board);
+  const mins = (t: number | null) => (t === null ? null : Math.max(0, Math.ceil(t - minute)));
+  const units: EmsUnitObservation[] = board.teams
+    .filter((t) => t.kind === "ambulance")
+    .map((t): EmsUnitObservation => {
+      const current = injuries.find((i) => i.assignedUnitId === t.id && i.status === "unit_en_route");
+      const last = [...injuries].reverse().find((i) => i.assignedUnitId === t.id);
+      let state: EmsUnitObservation["state"];
+      let when: number | null = null;
+      if (current) {
+        const d = injuryDetail(board, current.id);
+        if (d && d.onSceneAt !== null) {
+          state = "treating";
+          when = d.doneAt;
+        } else {
+          state = "responding";
+          when = t.travel === "pending" ? null : t.arriveAt;
+        }
+      } else if (t.status === "out_of_service") {
+        state = last?.status === "transported" ? "at_hospital" : "out_of_service";
+        when = t.outOfServiceUntil;
+      } else if (t.status === "returning" || t.status === "moving_up") {
+        state = "returning";
+        when = t.travel === "pending" ? null : t.arriveAt;
+      } else {
+        state = t.status === "available" ? "available" : "out_of_service";
+      }
+      return {
+        id: t.id,
+        department: board.response.departments.find((d) => d.id === t.department)?.name ?? t.department,
+        station_id: t.station,
+        state,
+        injury_id: current?.id ?? (state === "at_hospital" ? (last?.id ?? null) : null),
+        free_or_arrives_in_min: mins(when),
+      };
+    })
+    .sort((a, b) => a.id.localeCompare(b.id));
+  const count = (s: EmsUnitObservation["state"]) => units.filter((u) => u.state === s).length;
+  return {
+    ambulances: units.length,
+    off_board: Math.max(0, board.response.ems.length - units.length),
+    available: count("available"),
+    responding: count("responding"),
+    treating: count("treating"),
+    at_hospital: count("at_hospital"),
+    hospital_turnaround_min: AMBULANCE_TURNAROUND_MIN,
+    patients_waiting: injuries.filter((i) => i.status === "waiting").reduce((sum, i) => sum + i.people, 0),
+    units,
+    note: "send_rescue on an inj-* id sends the closest free ambulance that can drive there; an engine goes only when none is free or none can reach by road. An ambulance that transports is out of service for the hospital turnaround (transport + offload, assumed; no hospital on the board).",
+  };
 }

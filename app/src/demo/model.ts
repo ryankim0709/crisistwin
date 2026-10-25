@@ -123,6 +123,7 @@ import {
   createResponseState,
   dispatchAircraft,
   dispatchable,
+  statusFree,
   escalate,
   expectedArrival,
   flowIndex,
@@ -199,10 +200,12 @@ import {
   holdsFlameFeet,
   kindShort,
   lineMetersPerMinute,
+  fireKindOf,
   turnoutMinutes,
   moistureOf,
   windAt,
   type DemoApparatusKind,
+  type TeamKind,
   type MoistureId,
   type SpreadInputs,
   type WindNow,
@@ -221,7 +224,7 @@ import {
   type Trips,
 } from "./traffic";
 
-export { dispatchable } from "./boardResponse";
+export { dispatchable, statusFree } from "./boardResponse";
 
 /** Mean departure delay after the cue (Camp, sourced). The observation's departure figure. */
 export const DEPARTURE_SPREAD_MINUTES = DEPARTURE_MEAN_MINUTES;
@@ -340,7 +343,8 @@ export type TravelBasis = "road" | "road_offboard" | "straight_line" | "pending"
 export interface Team {
   /** The snapshot's engine_id for a snapshot engine (1:1); E/C/D + number for other units. */
   id: string;
-  kind: DemoApparatusKind;
+  /** Fire apparatus, or an ALS "ambulance" (never takes fire orders; demo/injuries.ts sends it). */
+  kind: TeamKind;
   /** Station.id of its home station. */
   station: string;
   /** Snapshot engine it is (`engine_id`), or null for a unit the snapshot does not list. */
@@ -1331,7 +1335,7 @@ export function zonesCoreCentre(zones: readonly { core: LonLat }[]): LonLat | nu
 /** A board unit at `location`, free (the response model's fields at their idle values). */
 function newTeam(
   id: string,
-  kind: DemoApparatusKind,
+  kind: TeamKind,
   station: string,
   location: LonLat,
   engineId: string | null,
@@ -1365,7 +1369,7 @@ function newTeam(
     home: location,
     turnoutMinutes: turnout,
     travelFactor: 1,
-    waterGallons: TANK_GALLONS[kind] ?? null,
+    waterGallons: kind === "ambulance" ? null : (TANK_GALLONS[kind] ?? null),
     workMinutes: 0,
     restOwed: 0,
     restUntil: null,
@@ -1619,7 +1623,7 @@ export const SAME_STATION_M = 300;
 /** Resource label of a board with no snapshot whose units come from the CAL FIRE facilities layer. */
 export const NO_SNAPSHOT_FLEET_LABEL = "No resource snapshot for this drill — units from the CAL FIRE facilities layer (assumed counts per facility)";
 
-const isEngineKind = (k: DemoApparatusKind) => k === "engine_t3" || k === "engine_t1";
+const isEngineKind = (k: TeamKind) => k === "engine_t3" || k === "engine_t1";
 
 /** Centre of the board's landscape grid [lon, lat]: where the fleet measures air bases' dispatch radius (response/fleet.ts buildFleet). */
 function boardCentre(grid: LandscapeGrid): LonLat {
@@ -1737,6 +1741,17 @@ function buildBoardUnits(board: Board, zones: BaseZone[], env: DemoEnvironment, 
       t.outOfServiceUntil = lo + (hi - lo) * uniform(board.response.rng);
     }
   }
+  // ALS ambulances at stations on the board (response/fleet.ts EmsSeed, sourced rosters): board units
+  // that only the rescue model sends (demo/injuries.ts). Added after the seeded draw above, which
+  // they take no part in, so the fire units' draws are the same as without them.
+  for (const e of fleet.ems) {
+    if (!onBoard(e.location) || board.teams.some((t) => t.id === e.id)) continue;
+    const team = newTeam(e.id, "ambulance", e.stationId, e.location, null, false, e.departmentId, e.turnoutMinutes);
+    team.tier = e.tier;
+    board.teams.push(team);
+    const st = stationOf.get(e.stationId);
+    if (st && !board.stations.some((s) => s.id === st.id)) board.stations.push(st);
+  }
   board.response.nextAvailabilityDraw = AVAILABILITY_DRAW_EVERY_MINUTES;
   board.response.label = hasFleet ? fleet.label : "Fixed roster (assumed): CAL FIRE facilities metadata unavailable";
   return skipped;
@@ -1793,7 +1808,7 @@ export function createBoard(zones: BaseZone[], seed: number, env: DemoEnvironmen
   const skipped = buildBoardUnits(board, zones, env, snapshot);
   const teams = board.teams;
   const engineUnits = teams.filter((t) => t.engineId !== null).length;
-  const assumedUnits = teams.length - engineUnits;
+  const assumedUnits = teams.filter((t) => t.engineId === null && t.kind !== "ambulance").length;
   board.snapshot = snapshot ? snapshotSummary(snapshot, zoneStates) : null;
   const pool = board.response.pool.length;
   const hasFleet = (env.bases?.all?.length ?? 0) > 0;
@@ -1814,7 +1829,7 @@ export function createBoard(zones: BaseZone[], seed: number, env: DemoEnvironmen
         assumedUnits,
         assumedLabel: ASSUMED_UNIT_LABEL,
       };
-  const byKind = new Map<DemoApparatusKind, number>();
+  const byKind = new Map<TeamKind, number>();
   for (const t of teams) byKind.set(t.kind, (byKind.get(t.kind) ?? 0) + 1);
   const kinds = [...byKind].map(([k, n]) => `${n} ${kindShort(k)}${n > 1 ? "s" : ""}`).join(", ");
   const air = board.response.aircraft.length;
@@ -2167,7 +2182,7 @@ export function classBlocked(board: Board, access: AccessClass, destKey: string,
   if (!entry || entry.reached || entry.reason === null) return null;
   if (entry.failedFrom.length >= REACH_CONFIRM_ORIGINS) return entry.reason;
   const origins = new Set(
-    board.teams.filter((t) => dispatchable(t) && accessClassOf(t.kind) === access).map((t) => originKey(tripStart(board, t).from)),
+    board.teams.filter((t) => statusFree(t) && accessClassOf(t.kind) === access).map((t) => originKey(tripStart(board, t).from)),
   );
   return [...origins].every((o) => entry.failedFrom.includes(o)) ? entry.reason : null;
 }
@@ -2206,6 +2221,7 @@ export interface UnreachableClass {
 export function unreachableClasses(board: Board, destKey: string, to: LonLat): UnreachableClass[] {
   const kinds = new Map<AccessClass, DemoApparatusKind[]>();
   for (const t of board.teams) {
+    if (t.kind === "ambulance") continue; // fire access only: rescue reach is injuries.ts's
     const access = accessClassOf(t.kind);
     const list = kinds.get(access) ?? [];
     if (!list.includes(t.kind)) list.push(t.kind);
@@ -2508,7 +2524,7 @@ export function travelLegFailed(board: Board, key: string, reason: string): void
       board,
       "team",
       "board",
-      `${team.id} has no road route to ${fireId ?? "its fire"} ${dest} (${why}); ${statusOf(team) === "returning" ? "it drives back to its station" : "it stays at its station"}.`,
+      `${team.id} has no road route to ${fireId === null ? "the patient (rescue trip)" : `${fireId} ${dest}`} (${why}); ${statusOf(team) === "returning" ? "it drives back to its station" : "it stays at its station"}.`,
       { action: "no_route_fire", teamIds: [team.id], fireId: fireId ?? undefined },
     );
   }
@@ -2661,7 +2677,7 @@ export function unitLineRateOn(team: Team, plan: AttackPlan, mode: WorkMode | nu
  * drive to it stops up to 3 km short (STOP_SHORT_MAX_M), so this walk is not negligible.
  */
 export function lineAccessPlan(board: Board, team: Team, parked: LonLat, plan: AttackPlan): WorkPlan & { distanceM: number } {
-  return accessWorkPlan(board, team.kind, parked, plan.point);
+  return accessWorkPlan(board, fireKindOf(team), parked, plan.point);
 }
 
 /** Id of the line a unit would build at `plan` (also its trip key, see travelKey). */
@@ -3128,6 +3144,7 @@ export function applyOrder(
       return dispatchAircraft(board, aircraft, fire, actor);
     }
     if (!team) return `Unknown unit ${order.crew_id}.`;
+    if (team.kind === "ambulance") return `${team.id} is an ambulance: it answers injuries only (send_rescue with an inj-* id), not fires.`;
     if (order.type === "release_crew") {
       if (team.status === "returning") return `${team.id} is already returning to its station.`;
       if (team.fireId === null) return `${team.id} is not assigned to a fire.`;
@@ -4309,7 +4326,7 @@ export function workOf(board: Board, team: Team, fire: Fire): UnitWork {
     const lineMPerMin = tacticLineRate(board, fire, [{ ...team, workStartAt: null }], "direct");
     return { lineMPerMin, holdsFt: team.workMode === "out_of_reach" || team.workMode === "indirect" ? 0 : holdsFlameFeet(team.kind) };
   }
-  return { lineMPerMin: unitLineOn(board, team, fire), holdsFt: holdsFlameFeet(team.kind), kind: team.kind };
+  return { lineMPerMin: unitLineOn(board, team, fire), holdsFt: holdsFlameFeet(team.kind), kind: team.kind === "ambulance" ? undefined : team.kind };
 }
 
 /** Containment estimate with the direct-attack units already assigned (units on attack lines work through the solver). */

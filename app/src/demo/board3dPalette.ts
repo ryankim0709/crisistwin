@@ -44,6 +44,9 @@ export const APPARATUS_COLORS = {
   /** Air attack / lead plane: white with an orange band, so it reads apart from tankers. */
   airAttack: 0xf2f2ee,
   airAttackBand: 0xf08a24,
+  /** ALS ambulance: white box body and cab, red stripe, cross and roof light bar. */
+  ambulanceBody: 0xf7f7f5,
+  ambulanceStripe: 0xc8281e,
   /** Spinning rotor disc (translucent). */
   rotor: 0x2b2b2b,
   /** Retardant (pink-red, Phos-Chek) and water drop curtains. */

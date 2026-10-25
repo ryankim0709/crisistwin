@@ -88,12 +88,13 @@ import {
 } from "./model";
 import { LOOKAHEAD_MINUTES } from "./fireField";
 import { fireStateAreas } from "./fireState";
-import { ORDER_COMPLIANCE, accessClassOf, holdsFlameFeet, kindLabel } from "./realism";
+import { ORDER_COMPLIANCE, accessClassOf, fireKindOf, holdsFlameFeet, kindLabel } from "./realism";
 import { departmentStatus, dispatchable, fireEdgeSample, idleOnSceneReason, initialAttackRecommendation, isReported, reachFraction, unitAccessText } from "./boardResponse";
 import { TANK_GALLONS } from "../response/units";
 import { computeStrategyOptions, strategyLabel } from "./strategyOptions";
 import { closedIds, closedRoadsObservation, closureKey } from "./roadClosures";
 import { simCommsObservation } from "./simComms";
+import { emsObservation } from "./injuries";
 import { simClock } from "./format";
 import { EVAC_SCHEDULE_LABEL, evacuationSchedule, strategyAid, type ZoneEvacPlan } from "./decisionAids";
 import { predictedObservation } from "./predict";
@@ -117,7 +118,7 @@ function strategyObs(board: Board, fire: Fire): Pick<FireObservation, "strategy_
       flame_ft: Math.round(o.flameFt * 10) / 10,
       holds_flame_ft: o.holdsFlameFt,
       units_needed: o.unitsNeeded,
-      send: o.send.map((s) => ({ crew_id: s.team.id, kind: s.team.kind, eta_min: Math.round(s.etaMin), route: s.road ? "road" : "estimate" })),
+      send: o.send.map((s) => ({ crew_id: s.team.id, kind: fireKindOf(s.team), eta_min: Math.round(s.etaMin), route: s.road ? "road" : "estimate" })),
       already_assigned: o.assigned.map((t) => t.id),
       outcome: o.outcome,
       contained_in_min: minutes(o.containedInMin),
@@ -275,6 +276,7 @@ function responseObservation(board: Board): DemoObservation["response"] {
     dispatch_level_now: dispatchLevel(boardMoistureClass(board), wind.speedMetersPerSecond),
     departments: departmentStatus(board),
     mutual_aid_pool_units: r.pool.length,
+    ems: emsObservation(board),
     // Bounded for the 200 kB decide body: assigned aircraft first, at most MAX_LISTED.
     aircraft: [...r.aircraft]
       .sort((a, b) => Number(a.fireId === null) - Number(b.fireId === null))
@@ -605,7 +607,10 @@ export function buildObservation(
       position_id: team.lineId ? (board.lines.find((l) => l.id === team.lineId)?.plan.id ?? null) : null,
       department: board.response.departments.find((d) => d.id === team.department)?.name ?? team.department,
       tier: team.tier,
-      water_pct: team.waterGallons === null ? null : Math.round((team.waterGallons / (TANK_GALLONS[team.kind] ?? team.waterGallons)) * 100),
+      water_pct:
+        team.waterGallons === null || team.kind === "ambulance"
+          ? null
+          : Math.round((team.waterGallons / (TANK_GALLONS[team.kind] ?? team.waterGallons)) * 100),
       work_h: round1(team.workMinutes / 60),
       parked_m: team.parkedM === null || !team.accessKnown ? null : Math.round(team.parkedM),
       from_fire_m: fire && fire.status === "burning" ? edgeDistanceM(fireEdgeSample(board, fire), teamPosition(board, team)) : null,

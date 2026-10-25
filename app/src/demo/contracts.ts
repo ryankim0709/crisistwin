@@ -70,7 +70,8 @@ import type { LonLat } from "../live/types";
 import type { RouteOption, TeamStatus, FireSource, FireStatus, TravelBasis } from "./model";
 import type { CommsChannel, InjuryEvent, SimCommsItem } from "./runContracts";
 import type { RouteSegment } from "./traffic";
-import type { DemoApparatusKind } from "./realism";
+import type { DemoApparatusKind, TeamKind } from "./realism";
+import type { EmsObservation } from "./injuries";
 import type { AccessClass } from "../studio/apparatus";
 import type { Tactic } from "../response/containment";
 import type { Tier } from "../response/fleet";
@@ -522,8 +523,8 @@ export interface AttackPositionObservation {
 export interface CrewObservation {
   /** The snapshot's engine_id for a snapshot engine; C1, C2, D1 for the assumed units. */
   id: string;
-  /** Apparatus type (studio/apparatus.ts GroundKind). */
-  kind: DemoApparatusKind;
+  /** Apparatus type (studio/apparatus.ts GroundKind), or "ambulance" (an ALS medic unit: sent only by send_rescue on an inj-* id, never to a fire). */
+  kind: TeamKind;
   /** Road-access class it drives as (unreachable_classes of fires and positions name these). */
   access_class: AccessClass;
   label: string;
@@ -760,6 +761,8 @@ export interface DemoObservation {
     departments: { id: string; name: string; tier: Tier; engines: number; engines_available: number; keep_engines: number }[];
     /** Units at off-board stations that mutual-aid orders can still draw. */
     mutual_aid_pool_units: number;
+    /** ALS ambulance capacity (demo/injuries.ts emsObservation): who is free, responding, treating or at hospital; send_rescue picks from these. */
+    ems: EmsObservation;
     /** over_fire_in_min: minutes until an en-route aircraft is over its fire (null otherwise). */
     aircraft: { id: string; kind: string; base: string; status: string; fire_id: string | null; drops: number; over_fire_in_min: number | null }[];
     /** Orders not yet on the board; eta_min until they arrive (or retry, when unable_to_fill). */

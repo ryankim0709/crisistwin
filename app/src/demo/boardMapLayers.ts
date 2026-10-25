@@ -2,7 +2,8 @@ import type { GeoJSONSource, Map as MapLibreMap, MapMouseEvent } from "maplibre-
 import { LEVEL_COLOR, MAP_COLOR } from "../live/CommandMap";
 import { fireHatch } from "../live/mapStyle";
 import type { LonLat } from "../live/types";
-import { GROUND_APPARATUS, vehicleFamily } from "../studio/apparatus";
+import { vehicleFamily } from "../studio/apparatus";
+import { accessClassOf, type TeamKind } from "./realism";
 import { CREW_COLORS, firelineCss } from "../studio/firelinePalette";
 import type { AccessClassWire, RoadAccessResponse } from "./contracts";
 import { fireMapLabel, isReported } from "./boardResponse";
@@ -217,7 +218,7 @@ function buildCrews(board: Board): { dots: Feature[]; trails: Feature[] } {
     for (let k = 1; k < path.length; k++) cum.push(cum[k - 1] + distanceM(path[k - 1], path[k]));
     const s = Math.min(1, Math.max(0, w.progress)) * cum[cum.length - 1];
     const team = board.teams.find((t) => t.id === w.teamId);
-    const color = firelineCss(CREW_COLORS[team ? vehicleFamily(team.kind) : "hand_crew"]);
+    const color = firelineCss(CREW_COLORS[team ? team.kind === "ambulance" ? "engine" : vehicleFamily(team.kind) : "hand_crew"]);
     const len = Math.hypot(w.inward[0], w.inward[1]);
     const step = CREW_INWARD_M * (0.25 + 0.75 * Math.min(1, Math.max(0, w.progress))) * (w.kind === "line" ? 0.4 : 1);
     for (let k = 0; k < CREW_DOTS; k++) {
@@ -353,7 +354,7 @@ function buildClosedRoads(board: Board, input: BoardLayerInput): Feature[] {
   const roads = input.closedRoads;
   if (!roads) return [];
   const team = input.selection?.kind === "team" ? board.teams.find((t) => t.id === input.selection?.id) : undefined;
-  const classOf = (kind: keyof typeof GROUND_APPARATUS) => GROUND_APPARATUS[kind].access as AccessClassWire;
+  const classOf = (kind: TeamKind) => accessClassOf(kind) as AccessClassWire;
   let classes: AccessClassWire[];
   if (team) classes = [classOf(team.kind)];
   else if (input.showClosedRoads) classes = [...new Set(board.teams.map((t) => classOf(t.kind)))];

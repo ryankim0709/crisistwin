@@ -104,10 +104,11 @@ function wheels(xs: number[], zc: number, w: number, r: number, seg: number): Pa
 
 /* ---------- ground apparatus ---------- */
 
-export type GroundGlyph = "engine" | "tender" | "dozer" | "crew_carrier";
+export type GroundGlyph = "engine" | "tender" | "dozer" | "crew_carrier" | "ambulance";
 
-/** Glyph for a unit kind ("engine_t1", "tender_t2", "dozer_t1", "hand_crew_t2", ...). */
+/** Glyph for a unit kind ("engine_t1", "tender_t2", "dozer_t1", "hand_crew_t2", "ambulance", ...). */
 export function groundGlyphOf(kind: string): GroundGlyph {
+  if (kind === "ambulance") return "ambulance";
   if (kind.startsWith("tender")) return "tender";
   if (kind.startsWith("dozer")) return "dozer";
   if (kind.startsWith("hand_crew")) return "crew_carrier";
@@ -181,8 +182,29 @@ function crewCarrierParts(): Part[] {
   return parts;
 }
 
+/** ALS ambulance (box-truck type), about 4.6 long: white box body and cab, red stripe and cross on both sides, red roof light bar, four wheels. */
+function ambulanceParts(): Part[] {
+  const parts: Part[] = [
+    box(C.steel, -2.3, 2.3, 0.4, 0.6, -0.85, 0.85),
+    box(C.ambulanceBody, -2.3, 0.7, 0.55, 2.35, -1.0, 1.0),
+    box(C.ambulanceBody, 0.7, 2.3, 0.55, 1.75, -0.98, 0.98),
+    box(C.glass, 1.85, 2.32, 1.15, 1.7, -0.88, 0.88),
+    box(C.glass, 0.95, 1.75, 1.2, 1.7, -1.0, 1.0),
+    box(C.ambulanceStripe, 0.7, 2.31, 1.0, 1.15, -1.01, 1.01),
+    box(C.ambulanceStripe, -2.31, 0.7, 1.0, 1.2, -1.02, 1.02),
+    box(C.ambulanceStripe, -2.31, -2.25, 1.0, 1.2, -1.0, 1.0),
+    box(C.ambulanceStripe, -1.5, -0.7, 1.55, 1.75, -1.03, 1.03),
+    box(C.ambulanceStripe, -1.2, -1.0, 1.35, 1.95, -1.03, 1.03),
+    box(C.ambulanceStripe, 1.0, 1.5, 1.75, 1.95, -0.6, 0.6),
+    ...wheels([-1.4, 1.5], 0.95, 0.36, 0.45, 10),
+  ];
+  return parts;
+}
+
 export function groundGlyphGeometry(glyph: GroundGlyph): THREE.BufferGeometry {
   switch (glyph) {
+    case "ambulance":
+      return merge(ambulanceParts());
     case "tender":
       return merge(tenderParts());
     case "dozer":

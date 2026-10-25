@@ -145,7 +145,7 @@ import {
   type Station,
   type Team,
 } from "./model";
-import { KIND_PREFIX, holdsFlameFeet } from "./realism";
+import { KIND_PREFIX, fireKindOf, holdsFlameFeet, type TeamKind } from "./realism";
 import { simClock } from "./format";
 
 // ---- state ----
@@ -368,10 +368,16 @@ export function fireResponse(board: Board, fire: Fire): FireResponse | null {
 
 // ---- helpers ----
 
-const isEngine = (k: GroundResponseKind) => k === "engine_t3" || k === "engine_t1";
+const isEngine = (k: GroundResponseKind | TeamKind) => k === "engine_t3" || k === "engine_t1";
 const DISPATCHABLE = new Set(["available", "returning", "moving_up"]);
 
+/** A fire unit that can take an order: available, returning and moving_up. Ambulances never take fire orders (only demo/injuries.ts sends them). */
 export function dispatchable(team: Team): boolean {
+  return team.kind !== "ambulance" && DISPATCHABLE.has(team.status);
+}
+
+/** Whether a unit of any kind (an ambulance included) is free to be sent somewhere: the status test of `dispatchable`. */
+export function statusFree(team: Team): boolean {
   return DISPATCHABLE.has(team.status);
 }
 
@@ -688,7 +694,7 @@ function fillCard(board: Board, fire: Fire, card: ResourceCounts): ResourceCount
   type Candidate = { t: Team | null; seed: UnitSeed | null; kind: GroundResponseKind; eta: number; id: string };
   const candidates: Candidate[] = board.teams
     .filter((t) => dispatchable(t) && t.fireId === null && legStatus(board, t, fire.id, crewTarget(fire)).route !== "none")
-    .map((t) => ({ t, seed: null, kind: t.kind, eta: expectedArrival(board, t, fire), id: t.id }));
+    .map((t) => ({ t, seed: null, kind: fireKindOf(t), eta: expectedArrival(board, t, fire), id: t.id }));
   const flows = flowIndex(board);
   const byDistance = [...r.pool].sort((a, b) => distanceM(a.location, fire.origin) - distanceM(b.location, fire.origin));
   const perKind = new Map<string, number>();
@@ -826,7 +832,7 @@ export function initialAttackRecommendation(board: Board, fire: Fire): InitialAt
   if (!fr || fire.status !== "burning" || !isReported(board, fire)) return null;
   const card = runCard(fr.level, fr.structure);
   const need: ResourceCounts = { ...card };
-  for (const t of board.teams) if (t.fireId === fire.id) need[groundFamilyOf(t.kind)] -= 1;
+  for (const t of board.teams) if (t.fireId === fire.id) need[groundFamilyOf(fireKindOf(t))] -= 1;
   for (const a of r.aircraft) {
     if (a.fireId !== fire.id) continue;
     if (a.kind === "air_attack") need.air_attack -= 1;
@@ -865,7 +871,7 @@ export function initialAttackRecommendation(board: Board, fire: Fire): InitialAt
   for (const pass of [0, 1]) {
     for (const c of candidates) {
       if (picked.has(c.team)) continue;
-      const family = groundFamilyOf(c.team.kind);
+      const family = groundFamilyOf(fireKindOf(c.team));
       if (need[family] <= 0) continue;
       if (pass === 0 && !keepsReserve(c.team)) continue;
       picked.add(c.team);
@@ -1154,7 +1160,7 @@ export function responseTick(board: Board, dt: number, wholeMinute: boolean): vo
         team.restUntil = now + ENGINE_REFILL_MINUTES;
       }
     } else if (team.status === "refilling" && team.restUntil !== null && now >= team.restUntil) {
-      team.waterGallons = TANK_GALLONS[team.kind] ?? null;
+      team.waterGallons = TANK_GALLONS[fireKindOf(team)] ?? null;
       team.restUntil = null;
       const fire = board.fires.find((f) => f.id === team.fireId);
       if (fire && fire.status !== "out") team.status = "on_scene";
@@ -1162,7 +1168,7 @@ export function responseTick(board: Board, dt: number, wholeMinute: boolean): vo
     } else if ((team.status === "returning" || team.status === "moving_up") && team.travel !== "pending" && team.arriveAt !== null && now >= team.arriveAt) {
       if (team.demobilise && team.status === "returning") {
         removed.add(team);
-        if (team.tier === "mutual_aid") r.pool.push({ kind: team.kind, stationId: team.station, departmentId: team.department, location: team.home, turnoutMinutes: team.turnoutMinutes, tier: "mutual_aid" });
+        if (team.tier === "mutual_aid") r.pool.push({ kind: fireKindOf(team), stationId: team.station, departmentId: team.department, location: team.home, turnoutMinutes: team.turnoutMinutes, tier: "mutual_aid" });
         continue;
       }
       arriveHome(board, team);
@@ -1440,7 +1446,7 @@ export function tacticLineRate(board: Board, fire: Fire, teams: Team[], tactic: 
   const fuel = board.env.spread.ground.fuelCodeAt(fire.origin);
   let rate = 0;
   for (const t of teams) {
-    if (!buildsOn(t.kind, tactic)) continue;
+    if (!buildsOn(fireKindOf(t), tactic)) continue;
     // Off-road reach (response/reach.ts): nothing until it has walked in, nothing out of reach,
     // and an engine crew on foot builds hand line at PMS 465 p.39 per-person rates.
     if (t.workStartAt !== null && at < t.workStartAt) continue;
@@ -1449,7 +1455,7 @@ export function tacticLineRate(board: Board, fire: Fire, teams: Team[], tactic: 
       rate += engineCrewHandLineMPerMin(t.kind, fuel);
       continue;
     }
-    rate += unitLineOn(board, t, fire) * tacticRateFactor(t.kind, fuel, tactic);
+    rate += unitLineOn(board, t, fire) * tacticRateFactor(fireKindOf(t), fuel, tactic);
   }
   return rate;
 }
@@ -1463,7 +1469,7 @@ function projectedLine(board: Board, fire: Fire, tactic: Tactic, t: number): num
   for (const team of board.teams) {
     if (team.fireId !== fire.id || team.lineId !== null) continue;
     const eta = expectedArrival(board, team, fire);
-    if (eta >= t || !buildsOn(team.kind, tactic)) continue;
+    if (eta >= t || !buildsOn(fireKindOf(team), tactic)) continue;
     line += tacticLineRate(board, fire, [team], tactic) * (t - eta);
   }
   return line;
@@ -1605,7 +1611,7 @@ export function onContained(board: Board, fire: Fire): void {
     .filter((t) => t.fireId === fire.id)
     .sort((a, b) => Number(a.demobilise) - Number(b.demobilise) || distanceM(a.home, fire.origin) - distanceM(b.home, fire.origin));
   for (const t of assigned) {
-    const family = groundFamilyOf(t.kind);
+    const family = groundFamilyOf(fireKindOf(t));
     if (t.status === "on_scene" && (keep[family] ?? 0) > 0) {
       keep[family] -= 1;
       continue;
@@ -1827,7 +1833,7 @@ export function arriveOnScene(board: Board, team: Team, fire: Fire): void {
       nearest = p;
     }
   }
-  const plan = accessWorkPlan(board, team.kind, parked, nearest);
+  const plan = accessWorkPlan(board, fireKindOf(team), parked, nearest);
   team.workMode = plan.mode;
   team.workStartAt = arrivedAt + plan.startDelayMinutes;
   team.parkedM = d;
