@@ -428,7 +428,8 @@ TypeScript client and the apply helper are `app/src/world/conditions.ts`. Not wi
 | Wind, gust, temperature, RH | as the weather: `observed`, `derived` (climatology), `forecast` | `sim.weather.scenario_wind`, 20 ft conversion as `GET /api/weather/scenario` | above |
 | `dead1h` | derived | Fosberg and Deeming tables. Day (0800-1959): Table A reference + Table B (May-Jul), C (Feb-Apr, Aug-Oct) or D (Nov-Jan) correction for exposure, aspect, slope class and elevation band. Night (2000-0759): Table E; Table F only with `night_inversion=1` | Rothermel, R.C. 1983, *How to predict the spread and intensity of forest and range fires*, USDA FS GTR INT-143, Exhibit II-2 (pp. 15-19); same tables as the NWCG IRPG |
 | `dead10h`, `dead100h` | derived; forcing and starting state assumed | First-order timelag `dm/dt = (E - m)/tau`, `tau` = 10 h and 100 h, solved exactly each hour. `E` = that hour's 1-h table value (assumed: 1-h fuels reach equilibrium within the hour). Start = mean `E` of the first 24 forcing hours (assumed) | Timelag definition (Byram 1963; Fosberg 1970) |
-| `liveHerb`, `liveWoody` | assumed | Stage of development to moisture: fresh 300 %, maturing 200 %, mature 100 %, entering dormancy 50 %, cured 30 % (printed "less than 30, treat as a dead fuel"). The stage on a date comes from an assumed regional calendar (`PHENOLOGY_CALENDARS`), interpolated between mid-month anchors | Rothermel 1983 Table II-2 (p. 13); the calendars are planning assumptions, not data |
+| `liveHerb`, `liveWoody` | derived from modelled (ERA5) weather | Growing Season Index from daily Tmin, VPD and daylength, 21-day mean, mapped linearly to herb 30-250 % and woody 60-200 % above a green-up GSI of 0.5, as in NFDRS 2016. See "Live fuel moisture from the Growing Season Index" below | Jolly, Nemani & Running 2005, *Global Change Biology* 11:619-632; NFDRS 2016 reference code (github.com/firelab/NFDRS4, `livefuelmoisture.cpp`) |
+| `liveHerb`, `liveWoody` (fallback) | assumed | Only when the GSI lead-in cannot be fetched (warning + `provenance.live_gsi.ok: false`): stage of development to moisture, fresh 300 %, maturing 200 %, mature 100 %, entering dormancy 50 %, cured 30 % (printed "less than 30, treat as a dead fuel"), on an assumed regional calendar (`PHENOLOGY_CALENDARS`) interpolated between mid-month anchors | Rothermel 1983 Table II-2 (p. 13); the calendars are planning assumptions, not data |
 
 Units: tables in deg F and percent (converted from the station's deg C at the boundary,
 `F = C * 9/5 + 32`); output fractions of oven-dry weight. The tables' clock bands are read in
@@ -463,8 +464,9 @@ same `station` override. The answer carries `candidates` and `warnings`; `eviden
 answer spins up from the 48 reanalysis hours before `start`. A station more than 100 km away
 (`MAX_STATION_DISTANCE_KM`, assumption; only reachable through the climatology fallback or a
 forced station) is refused with `502 no_station_coverage`. The cache key includes the selection
-version, the QC version and `station` (`CACHE_SCHEMA` `conditions/3`), so answers from before
-`station-rank/1` or `obs-qc/1` are not served. Each hour has `rh_from` (a donor station id when
+version, the QC version, the live-moisture version (`live-gsi/1`) and `station` (`CACHE_SCHEMA`
+`conditions/4`), so answers from before `station-rank/1`, `obs-qc/1` or `live-gsi/1` are not
+served. `model_version` reads `fuel-moisture/1+live-gsi/1`. Each hour has `rh_from` (a donor station id when
 the RH was filled after QC, else `null`); QC removals in the 48 spin-up hours add a warning too.
 
 | Query | Meaning |
@@ -476,7 +478,7 @@ the RH was filled after QC, else `null`); QC removals in the 48 spin-up hours ad
 | `shading` | `exposed` (< 50 % shading of surface fuels) or `shaded` (canopy or cloud); default `exposed` |
 | `elevation` | `B`, `L`, `A`: projection point 1000-2000 ft below, within 1000 ft, 1000-2000 ft above the station; default `L` |
 | `night_inversion`, `station_aspect` | `1` applies Table F at night (strong inversion); default `0` |
-| `region` / `phenology` | picks the live calendar; otherwise the nearest preset region within 60 km, else `ca_coastal` |
+| `region` / `phenology` | picks the phenology class (annual or perennial herbs for the GSI, and the fallback calendar); otherwise the nearest preset region within 60 km, else `ca_coastal` |
 
 Answer (`schema: "crisistwin.conditions/1"`): `query`, `units`, `station`, `source`,
 `height_conversion`, `site` (with `given: false` when all defaults), `phenology {class, label,
@@ -540,6 +542,86 @@ Against an observation: Jarbo Gap RAWS also reports its 10-h fuel stick (SHEF `M
 difference 0.7 percentage points, bias +0.7 (model wetter). Nothing was tuned to this. The
 Kincade row shows the station limit, not the moisture model: a bbox-centre point picks the valley
 airport, whose wind is far below the ridge-top winds of that night.
+
+The live column above predates `live-gsi/1` (assumed calendar); see the next section.
+
+### Live fuel moisture from the Growing Season Index (`sim/live_moisture.py`, `live-gsi/1`)
+
+Live herbaceous and woody moisture come from the Growing Season Index (GSI) of Jolly, Nemani &
+Running 2005 (*Global Change Biology* 11:619-632), mapped to moisture as NFDRS 2016 does. The
+reference is the NFDRS4 code by W.M. Jolly (USFS RMRS Fire Sciences Laboratory),
+`lib/NFDRS4/src/livefuelmoisture.cpp` and `nfdrs4.cpp` in https://github.com/firelab/NFDRS4 (read
+at commit `84223b9`, 2026-10-16), with the defaults of its `data/NFDRSInitSample.txt`.
+
+- Daily indicators, each a linear 0-1 ramp: minimum temperature -2 to 5 deg C; vapour pressure
+  deficit 900 to 4100 Pa (1 at low VPD), with `VPD = es(Tmax) (1 - max(RHmin, 5)/100)` and
+  `es = 610.7 exp(17.38 T / (239 + T))` Pa (NFDRS4 `CalcGSI`, `gsiUseVpdAvg = 0`); daylength
+  36000 to 39600 s (10-11 h) from the MT-CLIM formula (`CalcDayl`). `iGSI = iTmin * iVPD * iPhoto`
+  (the optional precipitation indicator is off by default, `gsiUseRTPrecip = 0`).
+- GSI = 21-day running mean of iGSI, divided by `gsiMax = 1`. Below the green-up value 0.5 herbs
+  sit at 30 % and woody fuels at 60 %; above it moisture rises linearly to 250 % (herb) and 200 %
+  (woody) at GSI 1. The sample init file sets woody `fuelMoistureMin = "50"`; the library default
+  60 is used here.
+- Annual herbs (NFDRS4 `isAnnuals`): once the herb value has passed 120 % and falls below it, it
+  can only decrease until the herb state resets on 1 January. ASSUMPTION (a per-station setting
+  in NFDRS, no source here): `ca_coastal` and `ca_interior_foothill` herbs are annual,
+  `ca_montane` and `front_range_grassland` perennial (`HERB_IS_ANNUAL_BY_PHENOLOGY_CLASS`).
+- Inputs: one Open-Meteo ERA5 daily request (`temperature_2m_min`, `temperature_2m_max`,
+  `relative_humidity_2m_min`, local civil days, `timezone=auto`) from 21 days before 1 January of
+  the lead-in year to the day before the scenario's local solar day, at most about 386 days.
+  Disk-cached through `sim.weather.cached_get` (windows within the 6-day reanalysis latency are
+  not cached). ASSUMPTIONS: civil days stand in for NFDRS's 24 h ending at the 13:00 observation;
+  only days before the start are used and the value is held over the window; snow days are not
+  modelled. A climatology analog uses its own real date.
+- Fallback: if the request fails, fewer than 21 days are valid, or the last valid day is more than
+  10 days before the start (`MAX_LEAD_GAP_DAYS`, assumption), the assumed calendar stays, a
+  warning says so and `provenance.live_gsi` carries `ok: false` and `reason`.
+
+Response: the same `moisture.liveHerb`/`liveWoody` fractions and `live.herb_pct`/`woody_pct`.
+`live.herb_stage` is `cured` or `green` and `live.woody_stage` `dormant` or `green` (NFDRS
+minimum or above it); `herb_between`/`woody_between` are `null` under the GSI. New keys:
+`live.method` (`nfdrs2016_gsi` or `assumed_calendar`), `live.gsi`, and `provenance.live_gsi`
+(lead-in, valid days, last day and its indicators, herb state, fetch record, ERA5 grid cell).
+
+Check against the reference code: the unmodified NFDRS4 `LiveFuelMoisture` class, compiled and
+fed the same ERA5 daily inputs, gives the same herb, woody and GSI as the Python port on all four
+dates below, both annual and perennial (for example 2021-07-01: herb 61.2 % annual / 100.9 %
+perennial, woody 105.1 %, GSI 0.6611). The MT-CLIM daylength is 33732 s at 37.9 N on 19 December;
+Open-Meteo's `daylight_duration` (sunrise to sunset) is 34297 s. Both are below the 36000 s limit.
+
+Measured with `build_conditions` (2026-10-25), lon -122.24, lat 37.90, `historical_replay` at
+20:00Z, class `ca_coastal`, ERA5 cell 38.0 N -122.25 (331 m):
+
+| Date | Before: calendar herb / woody | After: GSI herb / woody | 21-day GSI |
+| --- | --- | --- | --- |
+| 2023-01-10 | 256.5 % / 91.9 % | 30.0 % / 60.0 % | 0.00 (daylength under 10 h) |
+| 2021-07-01 | 39.3 % / 100.0 % | 61.2 % / 105.1 % | 0.66 |
+| 2020-09-27 | 30.0 % / 50.0 % | 30.0 % / 66.7 % | 0.52 |
+| 2022-12-20 | 73.5 % / 58.1 % | 30.0 % / 60.0 % | 0.00 (daylength under 10 h) |
+
+Against observation: the GSI does not green East Bay grass after the first autumn rains. From
+about late November to early February, daylength at 38 N is under 10 h, so iPhoto = 0, the GSI is 0
+and herbs stay at 30 % until the photoperiod allows green-up. On top of that, the annual-herb rule
+blocks any re-greening before 1 January. California annual grasses do germinate and green up
+after the first soaking rains in autumn. For the herb layer in November-January the observation
+is more trustworthy than the model: this is a known mismatch between the temperate-phenology GSI
+and a winter-wet Mediterranean climate. Nothing was tuned to close the gap. The value is the
+published NFDRS 2016 method, and it errs dry (more fire spread) in winter. Woody values (chaparral
+and shrub foliage) are less affected.
+
+Measured live fuel moisture (the National Fuel Moisture Database) is not used yet. Within this
+change's time box no machine-readable NFMD endpoint for a site near the Berkeley Hills was
+checked, so observed samples are not merged.
+
+Chamise critical value: no 60 % chamise threshold is cited anywhere in this repository (checked
+2026-10-25). For reference: Dennison, P.E. & Moritz, M.A. 2009, "Critical live fuel moisture in
+chaparral ecosystems: a threshold for fire activity and its relationship to antecedent
+precipitation", *Int. J. Wildland Fire* 18:1021-1027, abstract: "we found strong evidence for a LFM
+threshold near 79%". That paper cites Countryman & Dean (1979) only for the sampling method ("Sampling
+methodology used by LACFD is described by Countryman and Dean (1979)"). Countryman, C.M. & Dean,
+W.A. 1979, *Measuring moisture content in living chaparral: a field user's manual*, USDA FS GTR
+PSW-36, speaks of a "critically low level" but its text gives no 60 % value. Cite a 60 % chamise
+threshold only with a source that prints it.
 
 ### Applying an hour (`app/src/world/conditions.ts`)
 
