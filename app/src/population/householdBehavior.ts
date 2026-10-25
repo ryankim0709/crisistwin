@@ -5,7 +5,7 @@
  * across closures, order minutes and plans.
  *
  * Values come from the `grounded` profile of sim/behavior_params.json (docs/people-data.md
- * "Behaviour evidence"), through the generated studio/behaviorParams.generated.ts:
+ * "Behaviour evidence"), through the generated population/behaviorParams.generated.ts:
  * - order compliance 0.875: Wong et al. 2020 Table 11 p. 39, Oct 2017 N. California (sourced);
  *   the rest stay home;
  * - delay from the order to leaving home: lognormal, median 42.8 min, sigma 1.246, capped at
@@ -67,4 +67,9 @@ export function householdBehaviorText(mode: HouseholdBehaviorMode): string {
   return mode === "grounded"
     ? `${Math.round(ORDER_COMPLIANCE * 1000) / 10}% leave when ordered, each after its own delay (median ${Math.round(DELAY_MEDIAN_MINUTES)} min); the rest stay. From fire surveys.`
     : "Every household leaves, spread evenly over 45 min.";
+}
+
+/** `basis.people_behavior` label of the people picture. */
+export function behaviorLabel(grounded: boolean): string {
+  return grounded ? "grounded (not everyone obeys)" : "everyone leaves";
 }

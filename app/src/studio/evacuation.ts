@@ -5,7 +5,7 @@
  * change it. See docs/adr/0018-road-closures.md.
  *
  * Households leave on the engine's uniform departure spread, or, with `departureDelays`
- * (studio/householdBehavior.ts, seeded per home), each after its own delay; some stay home.
+ * (population/householdBehavior.ts, seeded per home), each after its own delay; some stay home.
  *
  * Policy (deterministic; the only randomness is the seeded household draw):
  * - At `orderMinute` every zone the fire has not overrun is ordered to the exit it can reach
@@ -82,7 +82,7 @@ export interface EvacuationInputs {
   plan?: EvacuationPlan;
   /**
    * Minutes from a zone's order to each home leaving, Infinity for a household that stays
-   * (studio/householdBehavior.ts); the engine's uniform departure spread when omitted.
+   * (population/householdBehavior.ts); the engine's uniform departure spread when omitted.
    */
   departureDelays?: Float32Array;
 }

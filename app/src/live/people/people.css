@@ -60,6 +60,11 @@
   width: 20px;
   height: 14px;
 }
+.ppl-note {
+  color: var(--ct-ink);
+  font-size: var(--ct-text-sm);
+  font-weight: 600;
+}
 .ppl-stale {
   color: var(--ct-warning);
   font-size: var(--ct-text-xs);
