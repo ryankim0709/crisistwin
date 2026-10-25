@@ -638,7 +638,7 @@ export default function OneViewPage() {
       </Panel>
 
       <Panel glass compact className="ov-panel ov-right" title="What the agent sees" aside={<EvidenceTag kind="simulated" />}>
-        <AgentInputsPanel agent={cb.agent} board={board} forecasts={cb.forecasts} phase={phase} embedded />
+        <AgentInputsPanel agent={cb.agent} board={viewBoard} forecasts={scrubbed?.forecasts ?? cb.forecasts} phase={phase} embedded />
 
       </Panel>
 
