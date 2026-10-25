@@ -7,17 +7,39 @@
  * Households leave on the engine's uniform departure spread, or, with `departureDelays`
  * (population/householdBehavior.ts, seeded per home), each after its own delay; some stay home.
  *
- * Policy (deterministic; the only randomness is the seeded household draw):
- * - At `orderMinute` every zone the fire has not overrun is ordered to the exit it can reach
- *   fastest at free flow, avoiding closed edges and edges the fire reaches within the engine's
- *   routing lookahead.
- * - An optional plan (`EvacuationPlan`, built by studio/evacuationOptimizer.ts) changes only
- *   that first order: a planned zone goes to its planned exit when it is reachable then (else
+ * Policy (deterministic; the only randomness is the seeded household draw). Two order modes.
+ *
+ * Threat-based triggers (default, `orderMinute` null). A fire does not by itself mean everyone
+ * must leave: a zone is ordered only when the fire threatens it, after the evacuation trigger
+ * of Cova, Dennison, Kim & Moritz (2005), "Setting wildfire evacuation trigger points using
+ * fire spread modeling and GIS", Transactions in GIS 9(4):603-617 (also Dennison, Cova &
+ * Moritz 2007, "WUIVAC: a wildland-urban interface evacuation trigger model applied in
+ * strategic wildfire scenarios", Natural Hazards 41:181-199): order a population when the fire
+ * is no farther away, in time, than the time it needs to get out plus a safety buffer. The
+ * papers find that point by reverse fire spread from the community; here the fire's time to a
+ * zone is read forward from the studio run's arrival field (`exposure.zoneContact`):
+ * - "Leave now" (`order_evacuation`) once zoneContact − now ≤ time to clear = departure delay
+ *   (`clearDepartureMinutes`) + free-flow drive to the zone's fastest open exit (dispatch
+ *   routing) + TRIGGER_SAFETY_BUFFER_MINUTES.
+ * - "Get ready" (a warning; households stay home) once zoneContact − now ≤ time to clear +
+ *   GET_READY_LEAD_MINUTES.
+ * - A zone the fire never reaches within the run gets no order and stays home (not threatened).
+ * - Triggers are re-checked every TRIGGER_REVIEW_MINUTES; orders only escalate (none → get
+ *   ready → leave now).
+ *
+ * Order everyone (manual override, `orderMinute` a number; the earlier policy): at
+ * `orderMinute` every zone the fire has not overrun is ordered at once.
+ *
+ * Both modes:
+ * - An ordered zone goes to the exit it can reach fastest at free flow, avoiding closed edges
+ *   and edges the fire reaches within the engine's routing lookahead.
+ * - An optional plan (`EvacuationPlan`, built by studio/evacuationOptimizer.ts) changes only a
+ *   zone's first order: a planned zone goes to its planned exit when it is reachable then (else
  *   its fastest), and a zone planned to wait is staged behind its predecessor (the engine's
  *   staged waves) instead of being ordered at once. Everything after is the same policy.
- * - A zone with no reachable exit at that minute is "cut off": it is never ordered and its
- *   households stay home. Closures last the whole run and fire only blocks more edges over
- *   time, so a cut-off zone cannot become reachable again.
+ * - A zone with no reachable exit when its order would go out (the order minute, or its leave
+ *   trigger) is "cut off": it is never ordered and its households stay home. Closures last the
+ *   whole run and fire only blocks more edges over time, so it cannot become reachable again.
  * - When an ordered zone's route is cut by fire, it is re-ordered the same minute to its
  *   fastest reachable exit; with none left its departures stay held (engine behaviour).
  * - Firefighters overwhelmed by the fire (studio/crewHandoff.ts) join at their leave minute and
@@ -31,7 +53,10 @@
 
 import { groundMeters, type DispatchArea } from "../dispatch/area";
 import {
+  DEFAULT_CHECK_INTERVAL_MINUTES,
+  DEPARTURE_SPREAD_MINUTES,
   DispatchEngine,
+  FORECAST_LOOKAHEAD_MINUTES,
   UNIT_WITHDRAW_MARGIN_MINUTES,
   type Totals,
   type UnitState,
@@ -41,9 +66,35 @@ import { routeTo, shortestPathTree } from "../dispatch/routing";
 import { lonLatToMercator } from "../fire/landscape";
 import type { EvacuationCrew } from "./crewHandoff";
 
-/** Minutes after T+0 at which the evacuation order goes out. */
+/** Manual override: minutes after T+0 at which every zone is ordered ("Order everyone at"). */
 export const ORDER_MINUTE_CHOICES = [0, 15, 30, 60] as const;
-export const DEFAULT_ORDER_MINUTE = 0;
+/** Null: threat-based trigger orders (Cova et al. 2005); a number orders everyone then. */
+export const DEFAULT_ORDER_MINUTE: number | null = null;
+
+/**
+ * Trigger re-check interval, simulated minutes. ASSUMPTION (no source): the dispatch engine's
+ * default check interval, so the policy reviews as often as the AI dispatcher would.
+ */
+export const TRIGGER_REVIEW_MINUTES = DEFAULT_CHECK_INTERVAL_MINUTES;
+/**
+ * Safety buffer added to a zone's time to clear, minutes. ASSUMPTION: Cova et al. (2005) and
+ * Dennison et al. (2007) add a safety margin to the evacuation time when setting a trigger but
+ * leave its size to the incident; 15 min is a placeholder, not a published value.
+ */
+export const TRIGGER_SAFETY_BUFFER_MINUTES = 15;
+/**
+ * "Get ready" lead beyond the leave trigger, minutes. ASSUMPTION (no published lead): the
+ * staged warning of Li, Cova & Dennison (2015), "A household-level approach to staging wildfire
+ * evacuation warnings using trigger modeling", Computers, Environment and Urban Systems
+ * 54:56-67, sized to the engine's FORECAST_LOOKAHEAD_MINUTES "threatened" window (60 min).
+ */
+export const GET_READY_LEAD_MINUTES = FORECAST_LOOKAHEAD_MINUTES;
+/**
+ * Share of a zone's leaving households that must be gone for it to count as clear, used to read
+ * the departure delay off the household delays. ASSUMPTION (no source): 0.9. The delays
+ * themselves are sourced (population/householdBehavior.ts).
+ */
+export const CLEAR_DELAY_QUANTILE = 0.9;
 /** Idle crews are given a zone this often, simulated minutes. */
 export const CREW_REVIEW_MINUTES = 5;
 /** Crews are not sent to a zone whose core the fire reaches within this many minutes. */
@@ -75,7 +126,11 @@ export interface EvacuationInputs {
   horizonMinutes: number;
   /** Edge indices closed to traffic for the whole run. */
   closedEdges: ReadonlySet<number>;
-  orderMinute: number;
+  /**
+   * Manual override: minute every zone is ordered ("Order everyone at T+…"). Null: threat-based
+   * trigger orders per zone (the default).
+   */
+  orderMinute: number | null;
   /** Firefighters who leave the fire to support the evacuation (none when omitted). */
   crews?: readonly EvacuationCrew[];
   /** Planned exits and waves; the default policy when omitted. */
@@ -107,9 +162,26 @@ export interface EvacuationSummary {
   householdHoursEvacuating: number;
   /** Households of zones still waiting for their wave at the horizon (0 without waves). */
   stagedHomes: number;
+  /** Per zone, the minute it was first told to get ready (trigger mode), or null. */
+  zoneWarnMinutes: (number | null)[];
+  /** Zones (and their homes) never warned, ordered nor cut off over the run: not threatened. */
+  unthreatenedZones: number;
+  unthreatenedHomes: number;
 }
 
-/** What the policy did with a zone at the order minute. */
+/**
+ * Minutes from a zone's order until CLEAR_DELAY_QUANTILE of its leaving households have left:
+ * that quantile of the finite per-household delays (population/householdBehavior.ts), or of the
+ * engine's uniform 0..DEPARTURE_SPREAD_MINUTES spread without them.
+ */
+export function clearDepartureMinutes(departureDelays?: Float32Array): number {
+  if (!departureDelays) return DEPARTURE_SPREAD_MINUTES * CLEAR_DELAY_QUANTILE;
+  const finite = Array.from(departureDelays).filter(Number.isFinite).sort((a, b) => a - b);
+  if (finite.length === 0) return 0;
+  return finite[Math.min(finite.length - 1, Math.floor(CLEAR_DELAY_QUANTILE * finite.length))];
+}
+
+/** What the policy did with a zone at its first order. */
 export interface InitialOrder {
   /** Exit it was ordered (or staged) to. */
   exitId: string;
@@ -122,8 +194,19 @@ export class EvacuationPolicyRun {
   readonly engine: DispatchEngine;
   /** Zone indices the policy found no exit for. */
   readonly cutOff = new Set<number>();
-  /** Zone index → what it was told at the order minute (cut-off zones are absent). */
+  /** Zone index → what it was told at its first order (cut-off zones are absent). */
   readonly initialOrders = new Map<number, InitialOrder>();
+  /** Trigger mode: zone index → minute it was told to get ready. */
+  readonly warned = new Map<number, number>();
+  /**
+   * Zones not (yet) warned, ordered nor cut off: in trigger mode, still home because the fire
+   * does not threaten them. Emptied in "order everyone" mode once the order is out.
+   */
+  readonly quiet = new Set<number>();
+  /** Departure part of every zone's time to clear, minutes. */
+  readonly clearDepartMinutes: number;
+  /** Per zone, free-flow drive to its fastest exit avoiding closures only, minutes. */
+  private driveFloorMinutes: Float64Array | null = null;
   private ordered = false;
   /** Ordered zones whose route was cut and that have no exit left; not searched again. */
   private stranded = new Set<number>();
@@ -140,6 +223,8 @@ export class EvacuationPolicyRun {
       inputs.closedEdges,
     );
     if (inputs.departureDelays) this.engine.setDepartureDelays(inputs.departureDelays);
+    this.clearDepartMinutes = clearDepartureMinutes(inputs.departureDelays);
+    for (const zone of this.engine.zones) this.quiet.add(zone.index);
     this.applyPolicy();
   }
 
@@ -161,6 +246,11 @@ export class EvacuationPolicyRun {
    * exit reachable now, or null.
    */
   private bestExit(zone: number, preferred?: string): string | null {
+    return this.bestRoute(zone, preferred)?.id ?? null;
+  }
+
+  /** As `bestExit`, with the chosen route's free-flow drive time, seconds. */
+  private bestRoute(zone: number, preferred?: string): { id: string; seconds: number } | null {
     const { area } = this.inputs;
     const tree = shortestPathTree(
       area,
@@ -169,7 +259,8 @@ export class EvacuationPolicyRun {
     );
     if (preferred !== undefined) {
       const exit = area.exits.find((candidate) => candidate.id === preferred);
-      if (exit && routeTo(area, tree, exit.node)) return preferred;
+      const route = exit ? routeTo(area, tree, exit.node) : null;
+      if (route) return { id: preferred, seconds: route.seconds };
     }
     let best: { id: string; seconds: number } | null = null;
     for (const exit of area.exits) {
@@ -177,7 +268,82 @@ export class EvacuationPolicyRun {
       if (route && (!best || route.seconds < best.seconds))
         best = { id: exit.id, seconds: route.seconds };
     }
-    return best?.id ?? null;
+    return best;
+  }
+
+  /**
+   * Per zone, free-flow minutes to its fastest exit with closures only (0 when none). Fire only
+   * removes roads, so this is a lower bound on the drive at any minute.
+   */
+  private driveFloor(): Float64Array {
+    if (this.driveFloorMinutes) return this.driveFloorMinutes;
+    const { area, closedEdges } = this.inputs;
+    const floor = new Float64Array(area.zones.length);
+    const blocked = (edge: number) => closedEdges.has(edge);
+    area.zones.forEach((zone, index) => {
+      const tree = shortestPathTree(area, zone.node, blocked);
+      let best = Infinity;
+      for (const exit of area.exits) {
+        const route = routeTo(area, tree, exit.node);
+        if (route) best = Math.min(best, route.seconds / 60);
+      }
+      floor[index] = Number.isFinite(best) ? best : 0;
+    });
+    this.driveFloorMinutes = floor;
+    return floor;
+  }
+
+  /**
+   * Trigger mode (Cova et al. 2005): warn or order each zone whose modelled fire arrival is
+   * within its time to clear (+ the get-ready lead). Orders only escalate.
+   */
+  private applyTriggers(): void {
+    const { engine } = this;
+    const { area, exposure, plan } = this.inputs;
+    const minute = engine.minute;
+    const floor = this.driveFloor();
+    const zoneIndex = plan ? new Map(area.zones.map((zone, index) => [zone.id, index])) : null;
+    const fixedMinutes = this.clearDepartMinutes + TRIGGER_SAFETY_BUFFER_MINUTES;
+    for (const zone of engine.zones) {
+      if (zone.status !== "no_order" || zone.stage !== null || this.cutOff.has(zone.index)) {
+        this.quiet.delete(zone.index);
+        continue;
+      }
+      const leadMinutes = exposure.zoneContact[zone.index] - minute;
+      if (!Number.isFinite(leadMinutes)) continue; // the fire never reaches it in this run
+      if (leadMinutes > fixedMinutes + floor[zone.index] + GET_READY_LEAD_MINUTES) continue;
+      const id = area.zones[zone.index].id;
+      const route = this.bestRoute(zone.index, plan?.exits[id]);
+      const clearMinutes = fixedMinutes + (route ? route.seconds / 60 : floor[zone.index]);
+      if (leadMinutes > clearMinutes + GET_READY_LEAD_MINUTES) continue;
+      this.quiet.delete(zone.index);
+      if (leadMinutes > clearMinutes) {
+        if (!this.warned.has(zone.index)) this.warned.set(zone.index, minute);
+        continue;
+      }
+      if (!route) {
+        this.cutOff.add(zone.index);
+        continue;
+      }
+      const afterId = plan?.after[id];
+      const after = afterId === undefined ? undefined : zoneIndex?.get(afterId);
+      if (after !== undefined && after !== zone.index) {
+        const before = engine.zones[after];
+        const ready = before.status === "ordered" || before.stage !== null;
+        if (ready && this.stage(zone.index, route.id, after)) {
+          this.initialOrders.set(zone.index, { exitId: route.id, after });
+          continue;
+        }
+      }
+      this.order(
+        zone.index,
+        route.id,
+        plan
+          ? "Studio plan: planned exit, fire within the zone's evacuation trigger."
+          : "Studio policy: fire within the zone's evacuation trigger; fastest open exit.",
+      );
+      this.initialOrders.set(zone.index, { exitId: route.id, after: null });
+    }
   }
 
   private order(zone: number, exitId: string, reason = "Studio policy: fastest open exit."): void {
@@ -378,9 +544,16 @@ export class EvacuationPolicyRun {
 
   private applyOrderPolicy(): void {
     const { engine } = this;
-    if (engine.minute < this.inputs.orderMinute) return;
+    const { orderMinute } = this.inputs;
+    if (orderMinute === null) {
+      if (engine.minute % TRIGGER_REVIEW_MINUTES === 0) this.applyTriggers();
+      this.reroute();
+      return;
+    }
+    if (engine.minute < orderMinute) return;
     if (!this.ordered) {
       this.ordered = true;
+      this.quiet.clear();
       if (this.inputs.plan) {
         this.applyPlan(this.inputs.plan);
         return;
@@ -395,6 +568,12 @@ export class EvacuationPolicyRun {
       }
       return;
     }
+    this.reroute();
+  }
+
+  /** Re-order each ordered zone whose route the fire cut to its fastest exit still open. */
+  private reroute(): void {
+    const { engine } = this;
     for (const zone of engine.zones) {
       if (zone.status !== "ordered" || !zone.routeBlocked || this.stranded.has(zone.index))
         continue;
@@ -447,6 +626,9 @@ export function runEvacuation(inputs: EvacuationInputs): {
   const zones = run.engine.zones;
   let cutOffHomes = 0;
   for (const zone of run.cutOff) cutOffHomes += area.zones[zone].homes;
+  let unthreatenedHomes = 0;
+  for (const zone of run.quiet) unthreatenedHomes += area.zones[zone].homes;
+  const firstOrderMinute = inputs.orderMinute ?? 0;
   let allClearMinute: number | null = null;
   const orderedZones = zones.filter((zone) => zone.orderRank !== null);
   // A planned wave that never got its order (still staged, or no exit left at release) has
@@ -460,8 +642,8 @@ export function runEvacuation(inputs: EvacuationInputs): {
     orderedZones.every((zone) => zone.status !== "ordered")
   ) {
     allClearMinute = Math.max(
-      inputs.orderMinute,
-      ...orderedZones.map((zone) => zone.clearedMinute ?? inputs.orderMinute),
+      firstOrderMinute,
+      ...orderedZones.map((zone) => zone.clearedMinute ?? firstOrderMinute),
     );
   }
   return {
@@ -476,6 +658,9 @@ export function runEvacuation(inputs: EvacuationInputs): {
       allClearMinute,
       householdHoursEvacuating: evacuatingMinutes / 60,
       stagedHomes: stagedAtHome(run),
+      zoneWarnMinutes: zones.map((zone) => run.warned.get(zone.index) ?? null),
+      unthreatenedZones: run.quiet.size,
+      unthreatenedHomes,
     },
   };
 }
@@ -495,9 +680,14 @@ export class EvacuationPlayer {
     return this.run.engine;
   }
 
-  /** Zones the policy found no exit for at the order minute. */
+  /** Zones the policy found no exit for when their order would have gone out. */
   get cutOff(): ReadonlySet<number> {
     return this.run.cutOff;
+  }
+
+  /** Zones not warned, ordered nor cut off so far (trigger mode: not threatened). */
+  get quiet(): ReadonlySet<number> {
+    return this.run.quiet;
   }
 
   /** Position at whole minute `minute`; true when the engine state changed. */

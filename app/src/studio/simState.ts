@@ -151,7 +151,9 @@ export function runPayload(
     label: label.slice(0, 120),
     area: { id: area.id, name: area.name, bbox: area.bbox },
     horizon_minutes: inputs.horizonMinutes,
-    order_minute: inputs.orderMinute,
+    // The API takes one integer minute. Threat-based runs (orderMinute null) order zones at
+    // their own trigger minutes, which each tick carries (zones[].order_minute); send T+0.
+    order_minute: inputs.orderMinute ?? 0,
     zones: area.zones.map((zone) => ({
       zone_id: zone.id,
       name: zone.name,

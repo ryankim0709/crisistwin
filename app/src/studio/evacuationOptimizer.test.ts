@@ -164,6 +164,9 @@ function summary(
     allClearMinute,
     householdHoursEvacuating: hours,
     stagedHomes: 0,
+    zoneWarnMinutes: [],
+    unthreatenedZones: 0,
+    unthreatenedHomes: 0,
   };
 }
 

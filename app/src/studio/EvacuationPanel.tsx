@@ -10,7 +10,11 @@ import { formatElapsed } from "../fire/spread";
 import type { BoardStreetsState } from "../fire/useBoardStreets";
 import "../live/live-share.css";
 import { Button, Field, LoadingState, Notice, Panel, SegmentedControl, Tag } from "../ui";
-import { ORDER_MINUTE_CHOICES, type EvacuationSummary } from "./evacuation";
+import {
+  ORDER_MINUTE_CHOICES,
+  TRIGGER_SAFETY_BUFFER_MINUTES,
+  type EvacuationSummary,
+} from "./evacuation";
 import { describeImprovement } from "./evacuationAdvice";
 import type { EvacuationOptimization } from "./evacuationOptimizer";
 import type { EvacuationOptimizerState } from "./useEvacuationOptimizer";
@@ -39,8 +43,9 @@ export interface EvacuationPanelProps {
   onToggle: () => void;
   roadTool: boolean;
   onRoadTool: () => void;
-  orderMinute: number;
-  onOrderMinute: (minute: number) => void;
+  /** Null: threat-based trigger orders; a number: order everyone at that minute. */
+  orderMinute: number | null;
+  onOrderMinute: (minute: number | null) => void;
   closedEdges: readonly RoadEdge[];
   onReopen: (edge: number) => void;
   onReopenAll: () => void;
@@ -96,6 +101,7 @@ function rows(summary: EvacuationSummary) {
     out: final.waiting - (final.staying ?? 0) + final.onRoad,
     staying: final.staying ?? 0,
     cutOff: summary.cutOffHomes,
+    unthreatened: summary.unthreatenedHomes,
     hours: summary.householdHoursEvacuating,
   };
 }
@@ -331,15 +337,18 @@ export default function EvacuationPanel(props: EvacuationPanelProps) {
 
       {ready && enabled && (
         <>
-          <Field label="Evacuation order goes out at">
+          <Field label="Evacuation orders">
             <select
               className="ui-input"
-              value={orderMinute}
-              onChange={(event) => onOrderMinute(Number(event.target.value))}
+              value={orderMinute === null ? "threat" : String(orderMinute)}
+              onChange={(event) =>
+                onOrderMinute(event.target.value === "threat" ? null : Number(event.target.value))
+              }
             >
+              <option value="threat">When the fire threatens a zone</option>
               {ORDER_MINUTE_CHOICES.map((choice) => (
                 <option key={choice} value={choice}>
-                  {formatElapsed(choice)}
+                  Order everyone at {formatElapsed(choice)}
                 </option>
               ))}
             </select>
@@ -439,14 +448,15 @@ export default function EvacuationPanel(props: EvacuationPanelProps) {
                         ["Still evacuating", "out", 0],
                         ["Stayed home (did not leave)", "staying", 0],
                         ["Cut off (no open exit)", "cutOff", 0],
+                        ["Still home (not threatened)", "unthreatened", 0],
                         ["Household-hours evacuating", "hours", 1],
                       ] as const
                     )
                       .filter(
                         ([, key]) =>
-                          key !== "staying" ||
-                          rows(baseline).staying > 0 ||
-                          (withClosures !== null && rows(withClosures).staying > 0),
+                          (key !== "staying" && key !== "unthreatened") ||
+                          rows(baseline)[key] > 0 ||
+                          (withClosures !== null && rows(withClosures)[key] > 0),
                       )
                       .map(([label, key, digits]) => {
                       const base = rows(baseline)[key];
@@ -519,9 +529,11 @@ export default function EvacuationPanel(props: EvacuationPanelProps) {
           )}
 
           <p className="studio-evac__note">
-            Unless you play the optimized plan, every zone is ordered at{" "}
-            {formatElapsed(orderMinute)} to its fastest open exit and re-routed when fire cuts its
-            route. Closures change traffic only, not the fire. Homes and zones are synthetic; counts
+            {orderMinute === null
+              ? `A zone is told to get ready, then to leave, once the modelled fire is within its time to clear (departure + drive + ${TRIGGER_SAFETY_BUFFER_MINUTES} min assumed buffer; Cova et al. 2005 triggers). Zones the fire does not threaten stay home.`
+              : `Every zone is ordered at ${formatElapsed(orderMinute)}.`}{" "}
+            Unless you play the optimized plan, a zone goes to its fastest open exit and is
+            re-routed when fire cuts its route. Closures change traffic only, not the fire. Homes and zones are synthetic; counts
             are model output, not casualty estimates.
           </p>
         </>

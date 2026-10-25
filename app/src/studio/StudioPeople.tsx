@@ -40,6 +40,14 @@ export default function StudioPeople({
   const player = useMemo(() => (inputs ? new EvacuationPlayer(inputs) : null), [inputs]);
   const version = useClockSteppedPlayer(player, clockRef);
   const households = useZoneHouseholds(inputs?.area ?? null);
+  // Threat-based orders: households of zones the fire does not threaten (no warning, order or
+  // cut-off yet) are counted in "Still home"; say how many of them are simply not threatened.
+  let quietHomes = 0;
+  if (player && inputs) for (const zone of player.quiet) quietHomes += inputs.area.zones[zone].homes;
+  const note =
+    player && inputs?.orderMinute === null && quietHomes > 0
+      ? `Still home (not threatened): ${quietHomes.toLocaleString("en-US")} households in ${player.quiet.size} zones without a warning or order.`
+      : undefined;
   return (
     <PopulationView
       map={map}
@@ -51,6 +59,7 @@ export default function StudioPeople({
       behavior={behavior}
       zonePeople={households.zones}
       pending={pending}
+      note={note}
     />
   );
 }
