@@ -6,8 +6,8 @@ import type { Participant, ParticipantFlag } from "./types";
 
 export const nf = (n: number) => Math.round(n).toLocaleString("en-US");
 
-/** A real phone heard from within this long counts as joined now (for the real-time rule). */
-export const JOINED_WINDOW_MS = 30 * 60_000;
+/** A real phone heard from within this long (wall time) is on our app now: list, counts, map and the real-time rule. */
+export const JOINED_WINDOW_MS = 60 * 60_000;
 
 export const isJoinedNow = (p: Participant, nowMs: number) =>
   p.kind === "real" && !!p.last_seen && nowMs - new Date(p.last_seen).getTime() <= JOINED_WINDOW_MS;

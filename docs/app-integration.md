@@ -15,8 +15,8 @@ Code: `app/src/appint/` (class prefix `aix-`). Sidebar entry "App integration" a
 | Part | What it shows | Data |
 | --- | --- | --- |
 | Header | Drill time, speed (Pause, Real time, ×5, ×20), **Invite phones** | `command.drill`; `POST incidents/{id}/drill` (`start` from the current drill time, or `set_speed`) |
-| Stats | Everyone else: still at home, driving out, in traffic, stuck, safely out; on our app: real and simulated | `GET incidents/{id}/people` (simulated) minus our app residents (below); `participants.counts` |
-| On our app | Every joined phone and simulated person: name, plain status line, up to two flag chips, "Last seen" for a real phone not heard from in 30 min; **+ Add a simulated person** | `GET incidents/{id}/participants`; `POST incidents/{id}/virtual-people` `{count: 1, seed}` |
+| Stats | Everyone else: still at home, driving out, in traffic, stuck, safely out (one "Loading the traffic model…" tile until the first estimate; later 429s keep the last values); on our app: joined real phones and simulated people | `GET incidents/{id}/people` (simulated) minus our app residents (below); `participants.counts` |
+| On our app | Every simulated person and every real phone heard from in the last 60 min (wall time): name, plain status line, up to two flag chips. Older real phones sit in a collapsed "Older phones (N)" list with "Last seen" and count nowhere else (tile, map, Needs your OK, real-time rule); **+ Add a simulated person** | `GET incidents/{id}/participants`; `POST incidents/{id}/virtual-people` `{count: 1, seed}` |
 | Map | Zones with their guidance (LEAVE NOW / GET READY), the drill fire estimate, closed roads, the people layer ("everyone else": homes, cars on the roads, queues, stuck clusters, arrivals), our app users as dots, and the selected person's route | `command` (zones, guidance, fire, public items), `people` (`app/src/live/people`), `participants` |
 | Needs your OK | Pending proposals as plain sentences ("Tell Tract 9, BG 1 to leave now", "Send 3 zones a new way out") with how many people and app users they reach: **Send** / **Don't send**. Open help requests: **Send a responder** / **Tell them we got it** | `command.proposals` (`POST proposals/{id}/approve`, `.../reject`); `command.checkins.need_help` (`POST checkins/{id}/help` `assign` with any responder, or `acknowledge`) |
 | Messages | One timeline: "To Tract 16, BG 3: leave now", "From Ana: heavy traffic on Severns Lane", "To Chloe: we got your request", "Not sent: ..." | `participants.messages` |
@@ -27,7 +27,7 @@ Map marks: solid blue dot = real phone, hollow dot = simulated person, square = 
 ring = selected. Real phones are labelled with their name; simulated ones only when selected. Clicking a dot
 selects that person; the list is a listbox (arrow keys move the selection).
 
-**Real time rule.** A real phone counts as joined while it was heard from in the last 30 min
+**Real time rule.** A real phone counts as joined while it was heard from in the last 60 min
 (`last_seen`). While one is joined the speed-ups are disabled, and if the drill is running faster than ×1 the
 tab sets it back to ×1 once (`set_speed 1`) and says so. With no real phone joined the tab says a practice
 speed-up is allowed.
