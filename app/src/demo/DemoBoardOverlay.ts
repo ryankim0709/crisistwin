@@ -2,9 +2,11 @@
  * The /demo command board's units, stations and zones on the 3D diorama (a `BoardOverlay`,
  * fire/diorama/types.ts): stations as small firehouses with their names, each unit as a vehicle
  * block in its family's colour (as the Studio's CrewOverlay draws them) at its current board
- * position, with a dashed line along an en-route unit's road (or straight) line, and the outline
- * of each ordered, threatened or overrun zone draped on the ground with its tag. Draws the
- * simulated board only; it never changes it.
+ * position, with a dashed line along an en-route (or, thinner, a returning) unit's road route
+ * (only a road route: never a straight line to its target), each fire line ahead of a fire
+ * (planned dashed, built solid), small cars for the sampled evacuating vehicles on their road
+ * routes, and the outline of each ordered, threatened or overrun zone draped on the ground with
+ * its tag. Draws the simulated board only; it never changes it.
  */
 
 import * as THREE from "three";
@@ -20,7 +22,8 @@ import { LEVEL_COLOR } from "../live/CommandMap";
 import type { LonLat } from "../live/types";
 import { vehicleFamily, type VehicleFamily } from "../studio/apparatus";
 import { CREW_COLORS } from "../studio/firelinePalette";
-import { distanceM, teamPosition, type Board, type ZoneForecast } from "./model";
+import { crewWork, type CrewWork } from "./fireState";
+import { EVACUEE_MARKERS_MAX, distanceM, evacueeMarkers, lineBuiltExtent, teamPosition, type Board, type ZoneForecast } from "./model";
 
 /** Colours baked into the 3D board (CSS cannot reach WebGL); the legend mirrors them. */
 export const DEMO_3D_COLORS = {
@@ -30,7 +33,39 @@ export const DEMO_3D_COLORS = {
   ordered: LEVEL_COLOR.evacuate_now,
   threatened: LEVEL_COLOR.be_ready,
   overrun: "#b3140c",
+  /** Fire line ahead of a fire (boardMapLayers BOARD_COLOR.fireLine). */
+  fireLine: "#3b2a1a",
+  /** Evacuating vehicles (simulated, sampled), on their zone's road route. */
+  evacuee: 0x1f6feb,
+  /** Helmet of a firefighter figure (its body is in its unit's family colour). */
+  crewHelmet: 0xffd23f,
 } as const;
+
+/** Firefighter figures per crew at work (fireState.crewWork), the cap on all of them, and their spacing along the work path. */
+const CREW_FIGURES = 4;
+const CREW_FIGURES_MAX = 240;
+const CREW_SPACING_WORLD = 2.2;
+/** How far figures step in toward the fire over the work (world units), and the size of their working bob. */
+const CREW_INWARD_WORLD = 2.4;
+const CREW_BOB_WORLD = 0.6;
+/** Figure: body and helmet, world units (exaggerated like the vehicles). */
+const FIGURE = { bodyRadius: 0.34, bodyHeight: 1.25, headRadius: 0.32 } as const;
+
+type CrewPath = {
+  points: { x: number; z: number }[];
+  /** Cumulative length at each point, world units. */
+  cum: number[];
+  /** Displayed and target worked length (eased toward the target each frame). */
+  shown: number;
+  target: number;
+  /** Unit inward direction on the board (x east, z south). */
+  inward: { x: number; z: number };
+  kind: CrewWork["kind"];
+  color: THREE.Color;
+  phase: number;
+  /** Share of the path worked (0..1), for the inward step. */
+  progress: number;
+};
 
 /** Vehicle sizes, world units (exaggerated about 20x so they read on a 600-unit board, as CrewOverlay). */
 const SIZES: Record<VehicleFamily, { length: number; height: number; width: number }> = {
@@ -61,6 +96,8 @@ const LABEL_CSS = `
 .fdx-dmzone-ordered { color: #7a0a05; }
 .fdx-dmzone-threatened { color: #7a4b00; }
 .fdx-compact .fdx-dmunit, .fdx-compact .fdx-dmstation, .fdx-compact .fdx-dmzone { font-size: 9px; padding: 1px 6px; }
+/* Station name tags are hidden: the red firehouses mark stations; names are in the panels. */
+.fdx-dmstation { display: none; }
 `;
 
 type Label = { obj: CSS2DObject; el: HTMLDivElement };
@@ -103,8 +140,15 @@ export class DemoBoardOverlay implements BoardOverlay {
   private unitKey = "";
   private routes: THREE.Group | null = null;
   private routeKey = "";
+  private fireLines: THREE.Group | null = null;
+  private fireLineKey = "";
   private zones: { group: THREE.Group; labels: Label[] } | null = null;
   private zoneKey = "";
+  /** Evacuating vehicles: one instanced car per marker (model.evacueeMarkers). */
+  private evacuees: THREE.InstancedMesh | null = null;
+  /** Firefighter figures (body + helmet) for the crews at work, and what they walk along. */
+  private crewMeshes: { body: THREE.InstancedMesh; helmet: THREE.InstancedMesh } | null = null;
+  private crewPaths = new Map<string, CrewPath>();
   private unitLabels: Label[] = [];
   private readonly matrix = new THREE.Matrix4();
   private readonly quat = new THREE.Quaternion();
@@ -130,7 +174,10 @@ export class DemoBoardOverlay implements BoardOverlay {
     this.clearStations();
     this.clearUnits();
     this.clearRoutes();
+    this.clearFireLines();
     this.clearZones();
+    this.clearEvacuees();
+    this.clearCrews();
     this.group.removeFromParent();
     this.group = null;
     this.style?.remove();
@@ -139,8 +186,9 @@ export class DemoBoardOverlay implements BoardOverlay {
     this.labels = null;
   }
 
-  tick(_time: number, _dt: number, _reducedMotion: boolean, width: number, height: number): void {
+  tick(time: number, dt: number, reducedMotion: boolean, width: number, height: number): void {
     for (const material of this.materials) material.resolution.set(width, height);
+    this.placeCrews(time, dt, reducedMotion);
   }
 
   /** The board as it is now (mutated in place by the page; call again after every change). */
@@ -165,13 +213,19 @@ export class DemoBoardOverlay implements BoardOverlay {
     }
     const routeKey = board
       ? board.teams
-          .filter((t) => t.status === "en_route" && t.target)
-          .map((t) => `${t.id}>${t.fireId}:${t.route?.length ?? 0}:${t.target!.join(",")}`)
+          .filter((t) => (t.status === "en_route" || t.status === "returning") && t.target)
+          .map((t) => `${t.id}>${t.fireId ?? "home"}:${t.route?.length ?? 0}:${t.target!.join(",")}`)
           .join("|")
       : "";
     if (routeKey !== this.routeKey || !this.routes) {
       this.routeKey = routeKey;
       this.buildRoutes();
+    }
+    // Rebuilt as line is built (10 m steps), not every frame.
+    const fireLineKey = board ? board.lines.map((l) => `${l.id}:${Math.round(l.builtM / 10)}`).join("|") : "";
+    if (fireLineKey !== this.fireLineKey || !this.fireLines) {
+      this.fireLineKey = fireLineKey;
+      this.buildFireLines();
     }
     const zoneKey = board
       ? board.zones.map((z) => `${z.id}:${zoneState(z, this.forecasts.get(z.id)) ?? ""}`).join("|")
@@ -181,6 +235,8 @@ export class DemoBoardOverlay implements BoardOverlay {
       this.buildZones();
     }
     this.placeUnits();
+    this.placeEvacuees();
+    this.updateCrews();
   }
 
   // ---- geometry helpers ----
@@ -380,7 +436,7 @@ export class DemoBoardOverlay implements BoardOverlay {
         x = spot.at.x + Math.cos(angle) * PARK_RADIUS;
         z = spot.at.z + Math.sin(angle) * PARK_RADIUS;
         yaw = -angle;
-      } else if (team.status === "en_route" && team.target) {
+      } else if ((team.status === "en_route" || team.status === "returning") && team.target) {
         const ahead = this.toWorld(team.target);
         if (ahead) yaw = Math.atan2(-(ahead.z - at.z), ahead.x - at.x);
       }
@@ -450,10 +506,39 @@ export class DemoBoardOverlay implements BoardOverlay {
     parent.add(group);
     this.routes = group;
     for (const team of board?.teams ?? []) {
-      if (team.status !== "en_route" || !team.target) continue;
-      const path = team.route && team.route.length > 1 ? team.route : [team.position, team.target];
-      const positions = this.drape(path, LIFT);
-      if (positions.length >= 6) group.add(this.line(positions, DEMO_3D_COLORS.route, 2, true));
+      // Only road lines: a unit waiting for its road route has none yet. Returning units too (their road home).
+      if ((team.status !== "en_route" && team.status !== "returning") || !team.route || team.route.length < 2) continue;
+      const positions = this.drape(team.route, LIFT);
+      if (positions.length >= 6) group.add(this.line(positions, DEMO_3D_COLORS.route, team.status === "returning" ? 1 : 2, true));
+    }
+  }
+
+  // ---- fire line at attack positions ----
+
+  private clearFireLines(): void {
+    if (!this.fireLines) return;
+    this.dropLines(this.fireLines);
+    this.fireLines = null;
+  }
+
+  /** Each attack line draped on the ground: planned dashed, built part solid and wider. */
+  private buildFireLines(): void {
+    this.clearFireLines();
+    const { group: parent, board } = this;
+    if (!parent) return;
+    const group = new THREE.Group();
+    group.name = "demo-fire-lines";
+    parent.add(group);
+    this.fireLines = group;
+    for (const line of board?.lines ?? []) {
+      const { point: p, a, b, aM, bM } = line.plan;
+      const planned = this.drape([a, p, b], ZONE_LIFT);
+      if (planned.length >= 6) group.add(this.line(planned, DEMO_3D_COLORS.fireLine, 2, true));
+      if (line.builtM <= 0) continue;
+      const ext = lineBuiltExtent(line);
+      const at = (q: LonLat, f: number): LonLat => [p[0] + (q[0] - p[0]) * f, p[1] + (q[1] - p[1]) * f];
+      const built = this.drape([at(a, aM > 0 ? ext.a / aM : 0), p, at(b, bM > 0 ? ext.b / bM : 0)], ZONE_LIFT + 0.2);
+      if (built.length >= 6) group.add(this.line(built, DEMO_3D_COLORS.fireLine, 4, false));
     }
   }
 
@@ -488,4 +573,173 @@ export class DemoBoardOverlay implements BoardOverlay {
       }
     }
   }
+
+  // ---- evacuating vehicles (simulated traffic) ----
+
+  private clearEvacuees(): void {
+    if (!this.evacuees) return;
+    this.evacuees.removeFromParent();
+    disposeObject(this.evacuees);
+    this.evacuees = null;
+  }
+
+  /**
+   * Places one small car per evacuee marker on its zone's road line (the routes' road geometry,
+   * sampled by model.evacueeMarkers), pointing along the road. Never a straight line between points.
+   */
+  private placeEvacuees(): void {
+    const { group, board } = this;
+    if (!group) return;
+    if (!this.evacuees) {
+      const mesh = new THREE.InstancedMesh(
+        // Smaller than any unit and shadowless, so traffic stays in the background of the board.
+        new THREE.BoxGeometry(1.8, 0.9, 1.0).translate(0, 0.45, 0),
+        new THREE.MeshStandardMaterial({ color: DEMO_3D_COLORS.evacuee, roughness: 0.7, transparent: true, opacity: 0.85 }),
+        EVACUEE_MARKERS_MAX,
+      );
+      mesh.name = "demo-evacuees";
+      mesh.count = 0;
+      group.add(mesh);
+      this.evacuees = mesh;
+    }
+    const mesh = this.evacuees;
+    let n = 0;
+    for (const m of board ? evacueeMarkers(board) : []) {
+      const p = this.toWorld(m.at);
+      if (!p || n >= EVACUEE_MARKERS_MAX) continue;
+      // Bearing is degrees true; the board's x runs east and z south, the box's length along x.
+      this.quat.setFromAxisAngle(this.up, Math.PI / 2 - (m.bearing * Math.PI) / 180);
+      this.matrix.compose(new THREE.Vector3(p.x, p.y + 0.2, p.z), this.quat, this.one);
+      mesh.setMatrixAt(n, this.matrix);
+      n += 1;
+    }
+    mesh.count = n;
+    mesh.instanceMatrix.needsUpdate = true;
+  }
+
+  // ---- firefighters at work (simulated) ----
+
+  private clearCrews(): void {
+    this.crewPaths.clear();
+    if (!this.crewMeshes) return;
+    for (const mesh of [this.crewMeshes.body, this.crewMeshes.helmet]) {
+      mesh.removeFromParent();
+      disposeObject(mesh);
+    }
+    this.crewMeshes = null;
+  }
+
+  /**
+   * Reads the crews' work for the board minute (fireState.crewWork): each crew's path on the
+   * board, how far along it they have worked and which way is in toward the fire. Figures ease to
+   * the new progress in `placeCrews` each frame.
+   */
+  private updateCrews(): void {
+    const { group, board } = this;
+    if (!group) return;
+    const work: CrewWork[] = board ? crewWork(board) : [];
+    const next = new Map<string, CrewPath>();
+    for (const w of work) {
+      const points: { x: number; z: number }[] = [];
+      const cum: number[] = [];
+      for (const p of w.path) {
+        const at = this.toWorld(p);
+        if (!at) continue;
+        const last = points[points.length - 1];
+        cum.push(last ? cum[cum.length - 1] + Math.hypot(at.x - last.x, at.z - last.z) : 0);
+        points.push({ x: at.x, z: at.z });
+      }
+      if (points.length === 0) continue;
+      const key = `${w.teamId}>${w.fireId}`;
+      const total = cum[cum.length - 1];
+      const progress = Math.min(1, Math.max(0, w.progress));
+      const previous = this.crewPaths.get(key);
+      const team = board?.teams.find((t) => t.id === w.teamId);
+      const len = Math.hypot(w.inward[0], w.inward[1]);
+      next.set(key, {
+        points,
+        cum,
+        // A new crew appears at its current spot; a known one keeps easing from where it is drawn.
+        shown: previous ? Math.min(previous.shown, total) : progress * total,
+        target: progress * total,
+        // inward is [east, north]; the board's z runs south.
+        inward: len > 0 ? { x: w.inward[0] / len, z: -w.inward[1] / len } : { x: 0, z: 0 },
+        kind: w.kind,
+        color: new THREE.Color(CREW_COLORS[team ? vehicleFamily(team.kind) : "hand_crew"]),
+        phase: previous?.phase ?? (hashString(key) % 628) / 100,
+        progress,
+      });
+    }
+    this.crewPaths = next;
+    if (next.size > 0 && !this.crewMeshes) {
+      const body = new THREE.InstancedMesh(
+        new THREE.CylinderGeometry(FIGURE.bodyRadius * 0.8, FIGURE.bodyRadius, FIGURE.bodyHeight, 6).translate(0, FIGURE.bodyHeight / 2, 0),
+        new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.6 }),
+        CREW_FIGURES_MAX,
+      );
+      const helmet = new THREE.InstancedMesh(
+        new THREE.SphereGeometry(FIGURE.headRadius, 8, 6).translate(0, FIGURE.bodyHeight + FIGURE.headRadius * 0.8, 0),
+        new THREE.MeshStandardMaterial({ color: DEMO_3D_COLORS.crewHelmet, roughness: 0.5 }),
+        CREW_FIGURES_MAX,
+      );
+      body.name = "demo-crew-figures";
+      helmet.name = "demo-crew-helmets";
+      body.count = helmet.count = 0;
+      body.frustumCulled = helmet.frustumCulled = false;
+      group.add(body, helmet);
+      this.crewMeshes = { body, helmet };
+    }
+  }
+
+  /** Point at worked length `s` along the path. */
+  private along(path: CrewPath, s: number): { x: number; z: number } {
+    const { points, cum } = path;
+    if (points.length === 1 || s <= 0) return points[0];
+    for (let k = 1; k < points.length; k++) {
+      if (cum[k] >= s) {
+        const f = (s - cum[k - 1]) / Math.max(1e-6, cum[k] - cum[k - 1]);
+        return { x: points[k - 1].x + (points[k].x - points[k - 1].x) * f, z: points[k - 1].z + (points[k].z - points[k - 1].z) * f };
+      }
+    }
+    return points[points.length - 1];
+  }
+
+  /**
+   * A few figures per crew in its unit's colour: the lead at the worked point, the rest behind it
+   * along the path, stepping in toward the fire as the work progresses and bobbing as they work
+   * (direct and mop-up crews swing in and out at the edge). Static under reduced motion.
+   */
+  private placeCrews(time: number, dt: number, reducedMotion: boolean): void {
+    const meshes = this.crewMeshes;
+    const frame = this.frame;
+    if (!meshes || !frame) return;
+    let n = 0;
+    for (const path of this.crewPaths.values()) {
+      path.shown = reducedMotion ? path.target : path.shown + (path.target - path.shown) * Math.min(1, dt * 2.5);
+      for (let k = 0; k < CREW_FIGURES && n < CREW_FIGURES_MAX; k++) {
+        const at = this.along(path, path.shown - k * CREW_SPACING_WORLD);
+        const swing =
+          reducedMotion || path.kind === "line" ? 0.5 : 0.5 + 0.5 * Math.sin(time * (path.kind === "mopup" ? 1.4 : 2.6) + path.phase + k * 1.7);
+        const step = CREW_INWARD_WORLD * (0.25 + 0.75 * path.progress) * (path.kind === "line" ? 0.4 : 1) + CREW_BOB_WORLD * swing;
+        const x = at.x + path.inward.x * step;
+        const z = at.z + path.inward.z * step;
+        const hop = reducedMotion ? 0 : Math.abs(Math.sin(time * 5 + path.phase + k)) * 0.18;
+        this.quat.setFromAxisAngle(this.up, Math.atan2(path.inward.x, path.inward.z));
+        this.matrix.compose(new THREE.Vector3(x, frame.surfaceAt(x, z) + hop, z), this.quat, this.one);
+        meshes.body.setMatrixAt(n, this.matrix);
+        meshes.helmet.setMatrixAt(n, this.matrix);
+        meshes.body.setColorAt(n, path.color);
+        n += 1;
+      }
+    }
+    meshes.body.count = meshes.helmet.count = n;
+    meshes.body.instanceMatrix.needsUpdate = meshes.helmet.instanceMatrix.needsUpdate = true;
+    if (meshes.body.instanceColor) meshes.body.instanceColor.needsUpdate = true;
+  }
+}
+
+function hashString(text: string): number {
+  let h = 2166136261;
+  for (let i = 0; i < text.length; i++) h = Math.imul(h ^ text.charCodeAt(i), 16777619);
+  return h >>> 0;
 }

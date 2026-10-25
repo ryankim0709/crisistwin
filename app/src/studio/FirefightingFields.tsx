@@ -145,8 +145,8 @@ export default function FirefightingFields({
             label="Resources start work"
             hint={
               settings.fromStations !== false
-                ? `${(TURNOUT_MINUTES * 60).toFixed(0)} s turnout, then each vehicle class on the roads it can use. Falls back to ${settings.responseMinutes} min.`
-                : undefined
+                ? `Sent when the first fire is reported (its report time under Fires). ${(TURNOUT_MINUTES * 60).toFixed(0)} s turnout, then each vehicle class on the roads it can use. Falls back to ${settings.responseMinutes} min.`
+                : "Counted from the first fire's start, or its report time when you set one."
             }
           >
             <select

@@ -118,7 +118,7 @@ struct GuidanceSheet: View {
                 }
                 CheckInButtons(inDrawer: true)
             } else {
-                titleRow(GuidanceLevel.none.verdict(zone: store.myZone?.name))
+                titleRow(GuidanceLevel.none.verdict(zone: nil))
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

@@ -132,7 +132,11 @@ function DispatchSummary({ dispatch }: { dispatch: CrewDispatch }) {
         Crews sent <Tag>Road travel</Tag>
       </h4>
       <p className="studio-hint">
-        Fire reported at {formatElapsed(dispatch.reportMinute)}; {trips.length} resources from{" "}
+        {dispatch.reportedFire ?? "Fire"} reported at {formatElapsed(Math.round(dispatch.reportMinute))}{" "}
+        {dispatch.reportSource === "set"
+          ? "(report time set by you, an assumption)"
+          : "(modelled call-in and dispatch delay)"}
+        ; {trips.length} resources from{" "}
         {stations} station{stations === 1 ? "" : "s"}. First on scene: {first.label} from{" "}
         {first.stationName} at {formatElapsed(Math.round(first.arriveMinute))}; all on scene by{" "}
         {formatElapsed(Math.round(last.arriveMinute))}

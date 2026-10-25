@@ -188,6 +188,157 @@ struct LiveAPIClient {
         }
     }
 
+    /// A Cartesia access token for the phone's own STT/TTS WebSockets. 401 throws `unauthorized`;
+    /// any other non-2xx throws `VoiceTurnError` with `status` (503: voice isn't set up on the server).
+    func voiceToken(incidentId: String, token: String) async throws -> VoiceToken {
+        let (data, status) = try await perform(["incidents", incidentId, "voice", "token"], method: "POST", token: token)
+        switch status {
+        case 200..<300: break
+        case 401: throw LiveAPIError.unauthorized
+        default:
+            let detail = (try? LiveJSON.decoder.decode(ErrorBody.self, from: data))?.detail
+            throw VoiceTurnError(message: detail ?? Self.voiceFallback(status), status: status)
+        }
+        do {
+            return try LiveJSON.decoder.decode(VoiceToken.self, from: data)
+        } catch {
+            throw LiveAPIError.invalidResponse
+        }
+    }
+
+    /// One streamed voice turn (`stream: true`, `text` only). The HTTP status is checked before the
+    /// stream is returned: 401 throws `unauthorized` (so `LiveStore.authorized` retries), any other
+    /// non-2xx throws `VoiceTurnError` with the server's `detail`. The stream then yields one event
+    /// per NDJSON line; an `error` line yields `.failed` and ends it. Cancelling the consuming task
+    /// (or dropping the stream) cancels the request.
+    func voiceTurnStream(
+        incidentId: String, request: VoiceTurnRequest, token: String
+    ) async throws -> AsyncThrowingStream<VoiceStreamEvent, Error> {
+        let urlRequest = try makeRequest(
+            ["incidents", incidentId, "voice"], method: "POST", token: token, body: request,
+            accept: "application/x-ndjson, application/json;q=0.9")
+        let bytes: URLSession.AsyncBytes
+        let response: URLResponse
+        do {
+            (bytes, response) = try await Self.voiceSession.bytes(for: urlRequest)
+        } catch let error as URLError where error.code == .cancelled {
+            throw CancellationError()
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            throw LiveAPIError.network
+        }
+        guard let http = response as? HTTPURLResponse else {
+            bytes.task.cancel()
+            throw LiveAPIError.invalidResponse
+        }
+        switch http.statusCode {
+        case 200..<300: break
+        case 401:
+            bytes.task.cancel()
+            throw LiveAPIError.unauthorized
+        default:
+            // The error body is a small JSON object; read it (bounded) for the server's wording.
+            var body = Data()
+            do {
+                for try await byte in bytes {
+                    body.append(byte)
+                    if body.count >= Self.maxErrorBody { break }
+                }
+            } catch {}
+            bytes.task.cancel()
+            let detail = (try? LiveJSON.decoder.decode(ErrorBody.self, from: body))?.detail
+            throw VoiceTurnError(message: detail ?? Self.voiceFallback(http.statusCode), status: http.statusCode)
+        }
+        return Self.events(from: bytes)
+    }
+
+    private static let maxErrorBody = 16_384
+    /// A line longer than this is not one of ours; the stream fails instead of buffering forever.
+    private static let maxStreamLine = 262_144
+
+    /// One NDJSON line of the voice stream. Unknown types are skipped.
+    private struct StreamLine: Decodable {
+        let type: String
+        let text: String?
+        let error: String?
+        let detail: String?
+    }
+
+    /// Splits the body on `\n` (not `AsyncLineSequence`, which also breaks on U+2028/U+2029 and
+    /// those may appear raw inside the JSON strings) and maps each line to an event.
+    private static func events(from bytes: URLSession.AsyncBytes) -> AsyncThrowingStream<VoiceStreamEvent, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                var line = Data()
+                var sawFinal = false
+                /// False once the stream should end (an `error` line).
+                func emit(_ raw: Data) -> Bool {
+                    guard let parsed = try? LiveJSON.decoder.decode(StreamLine.self, from: raw) else { return true }
+                    switch parsed.type {
+                    case "reply_delta":
+                        if let text = parsed.text, !text.isEmpty { continuation.yield(.replyDelta(text)) }
+                    case "reply_end":
+                        continuation.yield(.replyEnd)
+                    case "final":
+                        guard let final = try? LiveJSON.decoder.decode(VoiceTurnResponse.self, from: raw) else {
+                            continuation.yield(.failed("Voice mode sent a reply this app can't read. Try again."))
+                            return false
+                        }
+                        sawFinal = true
+                        continuation.yield(.final(final))
+                    case "error":
+                        continuation.yield(.failed(parsed.detail ?? "Voice mode had a problem. Try again."))
+                        return false
+                    default:
+                        break
+                    }
+                    return true
+                }
+                do {
+                    for try await byte in bytes {
+                        if byte == UInt8(ascii: "\n") {
+                            let raw = line
+                            line.removeAll(keepingCapacity: true)
+                            if raw.contains(where: { $0 != UInt8(ascii: " ") && $0 != UInt8(ascii: "\r") }),
+                               !emit(raw) {
+                                continuation.finish()
+                                bytes.task.cancel()
+                                return
+                            }
+                        } else {
+                            line.append(byte)
+                            if line.count > Self.maxStreamLine {
+                                continuation.yield(.failed("Voice mode sent a reply this app can't read. Try again."))
+                                continuation.finish()
+                                bytes.task.cancel()
+                                return
+                            }
+                        }
+                    }
+                    if !line.isEmpty, !emit(line) {
+                        continuation.finish()
+                        return
+                    }
+                    if !sawFinal {
+                        continuation.yield(.failed("The reply was cut off. Try again."))
+                    }
+                    continuation.finish()
+                } catch let error as URLError where error.code == .cancelled {
+                    continuation.finish(throwing: CancellationError())
+                } catch is CancellationError {
+                    continuation.finish(throwing: CancellationError())
+                } catch {
+                    continuation.finish(throwing: Task.isCancelled ? CancellationError() : LiveAPIError.network)
+                }
+            }
+            continuation.onTermination = { _ in
+                task.cancel()
+                bytes.task.cancel()
+            }
+        }
+    }
+
     private static func voiceFallback(_ status: Int) -> String {
         switch status {
         case 400: return "I couldn't use that audio. Try again."
@@ -286,23 +437,7 @@ struct LiveAPIClient {
         _ path: [String], method: String, query: [URLQueryItem] = [], token: String? = nil,
         body: (any Encodable)? = nil, session: URLSession = LiveAPIClient.session
     ) async throws -> (Data, Int) {
-        var url = baseURL.appendingPathComponent("api").appendingPathComponent("live")
-        for part in path { url.appendPathComponent(part) }
-        if !query.isEmpty {
-            var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
-            components?.queryItems = query
-            guard let withQuery = components?.url else { throw LiveAPIError.invalidResponse }
-            url = withQuery
-        }
-        var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData)
-        request.httpMethod = method
-        request.setValue("application/json", forHTTPHeaderField: "Accept")
-        if let token { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
-        if let body {
-            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            request.httpBody = try LiveJSON.encoder.encode(body)
-        }
-
+        let request = try makeRequest(path, method: method, query: query, token: token, body: body)
         let data: Data
         let response: URLResponse
         do {
@@ -315,5 +450,28 @@ struct LiveAPIClient {
         try Task.checkCancellation()
         guard let http = response as? HTTPURLResponse else { throw LiveAPIError.invalidResponse }
         return (data, http.statusCode)
+    }
+
+    private func makeRequest(
+        _ path: [String], method: String, query: [URLQueryItem] = [], token: String? = nil,
+        body: (any Encodable)? = nil, accept: String = "application/json"
+    ) throws -> URLRequest {
+        var url = baseURL.appendingPathComponent("api").appendingPathComponent("live")
+        for part in path { url.appendPathComponent(part) }
+        if !query.isEmpty {
+            var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+            components?.queryItems = query
+            guard let withQuery = components?.url else { throw LiveAPIError.invalidResponse }
+            url = withQuery
+        }
+        var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData)
+        request.httpMethod = method
+        request.setValue(accept, forHTTPHeaderField: "Accept")
+        if let token { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
+        if let body {
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = try LiveJSON.encoder.encode(body)
+        }
+        return request
     }
 }

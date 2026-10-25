@@ -31,6 +31,7 @@ import { GROUND_APPARATUS, lineRateMetersPerHour } from "./apparatus";
 import {
   burnedAreas,
   crewArrivals,
+  responseFromMinute,
   type CrewArrival,
   type FirefightingSettings,
 } from "./firefighting";
@@ -85,7 +86,7 @@ export function estimateInitialAttack(
   const onSiteMinute =
     arrivals.length > 0
       ? Math.min(...arrivals.map((a) => a.minute))
-      : Math.min(...sources.map((s) => s.startMinute)) + settings.responseMinutes;
+      : responseFromMinute(sources) + settings.responseMinutes;
   let lineMetersPerMinute = 0;
   let holdsFlameLengthFeet = 0;
   const grassPerMinute = (kind: CrewArrival["kind"]) =>

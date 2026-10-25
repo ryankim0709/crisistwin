@@ -748,6 +748,8 @@ def package_summary(package: Mapping[str, Any]) -> dict[str, Any]:
         "fire_area_km2": last["area_km2"] if last else None,
         "fire_label": "simulated",
         "clipped": meta["dispatch_area"]["clipped"],
+        # The Studio region (prebuilt board id, e.g. "berkeley-hills-tilden") the run used, or None.
+        "region_id": (meta.get("studio") or {}).get("region_id"),
     }
 
 

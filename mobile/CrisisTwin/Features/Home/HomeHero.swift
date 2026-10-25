@@ -49,6 +49,18 @@ struct HomeStatusHero: View {
                         .multilineTextAlignment(.center)
                         .fixedSize(horizontal: false, vertical: true)
                 }
+                // Where the phone is, as a street address (looked up on the device), in every state.
+                if let place = location.placeName {
+                    Label("Near \(place)", systemImage: "location.fill")
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(Color.ctInk)
+                        .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(Color.ctSurfaceMuted, in: .capsule)
+                        .padding(.top, 2)
+                }
             }
             .frame(maxWidth: .infinity)
             .accessibilityElement(children: .combine)
@@ -100,18 +112,18 @@ struct HomeStatusHero: View {
             return Status(symbol: "", tint: .ctInkMuted, soft: .ctSurfaceMuted,
                           title: "Finding your location", busy: true)
         }
-        guard let zone = store.myZone else {
+        guard store.myZone != nil else {
             return Status(symbol: "checkmark.shield", tint: .ctSuccess, soft: .ctSuccessSoft,
                           title: "No emergency near you",
                           detail: store.incidentTitle.map { "\($0) is not affecting your area." })
         }
-        let incident = [store.incidentTitle, zone.name].compactMap { $0 }.joined(separator: " · ")
+        let incident = store.incidentTitle ?? ""
         if let guidance = store.activeGuidance {
             return Status(symbol: guidance.level.symbol, tint: guidance.level.glyph, soft: guidance.level.soft,
-                          title: guidance.level.verdict(zone: zone.name), detail: incident)
+                          title: guidance.level.verdict(zone: nil), detail: incident)
         }
         return Status(symbol: "checkmark.shield", tint: .ctSuccess, soft: .ctSuccessSoft,
-                      title: GuidanceLevel.none.verdict(zone: zone.name), detail: store.incidentTitle)
+                      title: GuidanceLevel.none.verdict(zone: nil), detail: incident.isEmpty ? nil : incident)
     }
 }
 

@@ -37,7 +37,7 @@ const page =
   path === "/fire" ? (
     <FireSimulatorPage />
   ) : path === "/simulation" ? (
-    <SimulationStudioPage />
+    <SimulationStudioPage publishLiveFire />
   ) : path === "/dispatch" ? (
     <DispatchAgentPage />
   ) : path === "/comparison" ? (

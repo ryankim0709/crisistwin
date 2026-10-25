@@ -7,13 +7,15 @@ enum VoiceScreen: String, Codable {
 
 /// The one thing a voice turn proposes (`docs/live-reports.md`, voice endpoint), or the pending
 /// proposal the phone sends back. Wire shape: `{"type": "report" | "check_in" | "open" |
-/// "confirm" | "cancel", ...}`. An unknown `type` or value fails to decode.
+/// "confirm" | "cancel" | "undo", ...}`. An unknown `type` or value fails to decode.
 enum VoiceAction: Codable, Equatable {
     case report(kind: ReportKind, severity: ReportSeverity?, note: String?)
     case checkIn(CheckInStatus)
     case open(VoiceScreen)
     case confirm
     case cancel
+    /// Take back the report this phone just sent.
+    case undo
 
     private enum CodingKeys: String, CodingKey {
         case type, kind, severity, note, status, screen
@@ -36,6 +38,8 @@ enum VoiceAction: Codable, Equatable {
             self = .confirm
         case "cancel":
             self = .cancel
+        case "undo":
+            self = .undo
         default:
             throw DecodingError.dataCorruptedError(
                 forKey: .type, in: container, debugDescription: "Unknown voice action type")
@@ -60,6 +64,8 @@ enum VoiceAction: Codable, Equatable {
             try container.encode("confirm", forKey: .type)
         case .cancel:
             try container.encode("cancel", forKey: .type)
+        case .undo:
+            try container.encode("undo", forKey: .type)
         }
     }
 }
@@ -91,6 +97,9 @@ struct VoiceContext: Codable, Equatable {
     var pending: VoiceAction?
     /// The last few turns, oldest first.
     var history: [VoiceHistoryTurn]
+    /// The phone's zone id (zone-level, public), so the server can answer from that zone's facts.
+    /// Sent as `zone_id`. No coordinates.
+    var zoneId: String? = nil
 }
 
 /// Body of `POST incidents/{id}/voice`: exactly one of `audioB64` (base64 WAV) or `text`.
@@ -100,24 +109,41 @@ struct VoiceTurnRequest: Encodable {
     var context: VoiceContext
     /// Ask the server for a spoken reply (`audioB64` in the response).
     var speak: Bool
+    /// `true` asks for the NDJSON stream (`text` only; see `VoiceStreamEvent`). Omitted when nil.
+    var stream: Bool? = nil
 }
 
 /// Reply to a voice turn. `evidenceClass` is `ai_interpretation`: the reply and action are a
 /// model's reading of what was said, not an observation.
-struct VoiceTurnResponse: Decodable {
+struct VoiceTurnResponse: Decodable, Equatable {
     var transcript: String
     var reply: String
     /// Nil when the turn proposes nothing, or when the server sent an action this app can't read.
     var action: VoiceAction?
     var audioB64: String?
     var audioFormat: String?
-    /// `cartesia`, `failed` or `skipped`.
+    /// `cartesia`, `failed` or `skipped`; `client` on the stream (the phone speaks).
     var tts: String
     var model: String?
     var evidenceClass: String
+    /// Stream only: the reply was sent as `replyDelta` pieces. False means speak `reply` whole.
+    var streamed: Bool = false
+    /// Stream only: a line to speak after the streamed reply (the 911 line), already in `reply`.
+    var spokenExtra: String? = nil
+    /// Who decided this turn: `jev` (TypeSafe's typed decision model), `claude` (the LLM path), or nil.
+    var decidedBy: String? = nil
+    /// The server says this first-hand hazard report may be filed without asking. The phone still
+    /// re-checks it and only ever acts on this for a report that is not a need-help.
+    var auto: Bool = false
+    /// 0 to 1, Jev only. A model's confidence, not an observation.
+    var confidence: Double? = nil
+    /// Which server facts a Claude reply used: `guidance`, `guidance_history`, `hazards`,
+    /// `shelters`, `fire`. Empty for Jev or when none.
+    var sources: [String] = []
 
     private enum CodingKeys: String, CodingKey {
-        case transcript, reply, action, audioB64, audioFormat, tts, model, evidenceClass
+        case transcript, reply, action, audioB64, audioFormat, tts, model, evidenceClass, streamed, spokenExtra
+        case decidedBy, auto, confidence, sources
     }
 }
 
@@ -134,11 +160,62 @@ extension VoiceTurnResponse {
         tts = try container.decodeIfPresent(String.self, forKey: .tts) ?? "skipped"
         model = try container.decodeIfPresent(String.self, forKey: .model)
         evidenceClass = try container.decodeIfPresent(String.self, forKey: .evidenceClass) ?? "ai_interpretation"
+        streamed = (try? container.decodeIfPresent(Bool.self, forKey: .streamed)) ?? false
+        spokenExtra = try? container.decodeIfPresent(String.self, forKey: .spokenExtra)
+        decidedBy = try? container.decodeIfPresent(String.self, forKey: .decidedBy)
+        auto = (try? container.decodeIfPresent(Bool.self, forKey: .auto)) ?? false
+        confidence = try? container.decodeIfPresent(Double.self, forKey: .confidence)
+        sources = (try? container.decodeIfPresent([String].self, forKey: .sources)) ?? []
     }
 }
 
-/// Non-2xx from the voice endpoint, worded for the person (server `detail` when present).
+/// Non-2xx from the voice endpoints, worded for the person (server `detail` when present).
 struct VoiceTurnError: LocalizedError {
     var message: String
+    /// The HTTP status, when the failure came from the server (503 means voice isn't set up there).
+    var status: Int? = nil
     var errorDescription: String? { message }
+}
+
+/// `POST incidents/{id}/voice/token`: a short-lived Cartesia access token (STT and TTS grants
+/// only) and the settings the phone's WebSockets use. The API key never leaves the server.
+struct VoiceToken: Decodable, Equatable {
+    var token: String
+    /// Seconds from issue.
+    var expiresIn: Int
+    /// `Cartesia-Version` for the WebSocket query.
+    var version: String
+    var stt: STT
+    var tts: TTS
+
+    /// Speech to text: 16 kHz mono `pcm_s16le` in.
+    struct STT: Decodable, Equatable {
+        var url: String
+        var model: String
+        var language: String
+        var encoding: String
+        var sampleRate: Int
+        /// The incident's busiest road and exit names (`ink-2` boosts); the phone sends ≤ 10.
+        var keyterms: [String]?
+    }
+
+    /// Text to speech: mono `pcm_f32le` out at `sampleRate`.
+    struct TTS: Decodable, Equatable {
+        var url: String
+        var model: String
+        var voiceId: String
+        var language: String
+        var encoding: String
+        var sampleRate: Int
+    }
+}
+
+/// One NDJSON line of a streamed voice turn (`stream: true`), in order: `replyDelta` pieces
+/// (spaces preserved, join them as-is), `replyEnd` when the reply text is complete, then `final`.
+/// `failed` carries a message for the person and ends the stream.
+enum VoiceStreamEvent: Equatable {
+    case replyDelta(String)
+    case replyEnd
+    case final(VoiceTurnResponse)
+    case failed(String)
 }

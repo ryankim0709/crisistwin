@@ -179,3 +179,11 @@ export function observedAge(iso: string | null | undefined, nowMs: number): stri
   const t = new Date(iso).getTime();
   return Number.isNaN(t) ? "never" : `${elapsed(nowMs - t)} ago`;
 }
+
+/** "Exit south via Big Bend Road, 30 min" or "Via Fairview Dr to Walgreens, 2 min". */
+export function wayOut(destination: string | null | undefined, via: string[] | undefined, eta?: number | null): string | null {
+  if (!destination) return null;
+  const roads = (via ?? []).slice(0, 2).join(", ");
+  const head = / via /i.test(destination) || !roads ? destination : `Via ${roads} to ${destination}`;
+  return eta != null ? `${head}, ${eta} min` : head;
+}

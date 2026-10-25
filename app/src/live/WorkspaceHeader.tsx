@@ -1,11 +1,8 @@
 import { useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import { Button, EvidenceTag, IconButton, Notice, SegmentedControl, Tag, buttonClass } from "../ui";
 import { simClock } from "../demo/format";
-import { ACTIVITIES, ACTIVITY } from "../demo/model";
-import { boardCellMetersFor } from "../fire/boardSize";
-import { readinessLabel, useCachedBoards } from "../fire/useCachedBoards";
-import { BOARD_SPEEDS, MONITORING, type CommandBoard } from "../demo/useCommandBoard";
-import { WEATHER_PRESETS } from "../demo/useDemoEnvironment";
+import { MONITORING, type CommandBoard } from "../demo/useCommandBoard";
+import { BoardSizeControl, BoardSpeedSlider, ClockState, PauseButton } from "./BoardClock";
 import { drillAction } from "./api";
 import { drillClock, drillDate, drillNowAt, elapsed } from "./format";
 import type { ActiveIncident } from "./active";
@@ -162,44 +159,14 @@ function useDismiss(ref: RefObject<HTMLDetailsElement | null>) {
 
 /**
  * The simulated board's controls: AI monitoring, the board clock (its own simulated time, not
- * the drill clock), and a "Conditions" popover for fire activity, wind and restart.
+ * the drill clock), and a "Conditions" popover showing the wind, with board size and restart.
+ * Fires and their wind and moisture come from Simulation Studio; the board starts none itself.
+ * AI agent only: nothing is dispatched or ordered unless the AI agent (or you) orders it, and the
+ * clock runs only while AI monitoring is on.
  */
-const BOARD_SIZES = [15, 30, 45, 60].map((km) => ({
-  value: String(km),
-  label: `${km} km`,
-  title: `Board about ${km * 2} \u00d7 ${km * 2} km (${km} km from the centre to each edge)`,
-}));
-
-/** The drill environment's centre (GET /api/demo/environment), read once; null until known. */
-let drillCentre: Promise<[number, number] | null> | null = null;
-function useDrillCentre(): [number, number] | null {
-  const [centre, setCentre] = useState<[number, number] | null>(null);
-  useEffect(() => {
-    drillCentre ??= fetch("/api/demo/environment")
-      .then((r) => (r.ok ? (r.json() as Promise<{ center?: [number, number] }>) : null))
-      .then((body) => body?.center ?? null)
-      .catch(() => null);
-    let live = true;
-    void drillCentre.then((c) => live && setCentre(c));
-    return () => {
-      live = false;
-    };
-  }, []);
-  return centre;
-}
-
 export function BoardControls({ board: cb }: { board: CommandBoard }) {
   const ref = useRef<HTMLDetailsElement>(null);
   useDismiss(ref);
-  const centre = useDrillCentre();
-  const request = (km: number) => ({
-    longitude: centre?.[0] ?? 0,
-    latitude: centre?.[1] ?? 0,
-    radiusMeters: km * 1000,
-    cellMeters: boardCellMetersFor(km * 1000),
-  });
-  const sizeReady = useCachedBoards(centre ? BOARD_SIZES.map((s) => request(Number(s.value))) : [], cb.boardLoading);
-  const ready = (km: number) => centre !== null && sizeReady(request(km));
   const { board, windNow } = cb;
   return (
     <div className="lc-board-ctl" role="group" aria-label="Simulated board">
@@ -220,59 +187,22 @@ export function BoardControls({ board: cb }: { board: CommandBoard }) {
           <span className="lc-clock" aria-label={`Simulated board clock ${simClock(board.minute)}`} title="Simulated board clock">
             <span className="lc-num">{simClock(board.minute)}</span>
           </span>
-          <Button size="sm" variant="secondary" onClick={() => cb.setRunning((r) => !r)} aria-pressed={!cb.running}>
-            {cb.running ? "Pause" : "Resume"}
-          </Button>
-          <SegmentedControl label="Board clock speed" options={BOARD_SPEEDS} value={cb.speed} onChange={cb.setSpeed} />
-          <Button
-            size="sm"
-            variant={cb.igniteMode ? "primary" : "secondary"}
-            aria-pressed={cb.igniteMode}
-            onClick={() => cb.setIgniteMode((m) => !m)}
-          >
-            {cb.igniteMode ? "Click the map to start a fire" : "Add fire"}
-          </Button>
+          <ClockState board={cb} />
+          <PauseButton board={cb} />
+          <BoardSpeedSlider board={cb} />
           <details ref={ref} className="lc-board-more">
             <summary className={buttonClass({ variant: "ghost", size: "sm" })}>Conditions</summary>
             <div className="lc-menu-pop lc-board-pop" role="group" aria-label="Simulated board conditions">
-              <span className="lc-board-label">Fire activity</span>
-              <SegmentedControl
-                label="Fire activity"
-                options={ACTIVITIES.map((a) => ({ value: a, label: ACTIVITY[a].label, title: `${ACTIVITY[a].label} fire activity` }))}
-                value={cb.activity}
-                onChange={cb.changeActivity}
-              />
-              <span className="lc-board-label">Wind</span>
-              <SegmentedControl
-                label="Wind"
-                options={WEATHER_PRESETS.map((p) => ({ value: p.value, label: p.label, title: p.title }))}
-                value={cb.weather}
-                onChange={cb.setWeather}
-              />
-              <span className="lc-board-label">Board size</span>
-              <SegmentedControl
-                label="Board size, km from the centre to each edge"
-                options={BOARD_SIZES.map((s) => ({
-                  ...s,
-                  title: `${s.title}. ${readinessLabel(ready(Number(s.value)), Number(s.value) * 1000, boardCellMetersFor(Number(s.value) * 1000))}`,
-                }))}
-                value={String(cb.boardRadius / 1000)}
-                onChange={(value) => cb.setBoardRadius(Number(value) * 1000)}
-              />
-              <span className="lc-dim">
-                {cb.boardLoading
-                  ? "Loading the board\u2026"
-                  : `About ${cb.boardRadius / 500} \u00d7 ${cb.boardRadius / 500} km, ${boardCellMetersFor(cb.boardRadius)} m cells. ${readinessLabel(
-                      ready(cb.boardRadius / 1000),
-                      cb.boardRadius,
-                      boardCellMetersFor(cb.boardRadius),
-                    )}.`}
-              </span>
-              {windNow ? (
-                <span className="lc-dim lc-num" title={board.env.spread.wind.label}>
-                  Wind now {windNow.speedMetersPerSecond.toFixed(1)} m/s from {Math.round(windNow.fromDegrees)}°
+              <BoardSizeControl board={cb} />
+              <span className="lc-board-label">Wind and fuel moisture</span>
+              {board.conditions && windNow ? (
+                <span className="lc-dim lc-num">
+                  Assumed in Simulation Studio ({board.conditions.tag}): {windNow.speedMetersPerSecond.toFixed(1)} m/s from{" "}
+                  {Math.round(windNow.fromDegrees)}°, {board.conditions.moistureLabel} fuel moisture
                 </span>
-              ) : null}
+              ) : (
+                <span className="lc-dim">From the Simulation Studio run that starts a fire; no fire yet.</span>
+              )}
               <Button
                 size="sm"
                 variant="ghost"
@@ -290,6 +220,47 @@ export function BoardControls({ board: cb }: { board: CommandBoard }) {
       ) : (
         <span className="lc-dim">Board loading…</span>
       )}
+    </div>
+  );
+}
+
+/** The page's only chrome: a pulsing "Live" pill over the map with the incident name and drill
+ *  clock. A drill still says "exercise", so it never reads as a real incident; once the command
+ *  data stops updating the pulse stops and it says "Offline" or "Stale" with the age instead. */
+export function LiveBadge({
+  data,
+  receivedAt,
+  now,
+  connectionError,
+}: {
+  data: CommandResponse;
+  receivedAt: number | null;
+  now: number;
+  connectionError: string | null;
+}) {
+  const age = receivedAt === null ? 0 : now - receivedAt;
+  const stale = connectionError !== null || age > STALE_AFTER_MS;
+  const name = data.incident?.name ?? "Live command";
+  const exercise = (data.incident?.mode ?? "exercise") !== "live";
+  const title = exercise ? name.replace(/\s+exercise$/i, "") : name;
+  const drill = data.drill;
+  const t = drill && drill.started_at !== null ? drillNowAt(drill, receivedAt, now) : null;
+  return (
+    <div
+      className={`lc-live${stale ? " lc-live--stale" : ""}`}
+      role="status"
+      title={connectionError ?? undefined}
+    >
+      <span className="lc-live-dot" aria-hidden="true" />
+      <span className="lc-live-word">
+        {stale ? `${connectionError ? "Offline" : "Stale"}, ${elapsed(age)}` : exercise ? "Live exercise" : "Live"}
+      </span>
+      <span className="lc-live-name">{title}</span>
+      {t ? (
+        <span className="lc-live-clock lc-num" aria-label={`Drill time ${drillClock(t, true)} UTC, ${drillDate(t)}`}>
+          {drillClock(t, true)} UTC
+        </span>
+      ) : null}
     </div>
   );
 }

@@ -26,6 +26,7 @@ import { APPARATUS_KINDS, type ApparatusCounts } from "./apparatus";
 import {
   DISPLAY_STEP_MINUTES,
   MAX_ENABLED_IGNITIONS,
+  MAX_REPORT_MINUTE,
   MAX_WIND_SPEED_MPH,
   MIN_WIND_SPEED_MPH,
   STUDIO_HORIZON_CHOICES,
@@ -98,7 +99,12 @@ export function createIgnition(
   const used = new Set(existing.map((ignition) => ignition.name));
   let number = 1;
   while (used.has(`F${number}`)) number += 1;
-  return { id: newId(), name: `F${number}`, location, startMinute, enabled: true };
+  return { id: newId(), name: `F${number}`, location, startMinute, reportMinute: null, enabled: true };
+}
+
+/** A user-set report minute (a number), as opposed to null/absent = modelled delay. */
+export function isSetReport(minute: number | null | undefined): minute is number {
+  return typeof minute === "number" && Number.isFinite(minute);
 }
 
 function isFiniteNumber(value: unknown): value is number {
@@ -274,6 +280,17 @@ export const validateScenario: ValidateScenario = (scenario) => {
         `Start must be a whole number of minutes from 0 to ${Number.isFinite(horizon) ? horizon - 1 : "the horizon"}.`,
       );
     }
+    const reported = ignition.reportMinute;
+    if (
+      reported !== undefined &&
+      reported !== null &&
+      (!Number.isInteger(reported) || reported < ignition.startMinute || reported > MAX_REPORT_MINUTE)
+    ) {
+      report(
+        "reportMinute",
+        `Report time must be a whole number of minutes, no earlier than the start and at most T+${MAX_REPORT_MINUTE / 60}:00.`,
+      );
+    }
   }
 
   if (enabledCount < 1) {
@@ -300,6 +317,7 @@ export function toSolverInput(scenario: StudioScenario): ScheduledFireInput {
         id: ignition.id,
         location: ignition.location,
         startMinute: ignition.startMinute,
+        ...(isSetReport(ignition.reportMinute) ? { reportMinute: ignition.reportMinute } : {}),
       })),
     frameMinutes: frameMinutesFor(scenario),
   };
@@ -331,7 +349,7 @@ function solverFingerprint(scenario: StudioScenario) {
     firefighting: scenario.firefighting?.enabled ? scenario.firefighting : null,
     ignitions: scenario.ignitions
       .filter((ignition) => ignition.enabled)
-      .map((i) => [i.id, i.location.latitude, i.location.longitude, i.startMinute]),
+      .map((i) => [i.id, i.location.latitude, i.location.longitude, i.startMinute, i.reportMinute ?? null]),
   };
 }
 
@@ -395,6 +413,8 @@ export function parseScenario(json: unknown): {
         name: raw.name.slice(0, MAX_NAME_LENGTH),
         location: { latitude: location.latitude, longitude: location.longitude },
         startMinute: raw.startMinute,
+        // Optional (scenarios saved before report times existed have none): null = modelled.
+        reportMinute: isFiniteNumber(raw.reportMinute) ? raw.reportMinute : null,
         enabled: raw.enabled,
       });
     });

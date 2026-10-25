@@ -33,6 +33,7 @@ import type { LonLat } from "../dispatch/area";
 import { groundMeters } from "../dispatch/area";
 import { lonLatToMercator, type LandscapeGrid } from "../fire/landscape";
 import type { ScheduledFireInput, ScheduledFireRun } from "../fire/scheduledTypes";
+import type { GeoPoint } from "../fire/spread";
 import {
   AIR_KINDS,
   AIR_LABELS,
@@ -353,8 +354,10 @@ export interface AircraftInputs {
   baseline: ScheduledFireRun;
   counts: ApparatusCounts;
   bases: readonly AirBase[] | null;
-  /** Minute the fire is reported (the first ignition). */
+  /** Minute the fire is reported (the first fire reported). */
   reportMinute: number;
+  /** The fire reported first, where the aircraft fly; absent = the first ignition. */
+  fire?: GeoPoint;
   /** T+0 as UTC epoch ms (from the scenario clock). */
   startMs: number;
   nightHelicopters: boolean;
@@ -401,8 +404,8 @@ function ringSides(grid: LandscapeGrid, ring: Uint8Array, anchorDegrees: number)
 export function planAircraft(inputs: AircraftInputs): AircraftPlan {
   const { grid, input, baseline, counts, bases, reportMinute, startMs, nightHelicopters } = inputs;
   const horizon = input.settings.horizonMinutes;
-  const first = [...input.sources].sort((a, b) => a.startMinute - b.startMinute)[0];
-  const fire: LonLat = [first.location.longitude, first.location.latitude];
+  const target = inputs.fire ?? [...input.sources].sort((a, b) => a.startMinute - b.startMinute)[0].location;
+  const fire: LonLat = [target.longitude, target.latitude];
   const windKnots = input.settings.windSpeedMph / MPH_PER_KNOT;
   const effect = windEffect(windKnots);
   const notes: string[] = [];

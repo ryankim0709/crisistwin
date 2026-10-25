@@ -1,0 +1,69 @@
+{
+  "kind": "crisistwin_snapshot_assumptions",
+  "version": 1,
+  "doc": "docs/scenario-snapshots.md. Read by livecore.snapshot (python manage.py live_seed_snapshots). `defaults` apply to every incident; `incidents.<id>` overrides them key by key (objects merge, lists and scalars replace). Shares are fractions of households; counts are households, persons or vehicles. Coordinates are WGS84 [lon, lat].",
+  "defaults": {
+    "occupants": {
+      "method": "distribution",
+      "distribution": {"1": 0.28, "2": 0.34, "3": 0.15, "4": 0.13, "5": 0.06, "6": 0.04},
+      "note": "ASSUMPTION (synthetic): persons per household, a stated shape close to the US national pattern (about 2.5 persons per household); not sourced in the repo and not specific to the area. Apportioned per zone by largest remainder, then shuffled with the incident seed."
+    },
+    "vehicles": {
+      "method": "distribution",
+      "distribution": {"0": 0.08, "1": 0.37, "2": 0.39, "3": 0.12, "4": 0.04},
+      "match_zone_vehicles": true,
+      "note": "ASSUMPTION (synthetic): share of households with 0/1/2/3/4 vehicles. With match_zone_vehicles the per-household counts are then nudged (never changing who is carless) so each zone's sum equals the drill package's zone vehicles (homes x 1.6, also synthetic)."
+    },
+    "evacuating_vehicles": {
+      "cap_per_household": 2,
+      "note": "A household takes at most this many of its vehicles: evacuating = min(vehicles, cap). Matches the Camp demand table's vehicles_taken_cap = 2 and docs/people-data.md (Wong et al. 2020: 1.52-1.65 vehicles used per household when capped at 2)."
+    },
+    "needs_transport": {
+      "rule": "vehicles == 0",
+      "note": "A household with no vehicle needs transport. It stays in the snapshot with its occupants (population is conserved); it adds no evacuating vehicle. A household with unknown vehicles is not flagged."
+    },
+    "positions": {
+      "jitter_m": 25,
+      "note": "Household points are synthetic. Studio packages: the dispatch area's synthetic home points (every ~40 m along residential streets) when the cached area that built the package is still in MongoDB; otherwise, and for Camp, a road node inside the zone picked with the incident seed and moved up to jitter_m. Never real addresses."
+    },
+    "engines": {
+      "state_name_patterns": ["CAL FIRE", "CALFIRE", "CDF"],
+      "state_station": {"kinds": ["type3_engine"], "min": 2, "max": 3},
+      "local_station": {"kinds": ["type1_engine", "type3_engine"], "min": 1, "max": 3},
+      "status_shares": {"committed": 0.25, "out_of_service": 0.08},
+      "guarantee": {"zero_available_stations": 1, "multi_engine_stations": 2, "min_available_engines": 1},
+      "note": "ASSUMPTION (synthetic): no staffing or apparatus data. Engine count per station = min + (sha1(incident|station) mod (max - min + 1)); kinds cycle through `kinds` (a local station's first engine is a Type 1 structure engine, the rest Type 3). Each engine's status at T+0 comes from sha1(incident|engine) against status_shares. Guarantees: at least `zero_available_stations` stations start with every engine committed (the station with the lowest sha1(incident|station|zero)), at least `multi_engine_stations` stations hold two or more engines, and at least `min_available_engines` engines start available."
+    },
+    "extra_stations": []
+  },
+  "incidents": {
+    "camp-2018-drill": {
+      "occupants": {
+        "method": "acs_zone_population",
+        "note": "ESTIMATED: each zone's occupants sum to its ACS 2014-2018 total population in the drill extract (replay bundle demand.zones.population_in_extract; includes group quarters). The per-household split uses the default distribution, then is adjusted to hit the zone total."
+      },
+      "vehicles": {
+        "method": "acs_zone",
+        "note": "ESTIMATED: per zone, carless households = ACS households_no_vehicle_in_extract (B25044); one-vehicle households n1 = 2(H - carless) - evacuating_vehicles, so min(vehicles, 2) sums exactly to the bundle's evacuating_vehicles; the rest hold 2 plus a share of the zone's ACS vehicles_available_total (scaled to the extract). Zones without vehicles_available_total use the pooled Camp ratio of extra vehicles per 2+ vehicle household."
+      },
+      "extra_stations": [
+        {
+          "id": "ST81", "name": "Paradise Fire Station 81 (Birch St at Black Olive Dr)",
+          "coord": [-121.624609, 39.753808], "basis": "observed", "class": "local",
+          "source_id": "nist-nettra-supplement",
+          "locator": "https://nvlpubs.nist.gov/nistpubs/TechnicalNotes/NIST.TN.2252sup.pdf#page=221 (TRA-L, Appendix I p. I-45)"
+        },
+        {
+          "id": "ST82", "name": "Paradise Fire Station 82 (Pearson Rd)",
+          "coord": [-121.593944, 39.748772], "basis": "observed", "class": "local",
+          "source_id": "nist-nettra-supplement",
+          "locator": "https://nvlpubs.nist.gov/nistpubs/TechnicalNotes/NIST.TN.2252sup.pdf#page=230 (TRA-O, Appendix I p. I-54)"
+        },
+        {"id": "SYN1", "name": "Synthetic station A (approximate Chico point)", "coord": [-121.837, 39.7285], "basis": "synthetic", "class": "state"},
+        {"id": "SYN2", "name": "Synthetic station B (approximate Chico point)", "coord": [-121.77, 39.735], "basis": "synthetic", "class": "state"},
+        {"id": "SYN3", "name": "Synthetic station C (approximate Chico point)", "coord": [-121.8, 39.645], "basis": "synthetic", "class": "state"},
+        {"id": "SYN4", "name": "Synthetic station D (approximate Chico point)", "coord": [-121.835, 39.78], "basis": "synthetic", "class": "state"}
+      ]
+    }
+  }
+}

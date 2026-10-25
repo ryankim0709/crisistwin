@@ -1,6 +1,7 @@
 /**
  * The /demo autopilot: watches the board on the simulation clock and calls the AI commander
- * (POST /api/demo/decide) only when the monitor (observation.ts wakeReasons) finds a reason.
+ * (POST /api/demo/decide) only when the monitor (observation.ts wakeReasons) finds a reason. The
+ * board is AI agent only (no automatic dispatch), so a newly reported fire calls it at once.
  * At most one call is in flight; the clock keeps running while it thinks, and its orders apply
  * at the board's minute when they arrive (the page's `apply`, which validates through
  * model.applyOrder). Disabling the autopilot or unmounting aborts the call so a late response
@@ -16,6 +17,7 @@ import type { Board, RouteOption, ZoneForecast } from "./model";
 import {
   MONITOR_EVERY_MINUTES,
   buildObservation,
+  newReportedFireIds,
   rememberDecision,
   wakeReasons,
   type MonitorMemory,
@@ -105,6 +107,8 @@ export function useDemoAgent(opts: DemoAgentOptions): DemoAgent {
   const previousRef = useRef<DemoObservation["previous"]>(null);
   const lastBucketRef = useRef<number | null>(null);
   const backoffUntilRef = useRef(-Infinity);
+  /** Reported fires already sent to the agent in an observation (each new fire triggers at most one immediate call). */
+  const calledFireIdsRef = useRef(new Set<string>());
   const idRef = useRef(0);
 
   // Aborting rejects the stream; its `finally` then clears the in-flight state.
@@ -114,6 +118,7 @@ export function useDemoAgent(opts: DemoAgentOptions): DemoAgent {
     if (abortRef.current) return;
     const { routes, forecasts } = optsRef.current;
     const observation = buildObservation(current, routes, forecasts, reasons, previousRef.current);
+    for (const f of observation.fires) calledFireIdsRef.current.add(f.id);
     const seen = rememberDecision(current, forecasts);
     const minute = observation.clock.minute;
     const controller = new AbortController();
@@ -188,6 +193,13 @@ export function useDemoAgent(opts: DemoAgentOptions): DemoAgent {
     previousRef.current = null;
     lastBucketRef.current = null;
     backoffUntilRef.current = -Infinity;
+    calledFireIdsRef.current = new Set();
+    // A new board (reset, drill switch) starts a clean log.
+    setDecisions([]);
+    setError(null);
+    setThinking("");
+    setStreamText("");
+    setLastWoke([]);
   }, [board, cancel]);
 
   // A different incident: the log and error name the old drill's zones, fires and units.
@@ -206,13 +218,16 @@ export function useDemoAgent(opts: DemoAgentOptions): DemoAgent {
   }, [enabled, cancel]);
   useEffect(() => cancel, [cancel]);
 
-  // The monitor: once per MONITOR_EVERY_MINUTES of simulated time, while idle.
+  // The monitor: once per MONITOR_EVERY_MINUTES of simulated time, while idle. A newly reported
+  // fire the agent has not been shown yet is checked at once (on the board's next change, also
+  // inside an error backoff): nothing dispatches initial attack on this board but the agent.
   useEffect(() => {
     if (!enabled || !board || abortRef.current) return;
+    const urgent = newReportedFireIds(board, memoryRef.current).some((id) => !calledFireIdsRef.current.has(id));
     const bucket = Math.floor(board.minute / MONITOR_EVERY_MINUTES);
-    if (bucket === lastBucketRef.current) return;
+    if (bucket === lastBucketRef.current && !urgent) return;
     lastBucketRef.current = bucket;
-    if (board.minute < backoffUntilRef.current) return;
+    if (board.minute < backoffUntilRef.current && !urgent) return;
     const reasons = wakeReasons(board, optsRef.current.forecasts, memoryRef.current);
     if (reasons.length > 0) call(board, reasons);
   }, [board, version, enabled, call]);

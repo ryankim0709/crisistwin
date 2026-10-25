@@ -9,7 +9,8 @@
  * - Where: around the unsuppressed fire as it would be at a target minute T (its outline,
  *   the "isochrone" T), one cell outside it. Lines too close are outrun; lines too far are
  *   too long to finish. T is the search variable.
- * - How: crews arrive `responseMinutes` after the first ignition, anchor at one point of
+ * - How: crews arrive `responseMinutes` after the first ignition (or its user-set report
+ *   time; driven from stations they leave when the first fire is reported), anchor at one point of
  *   that outline and build along both flanks at once, splitting the resources between the
  *   two directions. Within a direction resources leapfrog: the line is cut into chunks and
  *   chunk j goes to resource j mod n, so several crews work the same flank in parallel.
@@ -31,7 +32,7 @@ import {
   simulateScheduledFireSpread,
   type ControlLines,
 } from "../fire/spread";
-import type { ScheduledFireInput, ScheduledFireRun } from "../fire/scheduledTypes";
+import type { IgnitionSource, ScheduledFireInput, ScheduledFireRun } from "../fire/scheduledTypes";
 import type { InitialAttackResult } from "./initialAttack";
 import {
   AIR_KINDS,
@@ -140,6 +141,68 @@ export function ignitionReportDelayMinutes(
     wildland: !developed,
     alreadyReported: false,
   }).totalMinutes;
+}
+
+/** Where an ignition's report minute came from: the user set it, or the delay is modelled. */
+export type ReportSource = "set" | "modelled";
+
+/**
+ * Minute an ignition is reported to dispatch: the user's set `reportMinute` (an assumption,
+ * never earlier than the start), else its start plus the modelled delay above.
+ */
+export function ignitionReportMinute(
+  grid: LandscapeGrid | null,
+  ignition: Pick<IgnitionSource, "location" | "startMinute" | "reportMinute">,
+  settings: FirefightingSettings,
+): { minute: number; source: ReportSource } {
+  const set = ignition.reportMinute;
+  if (typeof set === "number" && Number.isFinite(set)) {
+    return { minute: Math.max(set, ignition.startMinute), source: "set" };
+  }
+  return {
+    minute:
+      ignition.startMinute +
+      ignitionReportDelayMinutes(grid, ignition.location, ignition.startMinute, settings),
+    source: "modelled",
+  };
+}
+
+/**
+ * The fire dispatch hears about first, where crews and aircraft are sent: the earliest report
+ * minute (ties: the earlier start, then list order). Null with no fires.
+ */
+export function firstReportedFire<T extends Pick<IgnitionSource, "location" | "startMinute" | "reportMinute">>(
+  grid: LandscapeGrid | null,
+  fires: readonly T[],
+  settings: FirefightingSettings,
+): { fire: T; reportMinute: number; reportSource: ReportSource } | null {
+  let best: { fire: T; reportMinute: number; reportSource: ReportSource } | null = null;
+  for (const fire of fires) {
+    const { minute, source } = ignitionReportMinute(grid, fire, settings);
+    if (
+      !best ||
+      minute < best.reportMinute ||
+      (minute === best.reportMinute && fire.startMinute < best.fire.startMinute)
+    ) {
+      best = { fire, reportMinute: minute, reportSource: source };
+    }
+  }
+  return best;
+}
+
+/**
+ * Minute a fixed response time counts from (crews not driven from stations): the earliest
+ * ignition, or its set report minute when the user set one, since nobody responds before
+ * the fire is reported.
+ */
+export function responseFromMinute(sources: readonly IgnitionSource[]): number {
+  return Math.min(
+    ...sources.map((s) =>
+      typeof s.reportMinute === "number" && Number.isFinite(s.reportMinute)
+        ? Math.max(s.reportMinute, s.startMinute)
+        : s.startMinute,
+    ),
+  );
 }
 
 export const FIRST_ALARM: ApparatusCounts = {
@@ -280,7 +343,7 @@ export function crewArrivals(
   if (dispatched && dispatched.length > 0) {
     return dispatched.filter(({ kind }) => GROUND_APPARATUS[kind].line !== null);
   }
-  const minute = Math.min(...input.sources.map((s) => s.startMinute)) + settings.responseMinutes;
+  const minute = responseFromMinute(input.sources) + settings.responseMinutes;
   return lineBuilders(settings).map((kind) => ({ kind, minute }));
 }
 
@@ -702,9 +765,10 @@ export function planFirefighting(
 ): FirefightingResult {
   const horizon = input.settings.horizonMinutes;
   const resources = crewArrivals(settings, input, dispatched);
-  // The first fire reaches dispatch after its call-in and processing delay (response/report.ts).
-  const first = [...input.sources].sort((a, b) => a.startMinute - b.startMinute)[0];
-  const reportMinute = first ? first.startMinute + ignitionReportDelayMinutes(grid, first.location, first.startMinute, settings) : 0;
+  // The first fire reported reaches dispatch at the user's set report time, else after its
+  // modelled call-in and processing delay (response/report.ts).
+  const first = firstReportedFire(grid, input.sources, settings);
+  const reportMinute = first ? first.reportMinute : 0;
   const counts = apparatusCounts(settings);
   const anyAir = AIR_KINDS.some((kind) => (counts[kind] ?? 0) > 0);
   const aircraft = anyAir
@@ -715,6 +779,7 @@ export function planFirefighting(
         counts,
         bases: air?.bases ?? null,
         reportMinute,
+        fire: first ? first.fire.location : undefined,
         startMs: startMsOf(settings),
         nightHelicopters: settings.nightHelicopters === true,
       })

@@ -6,13 +6,18 @@ time: reads the drill clock, open tasks and road state over HTTP, steps the pure
 The units show on the console (tagged "sim") and on phones. Stop with Ctrl-C (or ``--duration``);
 their locations are removed on exit.
 
-Units are engines at the CAL FIRE-layer stations nearest the fire estimate at the drill's
-current time (tools/ca_fire_bases.json via ``api.suppression_bases.load_bases``; local-only,
+With a scenario resource snapshot for the incident (docs/scenario-snapshots.md; ``live_seed_snapshots``)
+the units are the snapshot's engines that are available at T+0, one unit per engine (its
+``engine_id`` is the unit id, its station the start point), nearest the fire first; ``--units``
+then only caps the count (default: all of them). Committed and out-of-service engines never
+join. ``--no-snapshot`` skips this. Without a snapshot, units are engines at the CAL FIRE-layer
+stations nearest the fire estimate at the drill's current time (tools/ca_fire_bases.json via ``api.suppression_bases.load_bases``; local-only,
 no open licence), typed, counted and turned out from the suppression data, and routed per
 road-access class (``livecore.apparatus``). Without the bases file (or ``--no-bases``) they
 fall back to the assumed Chico points and type table, which the command prints.
 
-    python manage.py live_sim_responders --units 4 --speed-up 1 --base http://127.0.0.1:8000
+    python manage.py live_sim_responders --speed-up 1 --base http://127.0.0.1:8000             # snapshot engines
+    python manage.py live_sim_responders --no-snapshot --units 4 --base http://127.0.0.1:8000
 """
 
 import json
@@ -24,19 +29,28 @@ from datetime import UTC, datetime
 
 from django.core.management.base import BaseCommand, CommandError
 
+from api.live import snapshots
 from api.live.drillcache import get_index
 from api.suppression_bases import load_bases
+from livecore.apparatus import snapshot_apparatus
 from livecore.drill import INCIDENT_ID, parse_time
 from livecore.fire import estimate_fire
 from livecore.geo import centroid
 from livecore.responders_sim import Fleet, World, fleet_apparatus
+
+DEFAULT_UNITS = 4
+"""Units without a snapshot when ``--units`` is not given."""
 
 
 class Command(BaseCommand):
     help = "Join simulated responders and drive them through the live drill's tasks (all labelled simulated)."
 
     def add_arguments(self, parser):
-        parser.add_argument("--units", type=int, default=4)
+        parser.add_argument("--units", type=int, default=None,
+                            help="With a snapshot: at most this many available engines (default all); "
+                                 f"without one: this many units (default {DEFAULT_UNITS}).")
+        parser.add_argument("--no-snapshot", action="store_true",
+                            help="Ignore the incident's scenario resource snapshot (stations and engines).")
         parser.add_argument("--speed-up", type=float, default=1.0,
                             help="Units drive and work this many times faster than the assumption table (demo knob).")
         parser.add_argument("--base", default="http://127.0.0.1:8000", help="Server origin.")
@@ -80,17 +94,29 @@ class Command(BaseCommand):
         drill = get_index(inc).drill
         _, dev = self.http("POST", "devices", None, {}, ok=(200, 201))
         self.clock_token = dev["token"]  # a civilian token only reads the drill clock
+        if opts["units"] is not None and opts["units"] < 1:
+            raise CommandError("--units must be at least 1.")
         apparatus = None
-        bases = None if opts["no_bases"] else load_bases()
-        if bases is not None:
-            _, sit = self.http("GET", f"incidents/{inc}/situation?zones=0", self.clock_token)
-            fire = estimate_fire(drill, parse_time(sit["drill"]["replay_now"])).geometry
-            snapshots = drill.perimeters or drill.fronts
-            incident = centroid(fire) if fire is not None else centroid(snapshots[0].geometry) if snapshots else None
-            if incident is not None:
-                apparatus = fleet_apparatus(drill, bases["bases"], incident, opts["units"]) or None
-                self.stdout.write(f"incident point {incident[0]:.4f},{incident[1]:.4f} (fire estimate centroid)")
-        fleet = Fleet(drill, opts["units"], seed=opts["seed"], incident_id=inc, tempo=opts["speed_up"],
+        n_units = opts["units"] or DEFAULT_UNITS
+        incident = self.incident_point(drill, inc)
+        snapshot = None if opts["no_snapshot"] else snapshots.current(inc)
+        if snapshot is not None:
+            engines = snapshot_apparatus(snapshots.stations(inc, snapshot["snapshot_id"]), incident)
+            if opts["units"]:
+                engines = engines[:opts["units"]]
+            if engines:
+                apparatus, n_units = engines, len(engines)
+                t = snapshot["totals"]
+                self.stdout.write(f"scenario snapshot {snapshot['snapshot_id']}: {len(engines)} of "
+                                  f"{t['engines_available']} available engines join ({t['engines_total']} engines at "
+                                  f"{t['stations']} stations; committed and out-of-service engines stay home)")
+            else:
+                self.stdout.write(f"scenario snapshot {snapshot['snapshot_id']} has no available engine; "
+                                  "falling back to the station data")
+        bases = None if apparatus is not None or opts["no_bases"] else load_bases()
+        if bases is not None and incident is not None:
+            apparatus = fleet_apparatus(drill, bases["bases"], incident, n_units) or None
+        fleet = Fleet(drill, n_units, seed=opts["seed"], incident_id=inc, tempo=opts["speed_up"],
                       apparatus=apparatus)
         tokens: dict[str, str] = {}
         self.locations = 0
@@ -123,6 +149,16 @@ class Command(BaseCommand):
                 except CommandError:
                     pass
             self.stdout.write(f"stopped; {self.locations} location updates sent, locations removed")
+
+    def incident_point(self, drill, inc):
+        """Centroid of the fire estimate at the drill's current time (else the first fire snapshot)."""
+        _, sit = self.http("GET", f"incidents/{inc}/situation?zones=0", self.clock_token)
+        fire = estimate_fire(drill, parse_time(sit["drill"]["replay_now"])).geometry
+        fires = drill.perimeters or drill.fronts
+        point = centroid(fire) if fire is not None else centroid(fires[0].geometry) if fires else None
+        if point is not None:
+            self.stdout.write(f"incident point {point[0]:.4f},{point[1]:.4f} (fire estimate centroid)")
+        return point
 
     def tick(self, fleet, tokens, drill, inc, invite):
         any_token = next(iter(tokens.values()), None)

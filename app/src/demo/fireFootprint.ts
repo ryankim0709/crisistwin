@@ -68,7 +68,7 @@ export function firePolygons(board: Board, fire: Fire): FirePerimeter[] {
 
 /**
  * Every fire on the board (burning, contained, out) as footprint polygons at board.minute, one
- * feature per polygon. For map layers (DemoMap.tsx and the merged command map).
+ * feature per polygon. For map layers (demo/boardMapLayers.ts on /live, DemoMap.tsx).
  */
 export function boardFireFeatures(board: Board): GeoJSON.FeatureCollection<GeoJSON.Polygon, FireFeatureProperties> {
   const features: GeoJSON.Feature<GeoJSON.Polygon, FireFeatureProperties>[] = [];

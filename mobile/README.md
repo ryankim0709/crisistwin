@@ -139,6 +139,11 @@ and **Need help** check-ins. Responders see their assigned checks in **Tasks**. 
 is per zone and is approved by a controller on the web (`/live`), or published
 automatically for a pure reroute around a confirmed block or fire.
 
+People see the street address nearest them ("Near 21 Miramonte Rd, Orinda"), never a planning
+zone id: `LocationProvider.placeName` looks it up with MapKit's `MKReverseGeocodingRequest`, which
+sends the coordinate to Apple (as Apple Maps search already does for the meeting point); it is not
+sent to the CrisisTwin server. A new lookup runs after moving 75 m, at most every 15 s.
+
 The phone polls `GET /api/live/incidents/camp-2018-drill/situation` and finds
 its zone on the device, so a civilian's location leaves the phone only inside a
 report or a **Need help** check-in. Responders can opt in to sharing their latest
@@ -152,26 +157,72 @@ it locally, start the backend and drill as described in
 ### Voice
 
 A mic button on Map (above **Report**) and an entry on Home open a voice sheet. The person
-speaks; the phone records a short 16 kHz mono WAV and sends it with a little context (zone name,
+speaks, the phone turns the speech into a transcript, sends it with a little context (zone name,
 the guidance text the screen shows, the pending proposal and the last 6 turns) to
-`POST /api/live/incidents/{id}/voice`, which transcribes it with Cartesia, lets Claude pick one
-proposed action and returns a spoken reply. Contract, limits and errors:
-[live-reports.md "Voice mode"](../docs/live-reports.md#voice-mode). The phone plays the server's
-audio, or speaks the reply with the on-device voice when the server sent none (no Cartesia key,
-or synthesis failed). Coordinates are not sent to the voice endpoint.
+`POST /api/live/incidents/{id}/voice`, where Claude picks at most one proposed action and writes a
+short spoken reply. Contract, limits and errors:
+[live-reports.md "Voice mode"](../docs/live-reports.md#voice-mode). Coordinates are not sent to the
+voice endpoint. The phone does send its zone id (`context.zone_id`), so the server can build the
+facts a question is answered from, and under a Claude reply it shows which facts were used, for
+example "From: published guidance · reported hazards · fire estimate" (nothing for a Jev reply or
+when none were used); see [Grounded answers](../docs/live-reports.md#grounded-answers).
 
-The model only proposes. The phone asks before it sends any report or check-in, and a confirmed
+Streaming path (voice v2). The phone asks the server for a short-lived Cartesia token
+(`POST .../voice/token`, 300 s, speech-to-text and text-to-speech only, so the Cartesia key stays on
+the server), then streams microphone audio to Cartesia over a WebSocket and shows live captions as
+the person talks. It posts the transcript with `"stream": true` and receives the reply as NDJSON
+while the model writes it, forwards the text to Cartesia's text-to-speech WebSocket and plays the
+audio as it arrives, so speech starts before the reply is complete. Tapping the screen or talking
+over a reply stops it and starts listening again (barge-in); on the speakerphone this depends on
+Apple's echo cancellation, which has not been tested. Microphone audio goes to Cartesia directly and
+never to the CrisisTwin server on this path. Details and the wire shapes:
+[live-reports.md "Streaming voice"](../docs/live-reports.md#streaming-voice-token-endpoint-and-ndjson-replies).
+
+Fallback. If the server has no Cartesia or Anthropic key (the token endpoint answers 503), or
+Cartesia cannot be reached, the sheet says it is using on-device voice, accepts typed input, sends
+the typed text on the non-streaming path and speaks the reply with the on-device voice. The older
+recorded-WAV path (`audio_b64`, server-side Cartesia) still exists on the server; the streaming
+code does not use it.
+
+When the server marks a hazard report `auto` (Jev was confident it is a first-hand account at the
+person's own position), the phone files it at once and says so ("Jev · 94% · filed automatically" under
+the reply). It never files a `help_needed` report or a check-in automatically, whatever the server sent.
+For 5 minutes the person can say "undo" or tap **Undo**: an unsent draft is deleted, and a sent report
+is withdrawn unless a responder has already acted on it. This is written against
+[live-reports.md "Decisions (Jev)"](../docs/live-reports.md#decisions-jev) and has not been run on a device.
+
+Otherwise the model only proposes. The phone asks before it sends any report or check-in, and a confirmed
 one goes through the existing report outbox or the check-in endpoint, so a report keeps the
 normal offline queue and gets its location on the phone when it is sent. While a proposal waits
 for an answer, the phone starts listening again by itself. The model can also open Home, Map,
 Reports, Plan or start directions.
 
-The app asks for microphone permission the first time voice mode records (usage string
-`NSMicrophoneUsageDescription` in `Info.plist`). The backend needs `ANTHROPIC_API_KEY` for any
-turn and `CARTESIA_API_KEY` for recorded audio (see
-[`app/backend/README.md`](../app/backend/README.md#voice-mode-post-apiliveincidentsidvoice));
-without them the endpoint answers 503. Code: `Features/Voice/` (`VoiceModels`, `VoiceAudio`,
-`VoiceAgent`, `VoiceView`). Voice mode has not been built or run on a simulator or device yet.
+The app asks for microphone permission the first time voice mode listens (usage string
+`NSMicrophoneUsageDescription` in `Info.plist`, which says the audio is streamed to Cartesia while
+you talk). Listening needs that permission; how the sheet behaves when it is refused has not been checked. The backend
+needs `ANTHROPIC_API_KEY` and `CARTESIA_API_KEY` for the token endpoint (see
+[`app/backend/README.md`](../app/backend/README.md#voice-mode-post-apiliveincidentsidvoice)).
+Code: `Features/Voice/` (`VoiceModels`, `VoiceAudio`, `CartesiaStreams`, `VoiceSession`,
+`VoiceAgent`, `VoiceView`, `DriveView`, `DriveAnnouncer`). Voice mode, including everything on this
+page about streaming, barge-in and Drive mode, has not been built or run on a simulator or a
+physical device yet. It is English only and needs a network connection for Cartesia speech.
+
+### Drive mode
+
+A **Drive mode** button next to **Talk to report** on Home opens a full-screen, voice-first view
+for use in a vehicle or with the phone out of reach. It shows the verdict and route line from the
+published guidance in large type, the live caption or last reply, any pending proposal with large
+**Send** and **Cancel** buttons, and one large **Tap to talk** target that fills most of the screen.
+**End drive** leaves the mode. The screen is kept awake while it is shown.
+
+Drive mode reads the guidance aloud without being asked: once on entry (it says it is a drill),
+again whenever the zone's guidance changes, and when the phone goes offline. The sentences are
+built on the phone from the published guidance fields with fixed wording (`DriveAnnouncer`); no LLM
+is involved, so an announcement says nothing the published guidance does not. They are spoken in a
+calm Cartesia voice at a slightly reduced speed, or with the on-device voice when Cartesia is
+unavailable. An announcement interrupts what the phone is saying but not a pending proposal.
+Talking over an announcement or a reply, or tapping, interrupts it (barge-in). The existing haptic
+and VoiceOver announcement on a guidance change are unchanged. This mode has not been built or run.
 
 ### Task board and road observations (ADR 0041)
 
@@ -292,7 +343,7 @@ mobile/
       Live/              Field-report models, store, outbox, location, map, report and responder views
       Broadcast/         Web simulation feed: broadcast model, poller, map and household guidance
       Family/            Family model, Keychain membership, server store, family view
-      Voice/             Voice mode: wire models, microphone and playback, agent controller, sheet
+      Voice/             Voice and Drive mode: wire models, audio engine, Cartesia streams, session, agent, sheet, drive view
     Resources/           Info.plist and adaptive color assets
 ```
 
@@ -378,8 +429,8 @@ instead; that has not been run on a simulator. It has not been checked on a
 physical device.
 
 Live drill and Family have not been built or run; the new backend endpoints have not been
-exercised. Voice mode has not been built or run on a simulator or device, and its backend
-endpoint has not been called with live provider keys.
+exercised. Voice mode and Drive mode (streaming speech, barge-in, announcements) have not been
+built or run on a simulator or device.
 
 My Plan was run on the same simulator: Apple Maps search, tap-to-place, save,
 reload after relaunch, the contact picker, and the share-sheet fallback were

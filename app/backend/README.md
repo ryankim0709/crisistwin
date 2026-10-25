@@ -252,7 +252,9 @@ browser; nothing here is stored.
   `livecore.routing` over the drill road graph. Distances are metres, `eta_min` minutes.
 - `POST /api/demo/decide[?incident=]` `{observation}` (at most 200 kB; 40/min) streams `application/x-ndjson`
   like `/api/dispatch/decide`: `thinking`/`text` lines, then one `orders` or `error` line. Claude
-  can `send_crew`, `release_crew`, `order_evacuation` or `order_resources` (`fire_id`, `resource`
+  can `send_crew`, `release_crew`, `order_evacuation` (`zone_id`, `destination_id`, `start_minute`:
+  absolute board minute departures start, `null` = now, at most 240 min ahead), `cancel_evacuation`
+  (`zone_id` of a scheduled zone) or `order_resources` (`fire_id`, `resource`
   one of `engine_strike_team`, `crew_strike_team`, `dozer_strike_team`, `airtanker`, `helicopter`,
   integer `count` up to 5/5/2/4/2; burning fires only); each order is validated against the ids
   in the observation (at most 20 per decision). See [docs/response-model.md](../../docs/response-model.md). Needs `ANTHROPIC_API_KEY` (else 503
@@ -267,6 +269,7 @@ per-zone guidance with controller proposals, check-ins and responder location. C
 Everything is a labeled drill of the 2018 Camp Fire; nothing is a real incident. It shares
 the `/api/live` prefix with the broadcast above but no code or collections (`live_*`).
 
+- Studio fires: `POST /api/live/studio-fires` (controller) publishes a simulated fire scenario for the active incident; `GET /api/live/incidents/<id>/studio-fires[?after=]` lists the newest 10 (`api/live/studio_fires.py`; [contract](../../docs/live-reports.md#studio-fires)).
 - Auth: `Authorization: Bearer <token>`. `POST /api/live/devices` issues civilian tokens;
   `POST /api/live/incidents/camp-2018-drill/join {"invite_code"}` issues responder tokens
   (`LIVE_INVITE_CODE`, unset -> 403). The controller needs no token while
@@ -281,6 +284,10 @@ the `/api/live` prefix with the broadcast above but no code or collections (`liv
   (simulated, about 1-3 s) gives the vehicles at risk and window metrics (`api/live/impact.py`).
 - `GET incidents/{id}/aar` (controller) returns the after-action report and drill score
   (`api/live/aar.py`; [contract](../../docs/live-reports.md#after-action-report)).
+- `GET incidents/{id}/snapshot` and `GET incidents/{id}/snapshot/households?zone_id=&limit=&after=` (any
+  live token): the scenario resource snapshot (households, stations, engines at T+0; `404 no_snapshot`
+  until `python manage.py live_seed_snapshots`; `api/live/snapshots.py`,
+  [contract](../../docs/scenario-snapshots.md)).
 - Not implemented yet: `POST incidents/{id}/route` returns 501.
 
 Local run (Docker MongoDB on 127.0.0.1:27017):
@@ -301,7 +308,8 @@ Skyway in Paradise (`evidence_class: "drill_fixture"`, note says synthetic).
 `python manage.py live_smoke` (same env, server running) checks the whole phone ↔ `/live` loop
 over HTTP in about 5 s, with no simulator or browser: report, triage, replan and approve,
 guidance on the phone, destination choice, check-ins, responder position and a check task. It
-writes synthetic drill data; run `live_drill --reset` afterwards.
+writes synthetic drill data; run `live_drill --reset` afterwards. Its replan/approve step needs
+`LIVE_PROPOSALS=true` on the server (off by default: `/live` follows the AI agent).
 
 `python manage.py live_compare_record --confirm-delay-min 5 --out /tmp/record-compare` (same env;
 no server, no database writes, about 1-2 min) is a simulated planning experiment: the live twin
@@ -327,10 +335,17 @@ one `RunManifest` per run and a paired comparison table. Simulated planning expe
 
 One turn of the phone's voice mode: speech in, a spoken reply and at most one proposed phone
 action out. Any live bearer token works; 12 turns per minute per device; nothing from a turn is
-stored. Code: `api/live/voice.py` (endpoint, validation, prompt) and `api/cartesia.py`
-(Cartesia speech-to-text `ink-whisper` and text-to-speech over stdlib `urllib`). Claude only
-proposes; the phone asks the person before it sends a report or check-in through the ordinary
-endpoints. Request and response shapes, action types, limits, error codes and what leaves the
+stored. Code: `api/live/voice.py` (endpoints, validation, prompt) and `api/cartesia.py`
+(Cartesia batch speech-to-text `ink-whisper`, batch text-to-speech and access-token minting over
+stdlib `urllib`). Two more things sit beside the batch turn: `POST /api/live/incidents/<id>/voice/token`
+returns a 300 s Cartesia token (`stt` and `tts` grants only; 6 per minute per device; 503
+`voice_unavailable` unless both `CARTESIA_API_KEY` and `ANTHROPIC_API_KEY` are set) so the phone can
+stream speech to and from Cartesia directly, and `"stream": true` on the turn returns the reply as
+NDJSON. When `TYPESAFE_API_KEY` is set, Jev
+(`api/jev.py`, `api/live/voice_decide.py`) decides clear turns first and Claude takes the rest. Either
+only proposes: the phone asks the person before it sends a report or check-in through the ordinary
+endpoints, except that a confident first-hand hazard report comes back `auto: true` for the phone to
+file, with undo. Request and response shapes, action types, limits, error codes and what leaves the
 phone: [docs/live-reports.md "Voice mode"](../../docs/live-reports.md#voice-mode).
 
 Environment (server-side only, never `VITE_*`; placeholders in `app/.env.example`):
@@ -338,10 +353,12 @@ Environment (server-side only, never `VITE_*`; placeholders in `app/.env.example
 | Variable | Required | Meaning |
 | --- | --- | --- |
 | `ANTHROPIC_API_KEY` | yes | Paid. Without it every voice turn answers 503 `voice_unavailable` |
-| `CARTESIA_API_KEY` | for audio | Paid Cartesia key for speech-to-text and text-to-speech. Without it, audio turns answer 503 `voice_unavailable`; `text` turns work and return `tts: "skipped"` |
+| `CARTESIA_API_KEY` | for audio and tokens | Paid Cartesia key for speech-to-text and text-to-speech. Stays on the server; the phone gets only short-lived tokens. Without it, audio turns and `voice/token` answer 503 `voice_unavailable`; `text` turns work (`tts: "skipped"`, or `"client"` when streaming) |
 | `CARTESIA_VOICE_ID` | no | Cartesia voice for replies. Default: Cartesia's documented example voice (`DEFAULT_VOICE_ID` in `api/cartesia.py`) |
 | `CARTESIA_TTS_MODEL` | no | Default `sonic-3.6` |
 | `VOICE_MODEL` | no | Claude model that interprets the turn. Default `claude-opus-5-5` |
+| `TYPESAFE_API_KEY` | no | Paid TypeSafe key for Jev (`api/jev.py`, `POST https://api.typesafe.ai/v1/systemone`, 4 s timeout). When set, Jev decides each turn first and Claude handles questions and anything Jev is unsure about; when unset, Claude handles every turn. `ANTHROPIC_API_KEY` is still required. See [Decisions (Jev)](../../docs/live-reports.md#decisions-jev) |
+| `JEV_MODEL` | no | Jev model id. Default `jev-latest` |
 
 Try it without a microphone, using a `text` turn (no audio, no Cartesia call). Start the backend
 and drill as in "Local run" above, with `ANTHROPIC_API_KEY` exported, then:
@@ -360,6 +377,39 @@ The answer has `transcript`, `reply` (for example "Report a fully blocked road h
 `evidence_class: "ai_interpretation"`. The wording and action come from the model and vary.
 Each call is paid Anthropic usage. This has not been run against a live key from this
 documentation change.
+
+The streaming path takes `text` only and needs `ANTHROPIC_API_KEY` but not Cartesia. `-N` turns off
+curl's buffering so the lines show up as the model writes them:
+
+```sh
+curl -N -X POST http://localhost:8000/api/live/incidents/camp-2018-drill/voice \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"text": "pentz road is completely blocked", "stream": true,
+       "context": {"zone": "Paradise Zone 4", "role": "civilian", "guidance": null,
+                   "pending": null, "history": []}}'
+```
+
+The answer is `application/x-ndjson`: several `{"type": "reply_delta", "text": "..."}` lines, one
+`{"type": "reply_end"}`, then a `{"type": "final", ...}` line with `reply`, `action`, `streamed`,
+`spoken_extra` and `tts: "client"` (or an `{"type": "error", ...}` line if the model call fails
+after the stream has started). Errors found before the model is called are ordinary JSON with an
+HTTP status. Line shapes: [docs/live-reports.md "Streaming
+voice"](../../docs/live-reports.md#streaming-voice-token-endpoint-and-ndjson-replies).
+
+The token endpoint, with the same `$TOKEN` (needs both keys; each call mints a real Cartesia
+token, which expires after 300 s):
+
+```sh
+curl -s -X POST http://localhost:8000/api/live/incidents/camp-2018-drill/voice/token \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+It answers `{"token": "...", "expires_in": 300, "version": "...", "stt": {...}, "tts": {...}}`
+with the WebSocket URLs, models, voice and audio formats the phone should use. Treat the token like
+a credential for five minutes: do not paste it into logs or screenshots.
+
+The streaming and token examples have not been run from this documentation change; the latency
+figures in the contract come from earlier runs on the local stack.
 
 ### Incident intelligence (`/api/intel/…`)
 

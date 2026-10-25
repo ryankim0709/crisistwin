@@ -237,7 +237,12 @@ export interface ReportContext {
 
 export interface ReportDelay {
   totalMinutes: number;
-  by: "911" | "camera" | "satellite" | "field_report";
+  /**
+   * How the dispatch centre learned of it. "studio": the report minute was set by the Simulation
+   * Studio user (a scenario assumption, not modelled); the board builds that record itself
+   * (demo/boardResponse.ts reportFor), reportDelay never returns it.
+   */
+  by: "911" | "camera" | "satellite" | "field_report" | "studio";
   /** Remoteness used, metres, and its NFPA 1720-style label. */
   remotenessM: number;
   night: boolean;

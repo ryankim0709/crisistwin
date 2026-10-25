@@ -37,6 +37,12 @@ export interface ScheduledIgnition {
   location: GeoPoint;
   /** Integer elapsed simulation minutes from scenario T+0. */
   startMinute: number;
+  /**
+   * Integer minute (same clock as `startMinute`) the fire is reported to dispatch, set by the
+   * user: startMinute <= reportMinute <= MAX_REPORT_MINUTE. Absent or null: not set, so the
+   * report delay is modelled (studio/firefighting.ts `ignitionReportDelayMinutes`).
+   */
+  reportMinute?: number | null;
   enabled: boolean;
 }
 
@@ -56,6 +62,8 @@ export interface StudioScenario {
   weather?: ScenarioWindRecord;
 }
 
+/** Latest settable report minute (24 h after T+0, the Live publish contract's bound). */
+export const MAX_REPORT_MINUTE = 1440;
 /** Configurable cap on enabled ignitions, bounding solve cost and map clutter. */
 export const MAX_ENABLED_IGNITIONS = 5;
 /** Horizons offered, minutes. */
@@ -73,7 +81,7 @@ export const MAX_WIND_SPEED_MPH = 60;
 /** One problem, attached to an ignition when `ignitionId` is set, else to the scenario. */
 export interface ScenarioIssue {
   ignitionId?: string;
-  field?: "location" | "startMinute" | "name" | "settings" | "ignitions";
+  field?: "location" | "startMinute" | "reportMinute" | "name" | "settings" | "ignitions";
   message: string;
 }
 
@@ -289,8 +297,15 @@ export interface ConfigPanelProps {
   onLoadDemo: () => void;
   /** Rendered under the export buttons (the "Use as live drill" action). */
   liveDrill?: ReactNode;
+  /** Rendered under the run status line (status of sending the run to Live command). */
+  liveFire?: ReactNode;
   /** Firefighting inputs and last result, rendered after the conditions. */
   firefighting?: ReactNode;
+  /**
+   * Modelled minutes from each ignition's start to its report (studio/firefighting.ts
+   * `ignitionReportDelayMinutes`), by ignition id: shown for fires with no set report time.
+   */
+  modelledReportDelays?: Record<string, number>;
 }
 
 export interface PlaybackBarProps {

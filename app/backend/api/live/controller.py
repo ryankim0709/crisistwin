@@ -15,6 +15,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 import anthropic
+from django.conf import settings
 from livecore.geo import simplify_line
 from livecore.planner import (
     ALTERNATIVES_MAX,
@@ -65,6 +66,17 @@ RATIONALE_TIMEOUT_S = 10.0
 RATIONALE_MAX_OUTPUT_TOKENS = 1500
 RATIONALE_MAX_CHARS = 800
 DECIDED_PROPOSALS_IN_COMMAND = 5
+
+PROPOSALS_OFF_MESSAGE = (
+    "The twin-controller proposal flow is off on Live: the AI agent on the simulated board decides "
+    "evacuations and dispatch. Set LIVE_PROPOSALS=true to turn replans and approvals back on."
+)
+
+
+def proposals_enabled() -> bool:
+    """``LIVE_PROPOSALS`` (default off): whether the drill plans proposals (auto, on confirm, manual)."""
+    return bool(getattr(settings, "LIVE_PROPOSALS", False))
+
 
 RATIONALE_SYSTEM_PROMPT = """\
 You write the short rationale a human controller reads before approving or rejecting \
@@ -370,8 +382,11 @@ def replan(snapshot: Snapshot, causes: list[str]) -> tuple[dict[str, Any] | None
 
     Whatever the causes, a change driven by a block backed only by civilian reports never
     auto-publishes (``crowd_influence``): it waits for the controller with cause ``road_report``.
-    Returns ``(pending, auto_approved)`` proposal documents; either may be None.
+    Returns ``(pending, auto_approved)`` proposal documents; either may be None. With the proposal
+    flow off (``proposals_enabled``) it plans nothing and returns ``(None, None)``.
     """
+    if not proposals_enabled():
+        return None, None
     index, now, incident_id = snapshot.index, snapshot.now, snapshot.incident_id
     replay_at = snapshot.clock.replay_now
     published_docs = current_guidance(incident_id)
@@ -482,7 +497,10 @@ def maybe_auto_replan(snapshot: Snapshot) -> None:
 
     Only while a drill has been started, and at most once per AUTO_REPLAN_MIN_INTERVAL_S per
     incident (atomic claim on the drill document, so concurrent readers do not double-plan).
+    Never while the proposal flow is off (``proposals_enabled``).
     """
+    if not proposals_enabled():
+        return
     doc = snapshot.drill_doc
     if doc is None or doc.get("started_at") is None:
         return

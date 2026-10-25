@@ -22,22 +22,22 @@
   position: relative;
   height: 100dvh;
   display: grid;
-  grid-template-columns: 320px minmax(0, 1fr) 380px;
-  grid-template-rows: minmax(48px, auto) minmax(0, 1fr);
-  grid-template-areas:
-    "head head head"
-    "queue map right";
+  /* Activity feed | map (the focus) | evacuation outcomes and simulation controls. */
+  grid-template-columns: 280px minmax(0, 1fr) 340px;
+  grid-template-rows: minmax(0, 1fr);
+  grid-template-areas: "feed map right";
   background: var(--ct-bg);
   color: var(--ct-ink);
   font-family: var(--ct-font-sans);
   font-size: var(--ct-text-md);
   line-height: var(--ct-leading-snug, 1.4);
 }
-.lc-root--gate {
+/* Before the incident loads only the stage shows; beats the column layouts of the media queries below. */
+.lc-root.lc-root--gate {
+  height: 100dvh;
   grid-template-columns: minmax(0, 1fr);
-  grid-template-areas:
-    "head"
-    "map";
+  grid-template-rows: minmax(0, 1fr);
+  grid-template-areas: "map";
 }
 .lc-root h1,
 .lc-root h2,
@@ -112,6 +112,82 @@
   font-weight: var(--ct-weight-semibold);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
+}
+/* The page's only chrome: a "Live" pill over the map (first in .lc-map-top on the 2D map; centred
+   below the scene buttons on the 3D view), with a pulsing dot while the command data is fresh. Stale or offline: a still amber dot and the age. */
+.lc-live {
+  position: absolute;
+  top: 52px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 5;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: calc(100% - 32px);
+  padding: 6px 14px 6px 12px;
+  border: 1px solid var(--ct-border);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--ct-surface) 92%, transparent);
+  backdrop-filter: blur(8px);
+  box-shadow: var(--ct-shadow-sm, 0 1px 2px rgb(0 0 0 / 0.12));
+  font-size: var(--ct-text-sm);
+  white-space: nowrap;
+}
+.lc-live-dot {
+  position: relative;
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--lc-evacuate);
+}
+.lc-live-dot::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: var(--lc-evacuate);
+  animation: lc-live-pulse 1.6s ease-out infinite;
+}
+@keyframes lc-live-pulse {
+  from {
+    transform: scale(1);
+    opacity: 0.7;
+  }
+  to {
+    transform: scale(2.6);
+    opacity: 0;
+  }
+}
+.lc-live-word {
+  font-weight: var(--ct-weight-semibold);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  font-size: var(--ct-text-xs, 11px);
+}
+.lc-live-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-weight: var(--ct-weight-semibold);
+}
+.lc-live-clock {
+  color: var(--ct-ink-muted);
+}
+.lc-live--stale .lc-live-dot {
+  background: var(--ct-warning);
+}
+.lc-live--stale .lc-live-dot::after {
+  display: none;
+}
+.lc-live--stale .lc-live-word {
+  color: var(--ct-warning);
+}
+@media (prefers-reduced-motion: reduce) {
+  .lc-live-dot::after {
+    animation: none;
+    display: none;
+  }
 }
 
 .lc-menu {
@@ -198,6 +274,10 @@
 .lc-right {
   grid-area: right;
   border-left: 1px solid var(--ct-border);
+}
+.lc-feed {
+  grid-area: feed;
+  border-right: 1px solid var(--ct-border);
 }
 .lc-col-head {
   display: flex;
@@ -356,6 +436,11 @@
 }
 .lc-map-top > * {
   pointer-events: auto;
+}
+.lc-map-top .lc-live {
+  position: static;
+  transform: none;
+  max-width: 100%;
 }
 .lc-map-top .lc-layers {
   position: static;
@@ -555,116 +640,6 @@
 }
 .lc-plate--muted {
   opacity: 0.5;
-}
-
-/* ---- Proposals (pinned) ---- */
-
-.lc-props {
-  display: grid;
-}
-.lc-prop {
-  display: grid;
-  gap: var(--ct-space-3);
-  padding: var(--ct-space-4);
-  border-bottom: 1px solid var(--ct-border);
-  background: var(--ct-surface-raised);
-  scroll-margin-top: var(--ct-space-2);
-}
-.lc-prop.is-highlighted {
-  box-shadow: inset 0 0 0 2px var(--lc-route);
-}
-.lc-prop:focus {
-  outline: none;
-}
-.lc-prop-head {
-  display: flex;
-  align-items: baseline;
-  gap: var(--ct-space-2);
-}
-.lc-prop-head h2 {
-  font-size: var(--ct-text-base);
-  font-weight: var(--ct-weight-semibold);
-}
-.lc-prop-head .lc-dim {
-  font-size: var(--ct-text-sm);
-}
-.lc-prop-age {
-  margin-left: auto;
-  color: var(--ct-ink-muted);
-  font-size: var(--ct-text-sm);
-}
-.lc-prop-age.is-late {
-  color: var(--ct-danger);
-  font-weight: var(--ct-weight-semibold);
-}
-.lc-prop-why {
-  color: var(--ct-ink-muted);
-  font-size: var(--ct-text-sm);
-  line-height: 1.5;
-}
-.lc-prop-actions {
-  display: flex;
-  gap: var(--ct-space-2);
-}
-.lc-prop-tasks {
-  margin: 0;
-  padding: 0;
-  list-style: none;
-  display: grid;
-  gap: var(--ct-space-1);
-  font-size: var(--ct-text-sm);
-}
-.lc-props-idle {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: var(--ct-space-3) var(--ct-space-4);
-  border-bottom: 1px solid var(--ct-border-subtle);
-  font-size: var(--ct-text-sm);
-}
-.lc-last {
-  padding: var(--ct-space-2) var(--ct-space-4) var(--ct-space-3);
-  border-bottom: 1px solid var(--ct-border-subtle);
-}
-.lc-grp {
-  display: grid;
-  gap: var(--ct-space-2);
-}
-.lc-grp-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  min-height: var(--ct-control-height-sm);
-}
-.lc-chg-list {
-  margin: 0;
-  padding: 0;
-  list-style: none;
-  display: grid;
-  gap: var(--ct-space-3);
-}
-.lc-chg {
-  display: grid;
-  gap: var(--ct-space-1);
-}
-.lc-chg-zone {
-  display: flex;
-  gap: var(--ct-space-2);
-  font-size: var(--ct-text-sm);
-  font-weight: var(--ct-weight-semibold);
-}
-.lc-chg-zone .lc-dim {
-  font-weight: var(--ct-weight-regular);
-}
-.lc-chg-plates {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
-  align-items: stretch;
-  gap: var(--ct-space-2);
-}
-.lc-chg-arrow {
-  align-self: center;
-  color: var(--ct-ink-muted);
 }
 
 /* ---- Selected item ---- */
@@ -1048,64 +1023,12 @@
   border-radius: 2px;
 }
 
-/* Twin evidence inside a proposal (TwinEvidenceView). */
-.lc-ev {
-  display: grid;
-  gap: var(--ct-space-2);
-  margin: 0;
-  font-size: var(--ct-text-sm);
-}
-.lc-ev figcaption {
-  display: flex;
-  align-items: center;
-  gap: var(--ct-space-2);
-  color: var(--ct-ink-muted);
-}
-.lc-ev-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-variant-numeric: tabular-nums;
-}
-.lc-ev-table th,
-.lc-ev-table td {
-  padding: 2px 0;
-  border-bottom: 1px solid var(--ct-border-subtle);
-  font-weight: var(--ct-weight-regular);
-  text-align: right;
-}
-.lc-ev-table th[scope="row"],
-.lc-ev-table thead th:first-child {
-  text-align: left;
-  color: var(--ct-ink-muted);
-}
-.lc-ev-table thead th {
-  color: var(--ct-ink-muted);
-}
-.lc-delta--better {
-  color: var(--ct-success);
-}
-.lc-delta--worse {
-  color: var(--ct-danger);
-}
-.lc-ev-sets {
-  margin: 0;
-  padding-left: var(--ct-space-4);
-  display: grid;
-  gap: 2px;
-}
-.lc-ev-sets li {
-  display: flex;
-  justify-content: space-between;
-  gap: var(--ct-space-2);
-}
-.lc-ev-chosen {
-  font-weight: var(--ct-weight-semibold);
-}
-
-@media (max-width: 1200px) {
+@media (max-width: 1440px) {
   .lc-root {
-    grid-template-columns: 300px minmax(0, 1fr) 360px;
+    grid-template-columns: 256px minmax(0, 1fr) 320px;
   }
+}
+@media (max-width: 1200px) {
   .lc-zone {
     grid-template-columns: 160px minmax(0, 1fr);
   }
@@ -1208,6 +1131,11 @@
 .lc-stage--diorama .lc-map {
   visibility: hidden;
 }
+/* MapLibre forces `visibility: visible` on an expanded compact attribution, which would otherwise
+   sit on top of the diorama's legend button. */
+.lc-stage--diorama .lc-map .maplibregl-control-container {
+  display: none;
+}
 
 /* Left column: Reports | Fires & units tabs above the review queue or the board lists. */
 .lc-left > .lc-col {
@@ -1238,10 +1166,196 @@
   background: var(--ct-surface-raised);
 }
 
-/* Right column: the commander's decision list scrolls on its own so the live panels stay near. */
-.lc-right .dm-decisions {
-  max-height: 360px;
+/* Right column, top to bottom: "Needs you" (only while something awaits the operator) and the
+   evacuation outcomes, scrolling together; the compact Simulation block (board clock, AI agent)
+   stays docked at the bottom. */
+.lc-right-scroll {
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
+}
+.lc-sim {
+  flex: none;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--ct-space-2);
+  padding: var(--ct-space-3) var(--ct-space-4);
+  border-top: 1px solid var(--ct-border);
+  background: var(--ct-surface-raised);
+}
+.lc-sim-head {
+  display: flex;
+  align-items: center;
+  gap: var(--ct-space-2);
+  min-width: 0;
+}
+.lc-sim-head h2 {
+  font-size: var(--ct-text-base);
+  font-weight: var(--ct-weight-semibold);
+}
+.lc-sim-aside {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ct-space-1);
+  margin-left: auto;
+}
+/* The Simulation block is docked at the bottom, so the shortcuts popover opens upward. */
+.lc-sim .lc-keys-pop {
+  top: auto;
+  bottom: calc(100% + var(--ct-space-1));
+  z-index: var(--ct-z-popover);
+}
+/* The "AI agent only" rule, above the shortcuts in the Controls block's help popover. */
+.lc-keys-note {
+  grid-column: 1 / -1;
+  max-width: 30ch;
+  margin: 0 0 var(--ct-space-1);
+  white-space: normal;
+  color: var(--ct-ink-muted);
+}
+.lc-sim-label {
+  font-size: var(--ct-text-sm);
+  font-weight: var(--ct-weight-semibold);
+  white-space: nowrap;
+}
+.lc-sim .ui-loading {
+  padding: 0;
+}
+.lc-agent {
+  display: grid;
+  gap: var(--ct-space-2);
+}
+.lc-agent-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ct-space-2);
+}
+.lc-agent-ask {
+  margin-left: auto;
+}
+.lc-needs {
+  display: grid;
+  gap: var(--ct-space-2);
+  padding-top: var(--ct-space-3);
+  border-bottom: 1px solid var(--ct-border);
+  background: var(--ct-warning-soft);
+}
+.lc-needs-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--ct-space-2);
+  padding: 0 var(--ct-space-4);
+}
+.lc-needs-head h2 {
+  font-size: var(--ct-text-base);
+  font-weight: var(--ct-weight-semibold);
+}
+.lc-needs > .ui-notice,
+.lc-needs-notice {
+  margin: 0 var(--ct-space-4);
+}
+.lc-needs-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--ct-space-2);
+}
+.lc-needs-notice > .ui-notice {
+  flex: 1;
+  min-width: 0;
+}
+.lc-needs > :last-child {
+  margin-bottom: var(--ct-space-3);
+}
+
+/* Selection card: the selected live report or board item, floating over the map's top left,
+   under the layer toggles. */
+/* Below the map's control column (Live badge, people strip, layer toggles). */
+.lc-float.ui-panel {
+  position: absolute;
+  top: 140px;
+  left: var(--ct-space-3);
+  z-index: var(--ct-z-overlay);
+  width: min(380px, calc(100% - 2 * var(--ct-space-3)));
+  max-height: calc(100% - 140px - 88px);
+  overflow-y: auto;
+  padding: 0;
+}
+.lc-float .lc-sel,
+.lc-float .dm-section {
+  border-bottom: 0;
+}
+.lc-float .lc-board-sel-note,
+.lc-float .dm-selected {
+  background: transparent;
+}
+.lc-float > .ui-notice {
+  margin: var(--ct-space-3) var(--ct-space-3) 0;
+}
+
+/* Details drawer: everything that left the sidebar, sliding over the map's right edge. */
+.lc-drawer.ui-panel {
+  position: absolute;
+  top: var(--ct-space-3);
+  bottom: var(--ct-space-3);
+  z-index: var(--ct-z-sheet);
+  display: flex;
+  flex-direction: column;
+  width: min(520px, calc(100% - 2 * var(--ct-space-3)));
+  padding: 0;
+  overflow: hidden;
+  animation: lc-drawer-in var(--ct-duration) var(--ct-ease);
+}
+.lc-drawer--right.ui-panel {
+  right: var(--ct-space-3);
+}
+/* The full audit log opens on the map's left edge, beside the activity feed that opens it. */
+.lc-drawer--left.ui-panel {
+  left: var(--ct-space-3);
+  animation-name: lc-drawer-in-left;
+}
+@keyframes lc-drawer-in-left {
+  from {
+    transform: translateX(-16px);
+    opacity: 0;
+  }
+}
+@keyframes lc-drawer-in {
+  from {
+    transform: translateX(16px);
+    opacity: 0;
+  }
+}
+.lc-drawer-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--ct-space-2);
+  padding: var(--ct-space-3) var(--ct-space-3) var(--ct-space-3) var(--ct-space-4);
+  border-bottom: 1px solid var(--ct-border);
+}
+.lc-drawer-head h2 {
+  font-size: var(--ct-text-base);
+  font-weight: var(--ct-weight-semibold);
+}
+.lc-drawer-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+.lc-drawer-body--fill {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.lc-drawer-audit {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ct-space-2);
+  font-size: var(--ct-text-sm);
 }
 .lc-board-sec > summary {
   display: flex;
@@ -1263,4 +1377,325 @@
 .lc-board-sec > summary h2 {
   font-size: var(--ct-text-base);
   font-weight: var(--ct-weight-semibold);
+}
+
+/* Board clock in the Simulation block: board time, pause, speed-up slider, then board size and
+   Reset board behind a disclosure. */
+.lc-board-clock {
+  display: grid;
+  gap: var(--ct-space-2);
+}
+.lc-board-opts > summary {
+  cursor: pointer;
+  color: var(--ct-ink-muted);
+  font-size: var(--ct-text-sm);
+}
+.lc-board-opts-body {
+  display: grid;
+  gap: var(--ct-space-2);
+  padding-top: var(--ct-space-2);
+}
+.lc-board-clock-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ct-space-2);
+}
+.lc-board-clock-pause {
+  margin-left: auto;
+}
+.lc-board-clock-time {
+  font-size: var(--ct-text-lg);
+  font-weight: var(--ct-weight-semibold);
+}
+.lc-speed {
+  display: grid;
+  grid-template-columns: auto auto minmax(4rem, 1fr) auto;
+  align-items: center;
+  gap: var(--ct-space-2);
+  font-size: var(--ct-text-sm);
+}
+.lc-speed-label {
+  color: var(--ct-ink-muted);
+}
+.lc-speed-value {
+  min-width: 9ch;
+  text-align: right;
+  white-space: nowrap;
+  color: var(--ct-ink-muted);
+}
+.lc-range {
+  width: 100%;
+  accent-color: var(--ct-brand);
+}
+.lc-board-reset-open {
+  justify-self: start;
+  margin-left: calc(-1 * var(--ct-space-2));
+}
+.lc-board-reset {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ct-space-2);
+  padding: var(--ct-space-2);
+  border: 1px solid var(--ct-danger-border);
+  border-radius: var(--ct-radius-md);
+  background: var(--ct-danger-soft);
+}
+.lc-board-reset-text {
+  flex-basis: 100%;
+  font-size: var(--ct-text-sm);
+}
+/* Board size (km from the centre to each edge) under the speed slider and in the Conditions popover. */
+.lc-board-size {
+  display: grid;
+  justify-items: start;
+  gap: var(--ct-space-1);
+  font-size: var(--ct-text-sm);
+}
+
+/* Scenario resources section of the details drawer (ScenarioResources.tsx). */
+.lc-snap-detail {
+  color: var(--ct-ink-muted);
+}
+.lc-snap-note {
+  margin: var(--ct-space-2) 0;
+}
+.lc-snap-sub {
+  margin: var(--ct-space-3) 0 var(--ct-space-1);
+  font-size: var(--ct-text-sm);
+  font-weight: var(--ct-weight-semibold);
+}
+.lc-snap-engines {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ct-space-1);
+}
+.lc-snap-json pre {
+  margin: var(--ct-space-1) 0 0;
+  max-height: 14rem;
+  overflow: auto;
+  padding: var(--ct-space-2);
+  background: var(--ct-surface-sunken);
+  border-radius: var(--ct-radius-sm);
+  font-family: var(--ct-font-mono);
+  font-size: var(--ct-text-2xs);
+}
+
+/* Snapshot facts: long values wrap instead of running past the drawer edge. */
+.lc-drawer .ui-facts dd {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* ---- Evacuation outcomes (Outcomes.tsx, demo/outcomes.ts): the right column's headline ---- */
+.lc-out {
+  display: grid;
+  gap: var(--ct-space-3);
+  padding: var(--ct-space-4);
+}
+.lc-out-head {
+  display: flex;
+  align-items: center;
+  gap: var(--ct-space-2);
+}
+.lc-out-head h2 {
+  font-size: var(--ct-text-base);
+  font-weight: var(--ct-weight-semibold);
+}
+.lc-out-time {
+  margin-left: auto;
+  font-size: var(--ct-text-sm);
+}
+.lc-out-hero {
+  display: grid;
+  gap: var(--ct-space-2);
+}
+.lc-out-big {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--ct-space-1) var(--ct-space-2);
+}
+.lc-out-big strong {
+  font-size: var(--ct-text-3xl);
+  font-weight: var(--ct-weight-semibold);
+  line-height: 1.1;
+}
+.lc-out-big span {
+  color: var(--ct-ink-muted);
+}
+.lc-out-sub {
+  color: var(--ct-ink-muted);
+  font-size: var(--ct-text-sm);
+}
+.lc-out-sub strong {
+  color: var(--ct-ink);
+}
+.lc-out .ui-metric small {
+  overflow-wrap: anywhere;
+}
+.lc-out-dest h3 {
+  margin: 0 0 var(--ct-space-1);
+  font-size: var(--ct-text-sm);
+  font-weight: var(--ct-weight-semibold);
+}
+.lc-out-dest ul {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--ct-text-sm);
+}
+.lc-out-dest li {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--ct-space-2);
+}
+.lc-out-dest-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lc-out-dest .lc-dim,
+.lc-out-fires {
+  font-size: var(--ct-text-sm);
+  color: var(--ct-ink-muted);
+}
+.lc-out-help > summary {
+  cursor: pointer;
+  color: var(--ct-ink-muted);
+  font-size: var(--ct-text-sm);
+}
+.lc-out-help dl {
+  display: grid;
+  gap: var(--ct-space-1);
+  margin: var(--ct-space-2) 0;
+  font-size: var(--ct-text-sm);
+}
+.lc-out-help dt {
+  font-weight: var(--ct-weight-semibold);
+}
+.lc-out-help dd {
+  margin: 0 0 var(--ct-space-1);
+  color: var(--ct-ink-muted);
+}
+.lc-out-help > p {
+  font-size: var(--ct-text-xs);
+}
+.lc-out .ui-empty {
+  padding: var(--ct-space-4) 0;
+}
+
+/* ---- Narrow screens ---- */
+/* Tablet: map and outcomes side by side, the activity feed under the map. */
+@media (max-width: 1100px) {
+  .lc-root {
+    grid-template-columns: minmax(0, 1fr) 320px;
+    grid-template-rows: minmax(0, 1fr) 240px;
+    grid-template-areas:
+      "map right"
+      "feed right";
+  }
+  .lc-feed {
+    border-right: 0;
+    border-top: 1px solid var(--ct-border);
+  }
+}
+/* Phone: one column that scrolls; the map first at a fixed height, then outcomes, then the feed. */
+@media (max-width: 760px) {
+  .lc-root {
+    height: auto;
+    min-height: 100dvh;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: 62dvh auto 420px;
+    grid-template-areas:
+      "map"
+      "right"
+      "feed";
+  }
+  .lc-right {
+    border-left: 0;
+    border-top: 1px solid var(--ct-border);
+  }
+  .lc-right-scroll {
+    overflow: visible;
+  }
+  .lc-float.ui-panel {
+    top: auto;
+    bottom: 56px;
+    max-height: calc(100% - 120px);
+  }
+}
+
+/* Controller drill road closures over the map (RoadClosureTool.tsx). */
+.lc-rc {
+  /* Bottom right of the map, clear of the layer toggles (top) and the legend (bottom left). */
+  position: absolute;
+  right: var(--ct-space-3);
+  bottom: 56px;
+  z-index: calc(var(--ct-z-map-controls) + 1); /* over an open legend */
+  max-width: 320px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--ct-space-2);
+  font-size: var(--ct-text-sm);
+}
+.lc-rc-head {
+  display: flex;
+  align-items: center;
+  gap: var(--ct-space-2);
+}
+.lc-rc-head > :last-child {
+  margin-left: auto;
+}
+.lc-rc-hint,
+.lc-rc-confirm p {
+  margin: 0;
+  color: var(--ct-ink-subtle);
+}
+.lc-rc-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ct-space-2);
+  padding-top: var(--ct-space-2);
+  border-top: 1px solid var(--ct-border-subtle);
+}
+.lc-rc-actions {
+  display: flex;
+  gap: var(--ct-space-2);
+}
+.lc-rc-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--ct-space-1);
+}
+.lc-rc-list li {
+  display: flex;
+  align-items: center;
+  gap: var(--ct-space-2);
+}
+.lc-rc-x {
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: var(--ct-radius-xs);
+  background: var(--ct-ink);
+  color: var(--ct-ink-inverse);
+  font-size: var(--ct-text-2xs);
+  font-weight: var(--ct-weight-bold);
+}
+.lc-rc-meta {
+  color: var(--ct-ink-subtle);
+  font-size: var(--ct-text-xs);
+  margin-right: auto;
 }

@@ -371,8 +371,9 @@ builder. The other builder turns a Simulation Studio run anywhere in California 
   (default directory `app/backend/var/packages`, git-ignored). Returns `201` (or `200` for a run
   already stored) with `{package_id, incident_id, summary}`; `summary` holds `name`, `place`,
   `label`, `clock`, `bbox`, `zones`, `homes` (`homes_label: "synthetic"`), `vehicles`,
-  `road_segments`, `exits`, `stations`, `fronts`, `fire_area_km2` (`fire_label: "simulated"`) and
-  `clipped`. Errors: `400 invalid_run`, `413 too_large`, `422 outside_california | bad_bbox |
+  `road_segments`, `exits`, `stations`, `fronts`, `fire_area_km2` (`fire_label: "simulated"`),
+  `clipped` and `region_id` (the Studio region the run used, e.g. `"berkeley-hills-tilden"`, or
+  null). Errors: `400 invalid_run`, `413 too_large`, `422 outside_california | bad_bbox |
   no_roads | no_exits | no_homes | invalid_area`, `502 upstream_unavailable`.
 - `GET /api/live/packages`: `{packages: [{package_id, incident_id, created_at, summary}]}`,
   newest first.

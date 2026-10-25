@@ -303,9 +303,7 @@ function ReportDetail({
   busy,
   route,
   impact,
-  proposalId,
   onRunImpact,
-  onReviewProposal,
   onClose,
 }: {
   item: QueueItem;
@@ -315,9 +313,7 @@ function ReportDetail({
   busy: string | null;
   route: TaskRouteState | null;
   impact: ImpactState | null;
-  proposalId: string | null;
   onRunImpact: () => void;
-  onReviewProposal: (id: string) => void;
   onClose: () => void;
 }) {
   const [error, setError] = useState<string | null>(null);
@@ -433,7 +429,7 @@ function ReportDetail({
           Dismiss
         </Button>
         {/* Decisions on the first row, checks on the second, so no button is left alone on a wrapped row. */}
-        {!item.task || item.segmentId || proposalId ? <span className="lc-sel-break" aria-hidden="true" /> : null}
+        {!item.task || item.segmentId ? <span className="lc-sel-break" aria-hidden="true" /> : null}
         {item.task ? null : (
           <Button variant="secondary" size="sm" disabled={disabled} onClick={() => void fieldCheck()}>
             {helpReport
@@ -444,11 +440,6 @@ function ReportDetail({
         {item.segmentId ? (
           <Button variant="secondary" size="sm" disabled={mine?.loading} onClick={onRunImpact}>
             Run impact
-          </Button>
-        ) : null}
-        {proposalId ? (
-          <Button variant="secondary" size="sm" onClick={() => onReviewProposal(proposalId)}>
-            Review proposal
           </Button>
         ) : null}
       </div>

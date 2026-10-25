@@ -2,10 +2,10 @@
  * 3D diorama view of the /demo command board: the fire page's three.js miniature
  * (fire/diorama/FireDioramaScene.ts, ADR 0011) drawing the drill's prebuilt LANDFIRE region
  * with OSM roads and synthetic homes (fire/useBoardStreets.ts, as the Studio's 3D view), the
- * board's simulated fires as an arrival field (dioramaField.ts) with a labelled pin per active
+ * board's simulated fires as the fire solver's arrival field (dioramaField.ts) with a labelled pin per active
  * fire, and its units, stations and alerted zones (DemoBoardOverlay.ts). Presentation only:
  * the board's fires, units and households are simulated; trees, homes and relief are stylized.
- * Clicking the board starts a fire while "Add fire" is on; other selection stays in the panels.
+ * Selection stays in the panels.
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -15,14 +15,18 @@ import { FireDioramaScene } from "../fire/diorama/FireDioramaScene";
 import type { DioramaIgnition, FireDioramaSceneApi } from "../fire/diorama/types";
 import type { LandscapeGrid } from "../fire/landscape";
 import { useBoardStreets } from "../fire/useBoardStreets";
-import type { LonLat } from "../live/types";
 import { CREW_COLORS, firelineCss } from "../studio/firelinePalette";
 import { Button, Legend, Panel, type LegendItem } from "../ui";
+import { EXTINGUISHED_LEGEND } from "../fire/diorama/board";
+import { HOUSE_MARK_COLORS } from "../fire/diorama/cover";
 import { DEMO_3D_COLORS, DemoBoardOverlay } from "./DemoBoardOverlay";
 import type { Selection } from "./DemoMap";
 import { dioramaRun } from "./dioramaField";
 import { fireOuterRings } from "./fireFootprint";
+import { fireCellStates } from "./fireState";
+import { assignHouses, safeHouseMarks, type HouseZones } from "./safeHouses";
 import { activeFires, distanceM, teamPosition, type Board, type ZoneForecast } from "./model";
+import { fireMapLabel } from "./boardResponse";
 import type { ArrivalFieldState } from "./useArrivalField";
 
 const REDUCED_MOTION_QUERY = "(prefers-reduced-motion: reduce)";
@@ -44,14 +48,53 @@ interface Props {
   forecasts: Map<string, ZoneForecast>;
   wind: { speedMetersPerSecond: number; fromDegrees: number } | null;
   selected: Selection | null;
-  igniteMode: boolean;
-  onIgnite: (coord: LonLat) => void;
 }
 
 function VehicleGlyph({ color, width, height }: { color: number; width: number; height: number }) {
   return (
     <svg width="24" height="16" viewBox="0 0 24 16" aria-hidden="true">
       <rect x={12 - width / 2} y={13 - height} width={width} height={height} rx="1" fill={firelineCss(color)} />
+    </svg>
+  );
+}
+
+/** Green-roofed house with a white check on it (residents safe). */
+function SafeHouseGlyph() {
+  const roof = css(HOUSE_MARK_COLORS.safeRoof);
+  return (
+    <svg width="24" height="16" viewBox="0 0 24 16" aria-hidden="true">
+      <rect x="6" y="8" width="12" height="7" fill="var(--ct-surface)" stroke="var(--ct-ink-muted)" strokeWidth="1" />
+      <path d="M4 9 12 2.5 20 9Z" fill={roof} stroke="var(--ct-ink-muted)" strokeWidth="0.8" />
+      <path d="M8.8 6.4l2.1 1.9 4-4" fill="none" stroke={css(HOUSE_MARK_COLORS.check)} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+/** Put-out ground: slate with a pale diagonal hatch and a dashed outline, no glow. */
+function ExtinguishedGlyph() {
+  return (
+    <svg width="24" height="16" viewBox="0 0 24 16" aria-hidden="true">
+      <defs>
+        <pattern id="dm-ext-hatch" width="4" height="4" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+          <rect width="4" height="4" fill={EXTINGUISHED_LEGEND.fill} />
+          <line x1="0" y1="0" x2="0" y2="4" stroke={EXTINGUISHED_LEGEND.hatch} strokeWidth="1.4" />
+        </pattern>
+      </defs>
+      <rect x="2" y="2" width="20" height="12" rx="2" fill="url(#dm-ext-hatch)" stroke={EXTINGUISHED_LEGEND.edge} strokeWidth="1.4" strokeDasharray="3 2" />
+    </svg>
+  );
+}
+
+/** A tiny standing firefighter: body in the unit's colour, yellow helmet. */
+function FirefighterGlyph() {
+  return (
+    <svg width="24" height="16" viewBox="0 0 24 16" aria-hidden="true">
+      {[7, 12, 17].map((x) => (
+        <g key={x}>
+          <rect x={x - 1.4} y="7" width="2.8" height="7.5" rx="1.2" fill={css(CREW_COLORS.hand_crew)} />
+          <circle cx={x} cy="5.2" r="1.9" fill={css(DEMO_3D_COLORS.crewHelmet)} stroke="var(--ct-ink-muted)" strokeWidth="0.6" />
+        </g>
+      ))}
     </svg>
   );
 }
@@ -67,7 +110,7 @@ function FirePinGlyph() {
 
 const css = (color: number | string) => (typeof color === "number" ? firelineCss(color) : color);
 
-export default function DemoDiorama({ board, version, field, landscape, regionName, forecasts, wind, selected, igniteMode, onIgnite }: Props) {
+export default function DemoDiorama({ board, version, field, landscape, regionName, forecasts, wind, selected }: Props) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const [scene, setScene] = useState<FireDioramaSceneApi | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -77,11 +120,6 @@ export default function DemoDiorama({ board, version, field, landscape, regionNa
   const [overlay] = useState(() => new DemoBoardOverlay());
   const streets = useBoardStreets(landscape);
   const streetArea = streets.status === "ready" ? streets.scenery : null;
-
-  const clickRef = useRef({ igniteMode, onIgnite });
-  useEffect(() => {
-    clickRef.current = { igniteMode, onIgnite };
-  }, [igniteMode, onIgnite]);
 
   // StrictMode-safe: the cleanup disposes, the re-run builds a fresh scene.
   useEffect(() => {
@@ -95,9 +133,6 @@ export default function DemoDiorama({ board, version, field, landscape, regionNa
       setError(cause instanceof Error ? cause.message : "WebGL could not be initialised.");
       return;
     }
-    created.onGroundClick((point) => {
-      if (clickRef.current.igniteMode) clickRef.current.onIgnite([point.longitude, point.latitude]);
-    });
     created.setOverlay(overlay);
     setScene(created);
     setError(null);
@@ -114,6 +149,7 @@ export default function DemoDiorama({ board, version, field, landscape, regionNa
     scene?.setStreets(streetArea);
   }, [scene, streetArea]);
   useEffect(() => {
+    // The solver's whole field (with its lookahead); setTime(board minute) shows only what has burned.
     scene?.setRun(field ? dioramaRun(field.field) : null);
     if (field) scene?.setTime(field.board.minute);
   }, [scene, field]);
@@ -124,7 +160,8 @@ export default function DemoDiorama({ board, version, field, landscape, regionNa
       activeFires(board).map((fire) => ({
         id: fire.id,
         point: { longitude: fire.origin[0], latitude: fire.origin[1] },
-        label: fire.status === "burning" ? fire.id : `${fire.id} · ${fire.status}`,
+        // "S1-F1 · not yet reported (sim)" before its report (boardResponse.ts report rule).
+        label: fireMapLabel(board, fire),
       })),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- the board is mutated in place; version marks changes
     [board, version],
@@ -137,6 +174,31 @@ export default function DemoDiorama({ board, version, field, landscape, regionNa
     overlay.setBoard(board, forecasts);
   }, [scene, overlay, board, version, forecasts]);
   useEffect(() => () => overlay.setBoard(null, new Map()), [overlay]);
+
+  // Per-cell fire states (burning / burned out / put out, fireState.ts); the cells must be the
+  // scene's landscape's (the board's own), else the arrival field alone decides.
+  useEffect(() => {
+    if (!scene) return;
+    const states = board.env.landscape === landscape ? fireCellStates(board) : null;
+    scene.setCellStates(states);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the board is mutated in place; version marks changes
+  }, [scene, board, version, landscape, field]);
+
+  // Residents safe: each zone's houses marked in proportion to its households out (safeHouses.ts).
+  // Runs after setLandscape / setStreets above, so houseLocations() is the current cover's.
+  const houseZones = useRef<{ key: string; index: HouseZones } | null>(null);
+  useEffect(() => {
+    if (!scene) return;
+    const houses = scene.houseLocations();
+    const key = board.zones.map((z) => `${z.id}:${z.ring.length}:${z.ring[0]?.join(",") ?? ""}`).join("|");
+    let cached = houseZones.current;
+    if (!cached || cached.index.houses !== houses || cached.key !== key) {
+      cached = { key, index: assignHouses(houses, board.zones) };
+      houseZones.current = cached;
+    }
+    scene.setHouseMarks(houses.length ? safeHouseMarks(cached.index, board) : null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the board is mutated in place; version marks changes
+  }, [scene, board, version, landscape, streetArea]);
 
   const windFrom = wind?.fromDegrees ?? 0;
   const windMph = (wind?.speedMetersPerSecond ?? 0) * MPH_PER_METER_PER_SECOND;
@@ -178,8 +240,15 @@ export default function DemoDiorama({ board, version, field, landscape, regionNa
     ...(streetArea ? ["Roads © OpenStreetMap contributors"] : []),
   ];
   const legend: LegendItem[] = [
-    { label: "Simulated fire, burning edge (glows)", color: "var(--ct-fire)", glyph: <FireEdgeGlyph /> },
-    { label: "Burned by a simulated fire (stays as a scar)", color: "var(--ct-burned)", glyph: <BurnedGlyph /> },
+    { label: "Burning now (simulated): glows, with flames and smoke", color: "var(--ct-fire)", glyph: <FireEdgeGlyph /> },
+    { label: "Burned out (simulated): dark scar, no glow", color: "var(--ct-burned)", glyph: <BurnedGlyph /> },
+    { label: "Put out by crews (simulated): slate with a pale hatch and a dashed outline, no glow", color: EXTINGUISHED_LEGEND.fill, glyph: <ExtinguishedGlyph /> },
+    { label: "Firefighters at work (simulated): small figures in their unit's colour, yellow helmets, stepping in toward the fire", color: css(CREW_COLORS.hand_crew), glyph: <FirefighterGlyph /> },
+    {
+      label: "Residents safe (simulated): green roof with a white check, in proportion to the zone's households that got out",
+      color: css(HOUSE_MARK_COLORS.safeRoof),
+      glyph: <SafeHouseGlyph />,
+    },
     { label: "Fire origin, with its id", color: "var(--ct-fire)", glyph: <FirePinGlyph /> },
     {
       label: "Engine (long red block)",
@@ -197,6 +266,13 @@ export default function DemoDiorama({ board, version, field, landscape, regionNa
       glyph: <VehicleGlyph color={CREW_COLORS.dozer} width={13} height={5} />,
     },
     { label: "Unit driving to a fire", color: css(DEMO_3D_COLORS.route), shape: "dashed" },
+    { label: "Unit returning to its station (thin dashed; trip lines follow road routes only)", color: css(DEMO_3D_COLORS.route), shape: "dashed" },
+    { label: "Fire line ahead of a fire: planned (dashed), built (solid)", color: css(DEMO_3D_COLORS.fireLine), shape: "line" },
+    {
+      label: "Evacuating vehicles on their road route (simulated; one car per 10+ vehicles)",
+      color: css(DEMO_3D_COLORS.evacuee),
+      glyph: <VehicleGlyph color={DEMO_3D_COLORS.evacuee} width={8} height={4} />,
+    },
     { label: "Station (free units listed by its name)", color: css(DEMO_3D_COLORS.stationRoof), glyph: <StationGlyph /> },
     { label: "Leave now zone (outline)", color: css(DEMO_3D_COLORS.ordered), shape: "line" },
     { label: "At risk zone (dashed outline)", color: css(DEMO_3D_COLORS.threatened), shape: "dashed" },

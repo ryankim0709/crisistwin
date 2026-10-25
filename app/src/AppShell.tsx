@@ -41,21 +41,22 @@ export default function AppShell({ path, children }: AppShellProps) {
         Skip to content
       </a>
       <aside className="sidebar" aria-label="Workspace sidebar">
-        <IconButton
-          className="sidebar-collapse"
-          size="sm"
-          variant="secondary"
-          label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-          aria-expanded={!collapsed}
-          aria-controls="workspace-navigation"
-          onClick={() => setCollapsed((value) => !value)}
-        >
-          {collapsed ? "»" : "«"}
-        </IconButton>
         <div className="sidebar-brand">
           <a className="sidebar-logo" href="/" aria-label="CrisisTwin home">
-            <img src="/brand/crisistwin-logo.png" alt="" width={2172} height={724} />
+            <img className="sidebar-logo-full" src="/brand/crisistwin-logo.png" alt="" width={2172} height={724} />
+            <img className="sidebar-logo-mark" src="/brand/crisistwin-mark-64.png" alt="" width={64} height={64} />
           </a>
+          <IconButton
+            className="sidebar-collapse"
+            size="sm"
+            variant="ghost"
+            label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+            aria-expanded={!collapsed}
+            aria-controls="workspace-navigation"
+            onClick={() => setCollapsed((value) => !value)}
+          >
+            {collapsed ? "»" : "«"}
+          </IconButton>
           <Button
             className="menu-toggle"
             variant="secondary"
@@ -83,7 +84,6 @@ export default function AppShell({ path, children }: AppShellProps) {
                     <li key={item.path}>
                       <a href={item.path} aria-current={path === item.path ? "page" : undefined}>
                         <span>{item.label}</span>
-                        {path === item.path && <span aria-hidden="true">→</span>}
                       </a>
                     </li>
                   ))}
