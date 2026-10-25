@@ -46,12 +46,14 @@ AREA_SCHEMA_VERSION = 2
 
 # Input limits (strict validation).
 MAX_GRID_CELLS = 1_500_000
-MAX_FRAMES = 200
+MAX_FRAMES = 241
+"""Studio's ``MAX_FRAMES`` (app/src/fire/horizon.ts, 240) plus the T+0 frame."""
 MAX_FRAME_VERTICES = 400_000
 MAX_IGNITIONS = 5
 MAX_NAME_LEN = 80
-HORIZON_CHOICES_MIN = (60, 120, 180, 360)
-"""Studio's ``STUDIO_HORIZON_CHOICES``."""
+HORIZON_RANGE_MIN = (60, 168 * 60)
+"""Studio's ``MIN_HORIZON_MINUTES`` and ``MAX_HORIZON_MINUTES`` (app/src/fire/horizon.ts): presets are
+3-72 h and a custom run can be 1 h to 7 days, in whole minutes."""
 MAX_WIND_MPH = 60.0
 MAX_MOISTURE_FRACTION = 3.0
 MERCATOR_RADIUS_M = 6_378_137.0
@@ -310,8 +312,10 @@ def parse_run(raw: Any) -> StudioRun:
         moisture[key] = _num(moisture_raw.get(key), f"assumptions.moisture.{key}", 0.01, MAX_MOISTURE_FRACTION)
     midflame = _num(a.get("midflame_adjustment"), "assumptions.midflame_adjustment", 0.01, 1)
     horizon = a.get("horizon_min")
-    if horizon not in HORIZON_CHOICES_MIN or isinstance(horizon, bool):
-        raise _bad(f"`assumptions.horizon_min` must be one of {HORIZON_CHOICES_MIN}.")
+    if (isinstance(horizon, bool) or not isinstance(horizon, int)
+            or not HORIZON_RANGE_MIN[0] <= horizon <= HORIZON_RANGE_MIN[1]):
+        raise _bad(f"`assumptions.horizon_min` must be whole minutes from {HORIZON_RANGE_MIN[0]} to "
+                   f"{HORIZON_RANGE_MIN[1]}.")
     spotting = a.get("spotting")
     structure = a.get("structure_spread")
     for key, value in (("spotting", spotting), ("structure_spread", structure)):
