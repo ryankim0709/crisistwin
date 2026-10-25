@@ -28,6 +28,8 @@ import { useMobility } from "./useMobility";
 import { IMAGERY_DATE_NOTE, LAYER_GROUPS, type Basemap, type LayerGroup } from "./mapLayers";
 import { homeDots } from "./population";
 import ReplayMap, { type MapFocus } from "./ReplayMap";
+import ReplayDiorama from "./ReplayDiorama";
+import { useHistoricalFireIndex } from "../historical/data";
 import SidePanel, { type PanelTab } from "./SidePanel";
 import TimelineDock, { SPEEDS } from "./TimelineDock";
 import {
@@ -171,6 +173,21 @@ export default function ReplayView({
   );
 }
 
+type StageView = "map" | "diorama";
+const VIEW_OPTIONS: { value: StageView; label: string }[] = [
+  { value: "map", label: "Map" },
+  { value: "diorama", label: "3D diorama" },
+];
+const VIEW_STORAGE_KEY = "crisistwin.replay.view";
+
+function loadView(): StageView {
+  try {
+    return window.localStorage.getItem(VIEW_STORAGE_KEY) === "diorama" ? "diorama" : "map";
+  } catch {
+    return "map";
+  }
+}
+
 const BASEMAP_OPTIONS = [
   { value: "map", label: "Map" },
   { value: "satellite", label: "Satellite" },
@@ -287,6 +304,14 @@ function ReplayScreen({
   const [pin, setPin] = useState<LngLat | null>(null);
   const [focus, setFocus] = useState<MapFocus | null>(null);
   const [storyOpen, setStoryOpen] = useState(false);
+  // Map or 3D diorama, remembered per page. The diorama needs this fire in the historical-fire
+  // files (the replay route only); the story is told on the map.
+  const [view, setView] = useState<StageView>(loadView);
+  const historicalFires = useHistoricalFireIndex();
+  const dioramaAvailable =
+    config.incidentId !== null &&
+    historicalFires.status === "ready" &&
+    historicalFires.index.fires.some((f) => f.id === config.incidentId);
   const [spotlight, setSpotlight] = useState<Spotlight | null>(null);
   // Optional phone-panel mobility sidecar (replay route only); hidden when the file is absent.
   const mobility = useMobility(config.kind === "replay" ? mobilityUrlFor(config.bundleUrl) : null);
@@ -424,6 +449,14 @@ function ReplayScreen({
   const exploreFire = useCallback(() => {
     setLanding(false);
     setPanelOpen(true);
+  }, []);
+  const chooseView = useCallback((next: StageView) => {
+    setView(next);
+    try {
+      window.localStorage.setItem(VIEW_STORAGE_KEY, next);
+    } catch {
+      // Storage can be unavailable (private mode); the choice then lasts for this visit only.
+    }
   }, []);
   const closeStory = useCallback(() => {
     setPanelOpen(true);
@@ -636,6 +669,7 @@ function ReplayScreen({
     () => (atEnd && !visibility.damage ? { ...visibility, damage: true } : visibility),
     [atEnd, visibility],
   );
+  const showDiorama = view === "diorama" && dioramaAvailable && !storyOpen && !landing;
   const perimeter = perimeterIndex >= 0 ? model.perimeters[perimeterIndex] : null;
   const nextPerimeter = model.perimeters[perimeterIndex + 1] ?? null;
   const perimeterEnd = perimeterIndex >= 0 ? perimeterWindowEnd(model, perimeterIndex) : null;
@@ -647,6 +681,18 @@ function ReplayScreen({
       }${storyOpen || landing ? " rp-root--story" : ""}`}
     >
       <div className="rp-stage">
+        {showDiorama && (
+          <ReplayDiorama
+            key={model.incident.id}
+            model={model}
+            fireId={config.incidentId ?? ""}
+            simTimeMs={simTimeMs}
+            zoneStates={zoneStates}
+            homeDots={homes.dots}
+            onBackToMap={() => chooseView("map")}
+          />
+        )}
+        {!showDiorama && (
         <ReplayMap
           key={model.incident.id}
           model={model}
@@ -669,6 +715,7 @@ function ReplayScreen({
           home={home}
           onMapReady={setMapInstance}
         />
+        )}
 
         <MobilityOverlay
           map={mapInstance}
@@ -828,6 +875,33 @@ function ReplayScreen({
             </div>
           </div>
           <div className="rp-basemap">
+            {config.incidentId !== null && (
+              <SegmentedControl
+                label="View"
+                options={VIEW_OPTIONS.map((o) =>
+                  o.value === "diorama"
+                    ? {
+                        ...o,
+                        disabled: !dioramaAvailable,
+                        title: dioramaAvailable
+                          ? "3D miniature of this fire, driven by the timeline below"
+                          : historicalFires.status === "loading"
+                            ? "Checking for 3D data"
+                            : "No 3D landscape data was built for this fire",
+                      }
+                    : o,
+                )}
+                value={showDiorama ? "diorama" : "map"}
+                onChange={(next) => {
+                  if (next === "diorama") {
+                    // The story and the opening card are map-only.
+                    if (storyOpen) closeStory();
+                    setLanding(false);
+                  }
+                  chooseView(next);
+                }}
+              />
+            )}
             {chapters.length > 0 && (
               <Button
                 variant="secondary"
@@ -852,16 +926,19 @@ function ReplayScreen({
             >
               <span aria-hidden="true">?</span> Tour
             </Button>
-            <SegmentedControl
-              label="Basemap"
-              options={BASEMAP_OPTIONS}
-              value={basemap}
-              onChange={setBasemap}
-            />
-            {basemap === "satellite" && (
+            {!showDiorama && (
+              <SegmentedControl
+                label="Basemap"
+                options={BASEMAP_OPTIONS}
+                value={basemap}
+                onChange={setBasemap}
+              />
+            )}
+            {!showDiorama && basemap === "satellite" && (
               <span className="rp-imagery-note">{IMAGERY_DATE_NOTE}</span>
             )}
           </div>
+          {!showDiorama && (
           <MapLegend
             windFromDeg={model.fireSimulated?.windFromDeg ?? null}
             fireObsSource={model.fireObservations ? observationSource(model) : null}
@@ -873,6 +950,7 @@ function ReplayScreen({
             open={legendOpen || tourOpen}
             onToggle={() => setLegendOpen((o) => !o)}
           />
+          )}
         </div>
 
         {variantDelta && variants.shown && (
