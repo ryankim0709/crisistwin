@@ -55,7 +55,9 @@ exported or imported as JSON. Model and contracts: [ADR 0011](adr/0011-simulatio
 **3D diorama** toggle draws the last run's landscape and fire as the `/fire` miniature
 ([ADR 0016](adr/0016-studio-diorama-view.md)).
 
-Limits: wind and moisture are constant for the whole run; horizons are 1, 2, 3 or 6 hours;
+Limits: wind and moisture are constant unless the run follows a weather series; _How long to
+simulate_ offers 3, 6, 12, 24, 48 or 72 hours or a custom 1 h to 7 days (see
+[long runs](fire-simulator.md#how-long-to-simulate));
 fires must be close enough to share one landscape (at most about 24 km across, including
 spread room); edits mark the result stale and nothing re-runs automatically; a run that
 reaches the grid edge is incomplete from that minute. It is a planning experiment, not an

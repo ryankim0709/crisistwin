@@ -10,6 +10,7 @@ import {
   type WindCandidate,
   type WindSourceMode,
 } from "../scenarioWeather";
+import { MAX_WEATHER_HOURS } from "../horizon";
 import "./windPicker.css";
 
 const OPTIONS = [
@@ -106,8 +107,14 @@ export default function WindSourcePicker({
     hadRecord.current = record !== null;
   }, [record]);
 
-  const hours = Math.max(1, Math.min(72, Math.ceil(horizonHours)));
+  const hours = Math.max(1, Math.min(MAX_WEATHER_HOURS, Math.ceil(horizonHours)));
   const noPoint = lon === null || lat === null;
+  // A record fetched for a shorter run does not cover this one: the solver holds its last hour.
+  const shortBy = record ? hours - record.query.hours : 0;
+  const episodeHours =
+    record?.mode === "climatology_percentile"
+      ? (record.analog as { episode_hours?: number } | null)?.episode_hours ?? null
+      : null;
 
   function choose(next: WindSourceMode) {
     setMode(next);
@@ -244,6 +251,19 @@ export default function WindSourcePicker({
             <Tag>{stationLabel(record)}</Tag>
           </div>
           <p className="fr-wp-note">{windSummary(record)}</p>
+          {shortBy > 0 && (
+            <Notice tone="warning">
+              This weather covers {record.query.hours} h but the run is {hours} h. After hour{" "}
+              {record.query.hours} the last hour's wind is held. Press Apply wind again to cover
+              the whole run.
+            </Notice>
+          )}
+          {episodeHours !== null && episodeHours < record.query.hours && (
+            <p className="fr-wp-note">
+              The offshore wind episode lasted {episodeHours} h. The rest of the run follows the
+              real hours that came after it, so the wind usually eases.
+            </p>
+          )}
           {(record.warnings ?? []).length > 0 && (
             <Notice tone="warning">{(record.warnings ?? []).join(" ")}</Notice>
           )}

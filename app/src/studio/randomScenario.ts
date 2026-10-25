@@ -21,6 +21,8 @@ import type { LandscapeGrid } from "../fire/landscape";
 import { CALIFORNIA_REGIONS, type LandscapeRegion } from "../fire/regions";
 import { DEVELOPED_FUEL_CODE, type GeoPoint } from "../fire/spread";
 import type { FireWeatherSeries } from "../fire/weatherSeries";
+import { MAX_WEATHER_HOURS } from "../fire/horizon";
+import { pacificIso } from "../fire/runClock";
 import {
   fetchConditionPresets,
   fetchConditions,
@@ -210,7 +212,7 @@ export async function buildRandomScenario(input: RandomScenarioInput): Promise<R
 
   // Weather: observed hours for that date when the service has them, else the region's
   // climatology analog (derived); else an assumed wind.
-  const hours = Math.ceil(base.settings.horizonMinutes / 60) + 1;
+  const hours = Math.min(MAX_WEATHER_HOURS, Math.ceil(base.settings.horizonMinutes / 60) + 1);
   const first = ignitions[0].location;
   const site = { lon: first.longitude, lat: first.latitude, hours };
   const presetQuery = presets?.presets[0]?.query;
@@ -269,8 +271,22 @@ export async function buildRandomScenario(input: RandomScenarioInput): Promise<R
         ? ", near homes"
         : ", placed anywhere";
   const summary = `${region.name}, ${dateText}, ${ignitions.length} fire${ignitions.length > 1 ? "s" : ""}${where}, ${weatherWords}, seed ${seed}`;
+  // Observed weather has a real clock: T+0 (playback clock, day and night, aircraft daylight)
+  // is the weather's first hour. A climatology analog's date is statistical, so it keeps the default.
+  const observedStart =
+    converted && conditions!.evidence.weather === "observed" ? pacificIso(t0) : null;
+  const firefighting =
+    observedStart && base.firefighting
+      ? { ...base.firefighting, startLocalIso: observedStart }
+      : base.firefighting;
   return {
-    scenario: { ...base, name: `Random scenario, seed ${seed}`, ignitions, settings },
+    scenario: {
+      ...base,
+      ...(firefighting ? { firefighting } : {}),
+      name: `Random scenario, seed ${seed}`,
+      ignitions,
+      settings,
+    },
     summary,
   };
 }

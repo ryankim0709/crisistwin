@@ -333,6 +333,13 @@
   height: 18px;
   pointer-events: none;
 }
+/* Day/night under the scrubber, inset so its ends line up with the thumb's travel. */
+.studio-scrub .fr-dn {
+  margin-top: 4px;
+}
+.studio-scrub .fr-dn-band {
+  margin-inline: calc(var(--thumb) / 2);
+}
 .studio-tick {
   position: absolute;
   bottom: 0;

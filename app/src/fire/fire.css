@@ -716,7 +716,14 @@
 }
 
 .fr-wind-strip {
+  min-width: 0;
+}
+
+.fr-dock-axis {
   grid-area: wind;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
   min-width: 0;
 }
 

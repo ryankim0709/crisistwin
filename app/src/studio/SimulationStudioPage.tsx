@@ -45,7 +45,7 @@ import { CREW_COLORS, FIRELINE_COLORS, firelineCss } from "./firelinePalette";
 import type { Map as MapLibreMap } from "maplibre-gl";
 import StudioMap from "./StudioMap";
 import {
-  DISPLAY_STEP_MINUTES,
+  studioDisplayStepMinutes,
   MAX_ENABLED_IGNITIONS,
   type IgnitionDisplayState,
   type MapMode,
@@ -152,8 +152,18 @@ function loadView(key: string): StudioView {
   }
 }
 
-const SPEED_CHOICES = [1, 5, 10, 30, 60] as const;
+/** Simulation minutes per real second; ×240 watches a 72 h run in 18 s. */
+const SPEED_CHOICES = [1, 5, 10, 30, 60, 120, 240] as const;
 const DEFAULT_SPEED = 10;
+/** A new result plays at the slowest speed that shows its whole run in about this long. */
+const TARGET_PLAYBACK_SECONDS = 40;
+
+/** Speed for a new run: the default, or faster for a long horizon. Never above the largest choice. */
+function speedForHorizon(horizonMinutes: number): number {
+  const wanted = horizonMinutes / TARGET_PLAYBACK_SECONDS;
+  if (wanted <= DEFAULT_SPEED) return DEFAULT_SPEED;
+  return SPEED_CHOICES.find((choice) => choice >= wanted) ?? SPEED_CHOICES[SPEED_CHOICES.length - 1];
+}
 const AUTOSAVE_DELAY_MS = 600;
 const NOTICE_MS = 4000;
 const MAX_IMPORT_CHARACTERS = 1_000_000;
@@ -340,6 +350,10 @@ export default function SimulationStudioPage({
     setPlaying(false);
     setFrameIndex(0);
     clockRef.current = 0;
+    // A long run starts at a speed that shows it in about 40 s (a 72 h run at ×120).
+    if (result && speed < speedForHorizon(result.scenario.settings.horizonMinutes)) {
+      setSpeed(speedForHorizon(result.scenario.settings.horizonMinutes));
+    }
   }
 
   useEffect(() => {
@@ -913,8 +927,15 @@ export default function SimulationStudioPage({
     if (result && shownRun) {
       const solved = shownRun;
       if (solved.reachedEdgeMinute !== null && currentMinute >= solved.reachedEdgeMinute) {
+        const largest = STUDIO_BOARD_SIZES[STUDIO_BOARD_SIZES.length - 1].radiusMeters;
+        const bigger =
+          result.boardId === null
+            ? "Put the fires on the region board and choose a larger Area size, or shorten the run."
+            : boardRadius === largest
+              ? "This is already the largest board: shorten the run to stay inside it."
+              : "Choose a larger Area size and run again, or shorten the run.";
         list.push(
-          `Fire reached the edge of the modelled area at ${formatElapsed(Math.round(solved.reachedEdgeMinute))}; the footprint after that is incomplete.`,
+          `Fire reached the edge of the modelled area at ${formatElapsed(Math.round(solved.reachedEdgeMinute))}; the footprint after that is incomplete. ${bigger}`,
         );
       }
       if (!solved.crownFire.modelled) list.push(solved.crownFire.unavailableReason);
@@ -942,7 +963,7 @@ export default function SimulationStudioPage({
     }
     list.push(OPERATIONAL_DISCLAIMER);
     return list;
-  }, [result, shownRun, currentMinute, stale]);
+  }, [result, shownRun, currentMinute, stale, boardRadius]);
 
   /** Fuel and surface head rate per ignition, from the current (non-stale) result only. */
   const ignitionDetails = useMemo(() => {
@@ -975,6 +996,26 @@ export default function SimulationStudioPage({
   const playbackHorizon =
     result?.scenario.settings.horizonMinutes ?? scenario.settings.horizonMinutes;
 
+  // Local clock and day/night on the playback bar: the scenario's T+0 (the Firefighting start
+  // time, which also sets the aircraft's daylight windows), with sun times at the first fire.
+  const playbackClock = useMemo(() => {
+    const first = result?.scenario.ignitions.find((ignition) => ignition.enabled);
+    if (!result || !first) return undefined;
+    const startMs = startMsOf(result.scenario.firefighting ?? DEFAULT_FIREFIGHTING);
+    const weatherStart = result.scenario.settings.weatherSeries?.enabled
+      ? Date.parse(result.scenario.weather?.query.startUtc ?? "")
+      : Number.NaN;
+    const mismatch = Number.isFinite(weatherStart) && Math.abs(weatherStart - startMs) > 3_600_000;
+    return {
+      startMs,
+      latitude: first.location.latitude,
+      longitude: first.location.longitude,
+      note: mismatch
+        ? "The weather starts at another time: set T+0 local time under Firefighting to match"
+        : "T+0 local time is set under Firefighting",
+    };
+  }, [result]);
+
   const dioramaRun = useMemo<DioramaRun | null>(
     () =>
       result && shownRun
@@ -982,7 +1023,7 @@ export default function SimulationStudioPage({
             arrivalMinutes: shownRun.arrivalMinutes,
             scenario: {
               horizonMinutes: result.scenario.settings.horizonMinutes,
-              stepMinutes: DISPLAY_STEP_MINUTES,
+              stepMinutes: studioDisplayStepMinutes(result.scenario.settings.horizonMinutes),
             },
           }
         : null,
@@ -1484,6 +1525,7 @@ export default function SimulationStudioPage({
             playing={playing}
             speed={speed}
             speedChoices={SPEED_CHOICES}
+            clock={playbackClock}
             events={events}
             metrics={metrics}
             onPlayPause={handlePlayPause}

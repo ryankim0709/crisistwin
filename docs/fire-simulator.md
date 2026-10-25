@@ -37,10 +37,12 @@ resize it and a long run may reach its edge. Cells coarsen from LANDFIRE's nativ
 large boards to keep the grid at most 900 cells a side; the page states radius and cell size
 (fuels resampled by majority; Details has a resolution card) because coarser cells smooth narrow fuel breaks and small neighbourhoods. Click the landscape to place an ignition (in the 3D view, drag to pan, right-drag or Ctrl-drag to rotate, scroll to zoom; arrow keys pan)
 point, set the 20-foot wind speed and the direction it blows from, pick a fuel-moisture
-preset, then play the fire forward over a fixed 24 hour horizon. Playback is
-continuous (1× is 10 model minutes per second, rising to horizon ÷ 18 for horizons past
-3 h, so 80 model minutes per second at 24 h; 0.5×, 2×, and 4× are available) while the results use
-the model's **15-minute** frames. The presets are the standard dead and live moisture
+preset, then play the fire forward over _How long to simulate_ (24 hours by default; 3 h to
+3 days in one click, or a custom 1 h to 7 days, see [How long to simulate](#how-long-to-simulate)).
+Playback is continuous (1× is 10 model minutes per second, rising to horizon ÷ 18 for horizons
+past 3 h, so 80 model minutes per second at 24 h and 4 model hours per second at 72 h; 0.5×, 2×,
+and 4× are available) while the results use the model's **15-minute** frames (30 min past 60 h).
+The presets are the standard dead and live moisture
 scenarios that go with the Scott & Burgan fuel models. The midflame wind factor, maximum
 spotting distance, and structure-to-structure spread rate stay at their defaults (midflame
 0.5, the share of the open wind that reaches flame height). When canopy data loaded for
@@ -104,7 +106,7 @@ to show peak fire weather; they are **explicitly unvalidated**, and the page say
 The page loads the real landscape around an area centre when it opens (default Berkeley
 Hills, 37.88, -122.24): a LANDFIRE FBFM40 fuel raster, four more LANDFIRE layers for canopy
 base height, bulk density, cover, and height that the crown fire model needs, and terrain
-elevation tiles, over a radius scaled to the 24 hour horizon. Clicking the landscape places
+elevation tiles, over a radius scaled to the horizon. Clicking the landscape places
 the ignition point without refetching. **Change area** picks a new centre from the presets (Berkeley Hills, Paradise,
 Malibu / Woolsey) or a small locator map, and clears the ignition point and run. The canopy
 layers cost a real extra download — five coverages' worth of sub-requests instead of one —
@@ -126,7 +128,7 @@ area. A fire started on developed ground reports its Rothermel quantities as zer
 they are undefined for a burning subdivision rather than measured to be nothing.
 
 Keyboard: `Space` plays or pauses the run once one exists, unless a focused control owns the
-key. On the timeline slider, arrow keys step one 15-minute frame, Shift+arrow, `PageUp` and
+key. On the timeline slider, arrow keys step one frame (15 min, 30 min past 60 h), Shift+arrow, `PageUp` and
 `PageDown` step an hour, and `Home` and `End` jump to ignition and the horizon. The fire
 stage and the locator map need WebGL; without it the page shows a notice instead of the
 diorama. No API key, backend call, or persistence is involved; terrain tiles and the
@@ -285,6 +287,57 @@ spotting and structure spread, 6 h):
 
 Fireline intensity in live-fuel models roughly doubles, so crown fire initiation, spotting
 reach and the `/live` board (SH5 everywhere) all respond. Nothing in them was retuned.
+
+## How long to simulate
+
+`/fire` and Simulation Studio share one _How long to simulate_ control
+(`app/src/fire/ui/HorizonControl.tsx`, limits in `app/src/fire/horizon.ts`): 3, 6, 12, 24 hours,
+2 days or 3 days in one click, or _Custom…_ for any whole number of hours from 1 to 168 (7 days).
+`/fire` starts at 24 h, Studio at 3 h. Everything that depends on the horizon follows it:
+
+- Frames. Frames are contours of one continuous arrival field, so only their spacing changes:
+  `frameStepMinutes` keeps a run at 240 frames or fewer. `/fire` keeps 15 min up to 60 h, then
+  30 min (72 h: 145 frames), 60 min past 120 h. Studio keeps 5 min up to 20 h, then 10, 15 or
+  30 min (72 h: 145 frames, plus ignition minutes).
+- Weather. The Historical, Worst and Forecast wind fetch the whole run (`hours` up to 169 on
+  `/api/weather/scenario` and `/api/conditions`). A record fetched for a shorter run says so and
+  asks to apply the wind again; past its last hour the solver holds that hour. A Worst run longer
+  than its offshore episode says how long the episode lasted: the hours after it are the real
+  hours that followed, so the wind usually eases. NWS forecasts end after about 7 days.
+- Day and night. While a run follows hourly weather, the diurnal cycle is in the weather itself.
+  The `/fire` playback bar then shows the local (Pacific) clock and shades night (sunrise and
+  sunset from NOAA's equations, `studio/daylight.ts`; `fire/runClock.ts`). The clock is the
+  weather's start, or for Worst the clock the replayed hours were observed at. With an assumed
+  constant wind there is no clock and no shading, and long runs warn that weather is constant.
+  Studio always shows the clock: its T+0 is _T+0 local time_ under Firefighting (it also sets the
+  aircraft daylight windows), with a note when the weather series starts at another time.
+- Board. A custom `/fire` area on _Local_ already grows with the horizon (40 m/min of assumed
+  fast spread, up to 60 km radius past 6 h). The "reached the edge" warning names the fix: a
+  larger Area size, Custom… for a fixed region board, or a shorter run once the board is the
+  largest.
+- Playback. `/fire` scales 1× with the horizon (72 h plays in 18 s). Studio's speeds go to ×240
+  (4 simulated hours per second) and a new long run starts at the slowest speed that shows it in
+  about 40 s (×120 at 72 h).
+- Firefighting. Candidate control-line runs keep only the best plan's run in memory.
+
+Solve time (`simulateFireSpread`, Node, synthetic mixed grass/shrub/timber board with roads and
+water lines, hourly diurnal wind, 30 km radius = 667 x 667 cells of 90 m):
+
+| Run | Frames | Burned | Solve |
+| --- | --- | --- | --- |
+| 72 h, dry, 20 mph peak | 145 | 2,962 ha | 0.19 s |
+| 24 h, critical, 40 mph peak | 97 | 6,924 ha | 0.21 s |
+| 48 h, critical, 40 mph peak | 193 | 70,753 ha (edge) | 0.91 s |
+| 72 h, critical, 40 mph peak | 145 | 159,328 ha (edge) | 1.8 s |
+| 72 h, critical, 40 mph, 13.5 km radius at 30 m (900 x 900) | 145 | 40,054 ha (edge) | 4.0 s |
+| 7 days, critical, 40 mph, 60 km radius at 150 m | 169 | 1.1 Mha (edge) | 4.1 s |
+
+Cost grows with burned cells, so the worst case is a fire that fills the board. `/fire` solves on
+the main thread, so a long worst-case run freezes the page for those seconds on every edit; the
+control says "solving can take a few seconds" from 48 h. Studio solves in a worker. Frame memory is
+the perimeter contours: about 50 MB for the worst 72 h run above with 30-minute frames (twice that
+with 15-minute frames), which is why frames spread out. The 7-day cap keeps the worst case near
+5 s; nothing longer is offered.
 
 ## Stochastic spread (opt-in, seeded)
 
