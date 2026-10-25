@@ -237,10 +237,12 @@ def _search(drill: Drill, src: str, dst: str, cost: Callable[[str], float | None
 
 # --- reach: where a vehicle class must stop short of its target ------------------------
 
-STOP_SHORT_MAX_M = 3000.0
-"""ASSUMPTION (not sourced): a class that cannot drive to its target stops at the reachable road
-node nearest the target only when that node is at most this many metres (straight line) from
-it; farther, the leg has no route. About a long hose lay or a short hike in."""
+STOP_SHORT_MAX_M = math.inf
+"""No cutoff: a class that cannot drive to its target stops at the reachable road node nearest
+the target, however far that is, and ``off_road_m`` says how far is left. What the unit can do
+from there (hose lay, hike in, walk a dozer in, hold the road as indirect line) is decided by
+the off-road reach rules (app/src/response/reach.ts ``planWork``), not by routing. The previous
+3 km cutoff (an unsourced assumption) left remote fires with no ground response at all."""
 
 ReachStatus = Literal["reached", "detour", "stopped_short"]
 
@@ -309,8 +311,8 @@ def reach_route(
        edge at its own speed) is faster and uses an edge closed to the class.
     2. Otherwise (target off the network, inside the fire, cut off, or closed to the class): the
        class drives to the road node it can reach that is nearest the target in a straight line
-       (inside-fire and blocked edges never used), if within ``stop_short_max_m``:
-       ``stopped_short``. ``blocked_edge`` is the first closed edge on the unrestricted route to
+       (inside-fire and blocked edges never used), if within ``stop_short_max_m`` (default: no
+       limit): ``stopped_short``. ``blocked_edge`` is the first closed edge on the unrestricted route to
        the target, if there is one.
     An origin off the network or inside the fire gives no route (``status`` None)."""
     res = inbound_route(drill, origin, target, blocked, fire, congestion, access)

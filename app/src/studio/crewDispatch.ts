@@ -8,9 +8,18 @@
  *
  * Road access: every vehicle is routed on its own class's graph (studio/roadAccess.ts, rules
  * R01-R12 of docs/suppression-data.md), with the class's speed on each edge (heavy-apparatus
- * caps, grade and single-lane factors). A resource whose class reaches no road point within
- * MAX_ROAD_GAP_METERS of the fire is reported as "no access", with the rule that stopped it on
- * the route an unrestricted vehicle would take. Service roads and tracks are open to apparatus
+ * caps, grade and single-lane factors). Engines, tenders and chiefs park within
+ * MAX_ROAD_GAP_METERS of the fire; hand crews and dozers park at the road point their class
+ * reaches nearest the fire however far it is, and hike or walk in (response/reach.ts limits).
+ * A line builder that cannot reach the edge in time (an engine with no road within
+ * MAX_ROAD_GAP_METERS, a crew hike over HAND_CREW_MAX_HIKE_MINUTES, a dozer walk over
+ * DOZER_MAX_WALK_MINUTES) holds its road as indirect line ("indirect: holding <road>") and is not
+ * an arrival on the fire edge. Only a resource with no road route at all is "no access", with
+ * the rule that stopped it on the route an unrestricted vehicle would take.
+ *
+ * Helitack: with a CAL FIRE helitack base (HB) in the facility layer, the crew flown from the
+ * nearest one is reported (flight at the helicopter cruise assumption, landing
+ * HELITACK_LZ_WALK_M from the fire). Reported only; it is not a line builder in the solver. Service roads and tracks are open to apparatus
  * but not to evacuation traffic.
  *
  * The Studio passes units already chosen from the facilities on the map (`DispatchUnit`,
@@ -32,13 +41,16 @@ import { routeTo, shortestPathTree, type ShortestPathTree } from "../dispatch/ro
 import type { LandscapeGrid } from "../fire/landscape";
 import {
   GROUND_APPARATUS,
+  KMH_PER_KNOT,
   dataValue,
+  vehicleFamily,
   type AccessClass,
   type GroundKind,
 } from "./apparatus";
 import type { CrewArrival } from "./firefighting";
 import { RULE_TEXT, edgeAccessTable, type EdgeAccess, type RoadRule } from "./roadAccess";
 import { CREW_TYPES, STATION_TYPES, type SuppressionBases } from "./suppressionBases";
+import { DOZER_MAX_WALK_MINUTES, HAND_CREW_MAX_HIKE_MINUTES, formatDuration } from "../response/reach";
 import { engineTurnoutMinutes } from "../response/fleet";
 
 /** NFPA 1710 turnout time for fire calls: 80 s (data: response_times.turnout_s, unverified). */
@@ -61,6 +73,17 @@ export const OFFBOARD_CIRCUITY = 1.3;
 export const OFFBOARD_SPEED_KMH = dataValue<Record<string, number>>(
   "road_access.heavy_apparatus_speed_kmh_by_highway",
 ).secondary;
+/** ASSUMPTION (data leaf helicopters.cruise_speed_typical_kt): helicopter cruise, knots. */
+export const HELI_CRUISE_KT = dataValue<number>("helicopters.cruise_speed_typical_kt");
+/** ASSUMPTION (data leaf response_times.helicopter_call_to_takeoff_min): call to takeoff, minutes. */
+export const HELI_TAKEOFF_MIN = dataValue<number>("response_times.helicopter_call_to_takeoff_min");
+/**
+ * ASSUMPTION (labelled; no landing-zone layer): a helitack crew lands this far from the fire and
+ * walks in. A Type 2 helicopter carries 9-14 passengers (NWCG PMS 200 helicopter typing,
+ * data leaf helicopters.type2.passenger_seats); the crew size is not modelled.
+ */
+export const HELITACK_LZ_WALK_M = 500;
+
 /** ASSUMPTION: at most this many units of one kind from one board station. */
 export const UNITS_PER_KIND_PER_STATION = 1;
 
@@ -95,6 +118,10 @@ export interface CrewTrip {
   /** Where it parks, and the walk from there to the fire. */
   roadPoint: LonLat;
   hikeMeters: number;
+  /** direct: works the fire edge; indirect: too far to reach the edge in time, holds its road. */
+  tactic: "direct" | "indirect";
+  /** indirect only: the road it holds ("Grizzly Peak Blvd"), or null when unnamed. */
+  holdingRoad: string | null;
   /** Rule that kept it from a nearer road point, when one did. */
   stoppedShortBy: { rule: RoadRule; why: string; road: string | null } | null;
   /** Origin, then the road path to the road point (off-board legs are a straight line). */
@@ -123,12 +150,24 @@ export interface CrewDispatch {
   noAccess: NoAccess[];
   /** Assumptions that decided this dispatch (fallbacks, unknown tags, off-board travel). */
   notes: string[];
+  /** Helitack crew from the nearest helitack base (reported, not a line builder), or null. */
+  helitack: HelitackPlan | null;
+}
+
+export interface HelitackPlan {
+  baseName: string;
+  baseKm: number;
+  /** Minute the helicopter lands at its landing zone. */
+  landMinute: number;
+  walkMeters: number;
+  /** Minute the crew reaches the fire on foot. */
+  arriveMinute: number;
 }
 
 /** Start minute per line-building resource, for the firefighting model. */
 export function arrivalsOf(dispatch: CrewDispatch): CrewArrival[] {
   return dispatch.trips
-    .filter((trip) => GROUND_APPARATUS[trip.kind].line !== null)
+    .filter((trip) => GROUND_APPARATUS[trip.kind].line !== null && trip.tactic === "direct")
     .map((trip) => ({ kind: trip.kind, minute: trip.arriveMinute }));
 }
 
@@ -192,15 +231,16 @@ export function planCrewDispatch(
   if (kindsOnly && area.stations.length === 0 && !bases?.available) {
     return { dispatch: null, note: "No fire stations on or near this board's roads." };
   }
+  // Every road node (crews and dozers park however far from the fire); engines filter by gap.
   const near: { node: number; meters: number }[] = [];
   let nearest: { node: number; meters: number } | null = null;
   area.nodes.forEach((node, index) => {
     const meters = groundMeters(node, fire);
-    if (meters <= MAX_ROAD_GAP_METERS) near.push({ node: index, meters });
+    near.push({ node: index, meters });
     if (!nearest || meters < nearest.meters) nearest = { node: index, meters };
   });
   if (near.length === 0 || !nearest) {
-    return { dispatch: null, note: "The fire is too far from the board's roads to drive to." };
+    return { dispatch: null, note: "The board has no roads to drive on." };
   }
   const fireNode = (nearest as { node: number; meters: number }).node;
   const notes: string[] = [];
@@ -235,10 +275,11 @@ export function planCrewDispatch(
   };
 
   /** Best road point for `cls` from `source`: drive minutes + walk minutes, smallest. */
-  const legFrom = (cls: AccessClass, origin: Origin, source: number, offsetMinutes: number, lead: LonLat[]): Leg | null => {
+  const legFrom = (cls: AccessClass, origin: Origin, source: number, offsetMinutes: number, lead: LonLat[], maxGap: number): Leg | null => {
     const tree = treeFor(cls, source);
     let best: { node: number; total: number; meters: number } | null = null;
     for (const { node, meters } of near) {
+      if (meters > maxGap) continue;
       const seconds = tree.seconds[node];
       if (!Number.isFinite(seconds)) continue;
       const total = seconds / 60 + meters / HIKE_METERS_PER_MINUTE;
@@ -281,9 +322,9 @@ export function planCrewDispatch(
       location: station.location,
       approachMeters: station.approachMeters,
     }));
-  const legFromBoard = (cls: AccessClass, origin: Origin): Leg | null => {
+  const legFromBoard = (cls: AccessClass, origin: Origin, maxGap: number): Leg | null => {
     const approach = origin.approachMeters * approachMinutesPerMeter;
-    return legFrom(cls, origin, origin.node!, approach, [origin.location]);
+    return legFrom(cls, origin, origin.node!, approach, [origin.location], maxGap);
   };
 
   const [west, south, east, north] = area.bbox;
@@ -316,16 +357,16 @@ export function planCrewDispatch(
       .sort((a, b) => groundMeters(area.nodes[a.node], point) - groundMeters(area.nodes[b.node], point) || a.node - b.node)
       .slice(0, MAX_ENTRY_EXITS);
   /** Off-board base: straight line x circuity at OFFBOARD_SPEED_KMH to an exit, then the board. */
-  const legFromOffBoard = (cls: AccessClass, origin: Origin): Leg | null => {
+  const legFromOffBoard = (cls: AccessClass, origin: Origin, maxGap: number): Leg | null => {
     if (inBox(origin.location)) {
       const snap = nearestNode(origin.location);
-      return legFrom(cls, origin, snap.node, snap.meters * approachMinutesPerMeter, [origin.location]);
+      return legFrom(cls, origin, snap.node, snap.meters * approachMinutesPerMeter, [origin.location], maxGap);
     }
     let best: Leg | null = null;
     for (const exit of entriesNear(origin.location)) {
       const km = groundMeters(origin.location, area.nodes[exit.node]) / 1000;
       const minutes = ((km * OFFBOARD_CIRCUITY) / OFFBOARD_SPEED_KMH) * 60;
-      const leg = legFrom(cls, origin, exit.node, minutes, [origin.location]);
+      const leg = legFrom(cls, origin, exit.node, minutes, [origin.location], maxGap);
       if (leg && (!best || leg.minutes + leg.hikeMeters / HIKE_METERS_PER_MINUTE < best.minutes + best.hikeMeters / HIKE_METERS_PER_MINUTE)) {
         best = leg;
       }
@@ -409,10 +450,10 @@ export function planCrewDispatch(
   const trips: (CrewTrip | null)[] = new Array(resources.length).fill(null);
   const noAccess: NoAccess[] = [];
   const legCache = new Map<string, Leg | null>();
-  const cachedLeg = (cls: AccessClass, origin: Origin, offBoardLeg: boolean) => {
-    const key = `${cls}|${origin.origin}|${origin.name}|${origin.location.join(",")}`;
+  const cachedLeg = (cls: AccessClass, origin: Origin, offBoardLeg: boolean, maxGap: number) => {
+    const key = `${cls}|${maxGap}|${origin.origin}|${origin.name}|${origin.location.join(",")}`;
     if (!legCache.has(key)) {
-      legCache.set(key, offBoardLeg ? legFromOffBoard(cls, origin) : legFromBoard(cls, origin));
+      legCache.set(key, offBoardLeg ? legFromOffBoard(cls, origin, maxGap) : legFromBoard(cls, origin, maxGap));
     }
     return legCache.get(key) ?? null;
   };
@@ -433,9 +474,22 @@ export function planCrewDispatch(
               ...boardOrigins.map((origin) => ({ origin, offBoard: false })),
               ...mutualAid.map((origin) => ({ origin, offBoard: true })),
             ];
-    const options = candidates
-      .map(({ origin, offBoard: off }) => ({ origin, leg: cachedLeg(cls, origin, off) }))
-      .filter((o): o is { origin: Origin; leg: Leg } => o.leg !== null)
+    // Engines, tenders and chiefs park within MAX_ROAD_GAP_METERS; crews and dozers anywhere.
+    const family = spec.line ? vehicleFamily(kind) : null;
+    const walksIn = family === "hand_crew" || family === "dozer";
+    const maxWalkMinutes = family === "hand_crew" ? HAND_CREW_MAX_HIKE_MINUTES : family === "dozer" ? DOZER_MAX_WALK_MINUTES : Infinity;
+    const optionsWithin = (maxGap: number) =>
+      candidates
+        .map(({ origin, offBoard: off }) => ({ origin, leg: cachedLeg(cls, origin, off, maxGap) }))
+        .filter((o): o is { origin: Origin; leg: Leg } => o.leg !== null);
+    let options = optionsWithin(walksIn ? Infinity : MAX_ROAD_GAP_METERS);
+    // A line builder too far to attack directly holds the nearest road it can reach (indirect).
+    let indirect = walksIn && options.length > 0 && options.every((o) => o.leg.hikeMeters / HIKE_METERS_PER_MINUTE > maxWalkMinutes);
+    if (options.length === 0 && family !== null && !walksIn) {
+      options = optionsWithin(Infinity);
+      indirect = options.length > 0;
+    }
+    options
       .sort(
         (a, b) =>
           a.leg.minutes + a.leg.hikeMeters / HIKE_METERS_PER_MINUTE -
@@ -450,7 +504,7 @@ export function planCrewDispatch(
         rule: limit?.rule ?? null,
         why: limit
           ? `${RULE_TEXT[limit.rule]}: ${limit.why}`
-          : "no road route from any base to within 1.5 km of the fire",
+          : "no road route from any base",
         road: limit?.road ?? null,
       });
       continue;
@@ -481,16 +535,19 @@ export function planCrewDispatch(
     const departMinute = reportMinute + turnout;
     const leg = pick.leg;
     const limit = leg.node !== fireNode ? limitOf(cls, sourceOf(pick.origin)) : null;
+    const atRoadMinute = departMinute + leg.minutes;
     trips[index] = {
       kind,
       label,
       stationName: pick.origin.name,
       origin: unit ? unit.origin : !bases?.available && spec.base !== "station" ? "fallback" : pick.origin.origin,
       departMinute,
-      atRoadMinute: departMinute + leg.minutes,
-      arriveMinute: departMinute + leg.minutes + leg.hikeMeters / HIKE_METERS_PER_MINUTE,
+      atRoadMinute,
+      arriveMinute: indirect ? atRoadMinute : atRoadMinute + leg.hikeMeters / HIKE_METERS_PER_MINUTE,
       roadPoint: area.nodes[leg.node],
-      hikeMeters: leg.hikeMeters,
+      hikeMeters: indirect ? 0 : leg.hikeMeters,
+      tactic: indirect ? "indirect" : "direct",
+      holdingRoad: indirect ? roadNameAt(area, leg.node) : null,
       stoppedShortBy: limit,
       path: leg.path,
       pathMinutes: leg.pathMinutes,
@@ -509,11 +566,13 @@ export function planCrewDispatch(
         trips: [],
         noAccess,
         notes,
+        helitack: helitackPlan(bases, fire, reportMinute),
       },
       note: "No ground resource can reach the fire by road.",
     };
   }
-  const closest = sent.reduce((a, b) => (b.hikeMeters < a.hikeMeters ? b : a));
+  const direct = sent.filter((t) => t.tactic === "direct");
+  const closest = (direct.length > 0 ? direct : sent).reduce((a, b) => (b.hikeMeters < a.hikeMeters ? b : a));
   return {
     dispatch: {
       reportMinute,
@@ -524,8 +583,67 @@ export function planCrewDispatch(
       trips: sent,
       noAccess,
       notes,
+      helitack: helitackPlan(bases, fire, reportMinute),
     },
     note: null,
+  };
+}
+
+/**
+ * Plain language for a fire beyond engine reach of every road: "Remote fire: air tankers from
+ * Chico (~25 min), helitack crew landing 0.5 km away (~40 min), hand crew hiking 4.1 km
+ * (~1 h 22 min), 2 engines indirect: holding Grizzly Peak Blvd." Times are from the report.
+ */
+export function remoteFireText(
+  dispatch: CrewDispatch,
+  aircraft: readonly { kind: string; baseName: string | null; overFireMinute: number | null }[],
+): string {
+  const after = (minute: number) => formatDuration(minute - dispatch.reportMinute);
+  const parts: string[] = [];
+  const firstAir = (prefix: string, noun: string) => {
+    const rows = aircraft.filter((a) => a.kind.startsWith(prefix) && a.overFireMinute !== null);
+    if (rows.length === 0) return;
+    const first = rows.reduce((a, b) => (b.overFireMinute! < a.overFireMinute! ? b : a));
+    parts.push(`${noun} from ${first.baseName} (~${after(first.overFireMinute!)})`);
+  };
+  firstAir("airtanker", "air tankers");
+  firstAir("helicopter", "helicopters");
+  const h = dispatch.helitack;
+  if (h) parts.push(`helitack crew from ${h.baseName} landing ~${(h.walkMeters / 1000).toFixed(1)} km away (~${after(h.landMinute)}, not in the line model)`);
+  for (const trip of [...dispatch.trips].sort((a, b) => a.arriveMinute - b.arriveMinute)) {
+    if (trip.tactic === "indirect") {
+      parts.push(`${trip.label} indirect: holding ${trip.holdingRoad ?? "the nearest road"}`);
+    } else if (trip.hikeMeters >= 50) {
+      const verb = GROUND_APPARATUS[trip.kind].line?.kind === "dozer" ? "walking in" : "hiking";
+      parts.push(`${trip.label} ${verb} ${(trip.hikeMeters / 1000).toFixed(1)} km (on the line ~${after(trip.arriveMinute)})`);
+    }
+  }
+  return `Remote fire: ${parts.length > 0 ? parts.join(", ") : "no resource reaches it"}.`;
+}
+
+/** Name of a road meeting `node` (the first named edge), or null. */
+function roadNameAt(area: DispatchArea, node: number): string | null {
+  for (const edge of area.edges) if ((edge.from === node || edge.to === node) && edge.name) return edge.name;
+  return null;
+}
+
+/** Helitack from the nearest helitack base (HB) in the facility layer, or null without one. */
+export function helitackPlan(bases: SuppressionBases | null, fire: LonLat, reportMinute: number): HelitackPlan | null {
+  if (!bases?.available) return null;
+  let best: { name: string; km: number } | null = null;
+  for (const b of bases.bases) {
+    if (b.type !== "HB") continue;
+    const km = groundMeters([b.lon, b.lat], fire) / 1000;
+    if (!best || km < best.km) best = { name: b.name, km };
+  }
+  if (!best) return null;
+  const landMinute = reportMinute + HELI_TAKEOFF_MIN + (best.km / (HELI_CRUISE_KT * KMH_PER_KNOT)) * 60;
+  return {
+    baseName: best.name,
+    baseKm: Math.round(best.km * 10) / 10,
+    landMinute,
+    walkMeters: HELITACK_LZ_WALK_M,
+    arriveMinute: landMinute + HELITACK_LZ_WALK_M / HIKE_METERS_PER_MINUTE,
   };
 }
 

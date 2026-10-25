@@ -1348,7 +1348,7 @@ function workOf(board: Board, team: Team, fire: Fire): UnitWork {
   // A unit on scene works as its reach plan says (out of reach: no line; engine crew on foot: hand line).
   if (team.fireId === fire.id && team.workMode !== null) {
     const lineMPerMin = tacticLineRate(board, fire, [{ ...team, workStartAt: null }], "direct");
-    return { lineMPerMin, holdsFt: team.workMode === "out_of_reach" ? 0 : holdsFlameFeet(team.kind) };
+    return { lineMPerMin, holdsFt: team.workMode === "out_of_reach" || team.workMode === "indirect" ? 0 : holdsFlameFeet(team.kind) };
   }
   return { lineMPerMin: unitLineOn(board, team, fire), holdsFt: holdsFlameFeet(team.kind), kind: team.kind };
 }

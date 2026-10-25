@@ -26,7 +26,7 @@ import {
   reportDelay,
   type ReportDelay,
 } from "../response/report";
-import { engineCrewHandLineMPerMin, planWork, type WorkMode } from "../response/reach";
+import { engineCrewHandLineMPerMin, formatDuration, planWork, type WorkMode } from "../response/reach";
 import { countAtMost } from "./fireField";
 import type { LonLat } from "../live/types";
 import { DROP_HOLDS_FLAME_FEET, nearestWaterKm } from "../studio/aircraft";
@@ -1149,7 +1149,7 @@ function builders(board: Board, fire: Fire): Team[] {
     (t) =>
       t.fireId === fire.id &&
       t.status === "on_scene" &&
-      t.workMode !== "out_of_reach" &&
+      !offEdge(t.workMode) &&
       (t.workStartAt === null || board.minute >= t.workStartAt),
   );
 }
@@ -1176,7 +1176,7 @@ export function tacticLineRate(board: Board, fire: Fire, teams: Team[], tactic: 
     // Off-road reach (response/reach.ts): nothing until it has walked in, nothing out of reach,
     // and an engine crew on foot builds hand line at PMS 465 p.39 per-person rates.
     if (t.workStartAt !== null && board.minute < t.workStartAt) continue;
-    if (t.workMode === "out_of_reach") continue;
+    if (offEdge(t.workMode)) continue;
     if (t.workMode === "hand_line" && (t.kind === "engine_t3" || t.kind === "engine_t1")) {
       rate += engineCrewHandLineMPerMin(t.kind, fuel);
       continue;
@@ -1420,7 +1420,7 @@ export function reachFraction(board: Board, fire: Fire, fr: FireResponse | null 
   if (edge.length === 0) return 1;
   let inside = 0;
   for (const p of edge) {
-    if (units.some((t) => t.workMode !== "out_of_reach" && distanceM(t.position, p) <= t.reachM)) inside += 1;
+    if (units.some((t) => !offEdge(t.workMode) && distanceM(t.position, p) <= t.reachM)) inside += 1;
   }
   const fraction = inside / edge.length;
   if (fr.reach) {
@@ -1474,15 +1474,21 @@ export function arriveOnScene(board: Board, team: Team, fire: Fire): void {
   if (fr) fr.reach = null; // recompute the reachable share with this unit
   if (fr && fr.firstEngineAt === null && isEngine(team.kind)) fr.firstEngineAt = board.minute;
   noteArrival(board, fire);
-  if (plan.mode === "hand_line" || plan.mode === "dozer" || plan.mode === "out_of_reach") {
+  if (plan.mode === "hand_line" || plan.mode === "dozer" || plan.mode === "indirect" || plan.mode === "out_of_reach") {
     logEvent(board, "team", "board", unitAccessText(board, team));
   }
+}
+
+/** Builds no line on the fire edge: out of reach, or holding its road as indirect line. */
+function offEdge(mode: WorkMode | null): boolean {
+  return mode === "out_of_reach" || mode === "indirect";
 }
 
 const MODE_TEXT: Record<WorkMode, string> = {
   hose: "working the edge with hose",
   hand_line: "hiking in to build hand line",
   dozer: "walking the dozer in",
+  indirect: "indirect: holding the road it parked on (too far to reach the edge in time)",
   out_of_reach: "too far from the fire to build line",
 };
 
@@ -1497,7 +1503,7 @@ export function unitAccessText(board: Board, team: Team): string {
   const wait = team.workStartAt !== null ? Math.ceil(team.workStartAt - board.minute) : 0;
   const where = team.accessKnown ? `parked ${distanceText(team.parkedM)} from ${team.fireId}` : `at ${team.fireId} (road access not known; straight-line estimate)`;
   const mode = MODE_TEXT[team.workMode];
-  return `${team.id} ${where} — ${wait > 0 ? `${mode}, ~${wait} min` : team.workMode === "hand_line" ? "building hand line" : team.workMode === "dozer" ? "cutting dozer line" : mode}.`;
+  return `${team.id} ${where} — ${wait > 0 ? `${mode}, ~${formatDuration(wait)}` : team.workMode === "hand_line" ? "building hand line" : team.workMode === "dozer" ? "cutting dozer line" : mode}.`;
 }
 
 /** Plain language for a fire's reachable edge, or null when it is all within reach (or unknown). */

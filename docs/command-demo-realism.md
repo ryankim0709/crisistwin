@@ -70,9 +70,12 @@ active incident, not only the Camp map.
   - Top level `road_access: {status, basis}`: `ready` (OSM tags and grade), `grade_only` (tags
     still loading), `none` (highway class only); `basis` says what was used.
 
-  A stop short is taken only within 3 km of `to` (`livecore.inbound.STOP_SHORT_MAX_M`,
-  **ASSUMPTION**); farther, the leg has no route and keeps its `reason` (`no_access`,
-  `target_in_fire`, `no_open_road`, `target_off_network`). A target inside the fire also stops
+  A stop short is taken however far the nearest reachable road is from `to`
+  (`livecore.inbound.STOP_SHORT_MAX_M` is infinite; the former 3 km cutoff left remote fires
+  with no ground response). `off_road_m_to_target` then says how far is left, and the off-road
+  reach rules (`app/src/response/reach.ts` `planWork`) decide what the unit does: hose, hike
+  in, walk a dozer in, or hold the road as indirect line. A leg with no reachable road at all
+  keeps its `reason` (`no_access`, `target_in_fire`, `no_open_road`). A target inside the fire also stops
   short, at the nearest reachable road outside it. Consumers (the response model) should read
   `access_status`, `stop_point`, `off_road_m_to_target` and `blocked_reason`; an older server
   omits them, which means `reached`.

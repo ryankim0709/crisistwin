@@ -14,7 +14,7 @@ function firstLeave(handoff: CrewHandoff): number | null {
   const minutes = handoff.leaveMinutes.filter((m): m is number => m !== null);
   return minutes.length > 0 ? Math.min(...minutes) : null;
 }
-import type { CrewDispatch, CrewTrip } from "./crewDispatch";
+import { MAX_ROAD_GAP_METERS, remoteFireText, type CrewDispatch, type CrewTrip } from "./crewDispatch";
 
 /** Which fire the page shows: direct attack, the best line plan, or no crews. */
 export type FireShown = "attack" | "line" | "none";
@@ -156,6 +156,7 @@ function DispatchSummary({ dispatch }: { dispatch: CrewDispatch }) {
               {ORIGIN_NOTE[trip.origin]}: {formatElapsed(Math.round(trip.arriveMinute))} (
               {Math.round(trip.atRoadMinute - trip.departMinute)} min drive
               {trip.hikeMeters >= 50 ? `, ${(trip.hikeMeters / 1000).toFixed(1)} km walk` : ""})
+              {trip.tactic === "indirect" ? ` — indirect: holding ${trip.holdingRoad ?? "the nearest road"}` : ""}
             </li>
           ))}
         </ol>
@@ -273,6 +274,9 @@ export default function FirefightingResults({
         </table>
       </div>
 
+      {dispatch && (dispatch.hikeMeters > MAX_ROAD_GAP_METERS || dispatch.trips.some((t) => t.tactic === "indirect")) && (
+        <p className="studio-hint">{remoteFireText(dispatch, result.aircraft?.aircraft ?? [])}</p>
+      )}
       {dispatch && <DispatchSummary dispatch={dispatch} />}
       <AircraftSummary result={result} />
       {dispatchNote && (
