@@ -35,14 +35,24 @@ import {
   type ZoneState,
 } from "./model";
 import { ORDER_COMPLIANCE, SHADOW_SHARE, holdsFlameFeet, kindLabel, windAt } from "./realism";
-import { departmentStatus, dispatchable } from "./boardResponse";
+import { departmentStatus, dispatchable, isReported, reachFraction } from "./boardResponse";
 import { TANK_GALLONS } from "../response/units";
 import { MAX_ORDER_COUNT, ORDERABLE, dispatchLevel } from "../response/runCards";
 
 /** The response model's per-fire record for the observation (docs/response-model.md). */
 function fireResponseObservation(board: Board, fire: Fire): Pick<
   FireObservation,
-  "tactic" | "dispatch_level" | "ia_status" | "escalation_stage" | "first_arrival_min" | "line_breaches" | "air_line_m" | "aircraft"
+  | "tactic"
+  | "dispatch_level"
+  | "ia_status"
+  | "escalation_stage"
+  | "first_arrival_min"
+  | "line_breaches"
+  | "air_line_m"
+  | "aircraft"
+  | "reported_after_min"
+  | "reported_by"
+  | "edge_in_reach_pct"
 > {
   const fr = board.response.fires.get(fire.id);
   return {
@@ -54,6 +64,12 @@ function fireResponseObservation(board: Board, fire: Fire): Pick<
     line_breaches: fr?.breaches ?? 0,
     air_line_m: Math.round(fr?.airLineM ?? 0),
     aircraft: board.response.aircraft.filter((a) => a.fireId === fire.id).map((a) => a.id),
+    reported_after_min: fr ? Math.round(fr.reportAt - fire.ignitedAt) : null,
+    reported_by: fr?.report.by ?? null,
+    edge_in_reach_pct: (() => {
+      const f = reachFraction(board, fire);
+      return f === null ? null : Math.round(f * 100);
+    })(),
   };
 }
 
@@ -142,7 +158,8 @@ export function buildObservation(
   previous: DemoObservation["previous"],
 ): DemoObservation {
   const minute = board.minute;
-  const fires = activeFires(board);
+  // The commander sees only fires the dispatch centre knows about (response/report.ts).
+  const fires = activeFires(board).filter((f) => isReported(board, f));
 
   const listed = board.zones.filter((zone) => {
     const f = forecasts.get(zone.id);
@@ -239,6 +256,9 @@ export function buildObservation(
       tier: team.tier,
       water_pct: team.waterGallons === null ? null : Math.round((team.waterGallons / (TANK_GALLONS[team.kind] ?? team.waterGallons)) * 100),
       work_h: round1(team.workMinutes / 60),
+      parked_m: team.parkedM === null || !team.accessKnown ? null : Math.round(team.parkedM),
+      work_mode: team.workMode,
+      working_in_min: team.workStartAt === null ? null : Math.max(0, Math.ceil(team.workStartAt - minute)),
     };
   });
 
@@ -306,7 +326,7 @@ export interface MonitorMemory {
 }
 
 function outrunFires(board: Board): Fire[] {
-  return board.fires.filter((f) => f.status === "burning" && currentContainment(board, f) === null);
+  return board.fires.filter((f) => f.status === "burning" && isReported(board, f) && currentContainment(board, f) === null);
 }
 
 function slackTiers(board: Board, forecasts: Map<string, ZoneForecast>): Record<string, SlackTier> {
@@ -324,7 +344,7 @@ function slackTiers(board: Board, forecasts: Map<string, ZoneForecast>): Record<
 export function rememberDecision(board: Board, forecasts: Map<string, ZoneForecast> = zoneForecasts(board)): MonitorMemory {
   return {
     minute: board.minute,
-    fireIds: activeFires(board).map((f) => f.id),
+    fireIds: activeFires(board).filter((f) => isReported(board, f)).map((f) => f.id),
     busyCrewIds: board.teams.filter((t) => t.status !== "available").map((t) => t.id),
     outrunFireIds: outrunFires(board).map((f) => f.id),
     slackTiers: slackTiers(board, forecasts),
@@ -341,7 +361,7 @@ export function wakeReasons(
   memory: MonitorMemory | null,
 ): string[] {
   const reasons: string[] = [];
-  const active = activeFires(board);
+  const active = activeFires(board).filter((f) => isReported(board, f));
   const known = new Set(memory?.fireIds ?? []);
 
   const fresh = active.filter((f) => !known.has(f.id));

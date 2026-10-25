@@ -44,6 +44,9 @@ import {
 } from "./apparatus";
 import { DROP_HOLDS_FLAME_FEET, planAircraft, type AircraftPlan, type AirBase } from "./aircraft";
 import { WILDLAND_RUN_CARDS } from "../response/runCards";
+import { reportDelay } from "../response/report";
+import { deriveStream } from "../response/rng";
+import { cellAt as gridCellAt } from "../fire/spread";
 
 /** A ground resource kind (studio/apparatus.ts). Kept as an alias for older imports. */
 export type ResourceKind = GroundKind;
@@ -103,6 +106,60 @@ const RUN_CARD = WILDLAND_RUN_CARDS.medium;
  * Type 2 crew. Air (California Fire Pilots Association, secondary source): air attack, two
  * airtankers (CAL FIRE's S-2T) and one helicopter (Type 2 here; ASSUMPTION on the type).
  */
+/** ASSUMPTION: developed (FBFM40 91) share of the cells within this radius of an ignition stands in for population density in Studio, which has no households. */
+export const DENSITY_RADIUS_M = 500;
+/**
+ * ASSUMPTION mapping, developed share to people per square mile (picks the NFPA 1720 demand
+ * zone in response/report.ts): 50% or more developed reads as urban (1,500), 15% or more as
+ * suburban (750), less as rural (100).
+ */
+export function peopleProxyPerSqMi(developedShare: number): number {
+  return developedShare >= 0.5 ? 1500 : developedShare >= 0.15 ? 750 : 100;
+}
+
+/**
+ * Minutes from an ignition to dispatch (call-in, answer, transfer, processing;
+ * response/report.ts), seeded per ignition from its place and minute so a rerun gives the
+ * same delay. Studio has no households, so density comes from developed cells (assumption).
+ */
+export function ignitionReportDelayMinutes(
+  grid: LandscapeGrid | null,
+  location: { longitude: number; latitude: number },
+  startMinute: number,
+  settings: FirefightingSettings,
+): number {
+  let developedShare = 0;
+  let developed = false;
+  if (grid) {
+    const c0 = gridCellAt(grid, location);
+    developed = c0 >= 0 && grid.fuelCodes[c0] === DEVELOPED_FUEL_CODE;
+    if (c0 >= 0) {
+      const r = Math.max(1, Math.round(DENSITY_RADIUS_M / grid.groundCellSizeMeters));
+      const x0 = c0 % grid.width;
+      const y0 = (c0 - x0) / grid.width;
+      let n = 0;
+      let dev = 0;
+      for (let y = Math.max(0, y0 - r); y <= Math.min(grid.height - 1, y0 + r); y += 1) {
+        for (let x = Math.max(0, x0 - r); x <= Math.min(grid.width - 1, x0 + r); x += 1) {
+          if ((x - x0) ** 2 + (y - y0) ** 2 > r * r) continue;
+          n += 1;
+          if (grid.fuelCodes[y * grid.width + x] === DEVELOPED_FUEL_CODE) dev += 1;
+        }
+      }
+      developedShare = n > 0 ? dev / n : 0;
+    }
+  }
+  const rng = deriveStream(0, `${location.longitude.toFixed(5)},${location.latitude.toFixed(5)},${startMinute}`);
+  return reportDelay(rng, {
+    ignitionEpochMs: startMsOf(settings) + startMinute * 60_000,
+    location: [location.longitude, location.latitude],
+    peoplePerSqMi: peopleProxyPerSqMi(developedShare),
+    developed,
+    wildland: !developed,
+    alreadyReported: false,
+  }).totalMinutes;
+}
+
 export const FIRST_ALARM: ApparatusCounts = {
   engine_t3: RUN_CARD.engines,
   dozer_t2: RUN_CARD.dozers,
@@ -663,7 +720,9 @@ export function planFirefighting(
 ): FirefightingResult {
   const horizon = input.settings.horizonMinutes;
   const resources = crewArrivals(settings, input, dispatched);
-  const reportMinute = Math.min(...input.sources.map((s) => s.startMinute));
+  // The first fire reaches dispatch after its call-in and processing delay (response/report.ts).
+  const first = [...input.sources].sort((a, b) => a.startMinute - b.startMinute)[0];
+  const reportMinute = first ? first.startMinute + ignitionReportDelayMinutes(grid, first.location, first.startMinute, settings) : 0;
   const counts = apparatusCounts(settings);
   const anyAir = AIR_KINDS.some((kind) => (counts[kind] ?? 0) > 0);
   const aircraft = anyAir

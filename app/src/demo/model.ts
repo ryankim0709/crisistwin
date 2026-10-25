@@ -54,15 +54,18 @@ import { buildFleet, type BaseInput, type Tier } from "../response/fleet";
 import { MAX_ORDER_COUNT, ORDERABLE, type Orderable } from "../response/runCards";
 import { buildsOn, chooseTactic, lineNeededMeters, tacticHoldsFeet, tacticRateFactor } from "../response/containment";
 import { uniform } from "../response/rng";
+import type { WorkMode } from "../response/reach";
 import { AVAILABILITY_DRAW_EVERY_MINUTES, OUT_OF_SERVICE_MINUTES, OUT_OF_SERVICE_PROBABILITY, TANK_GALLONS } from "../response/units";
 import {
   advanceContainment,
+  arriveOnScene,
+  reachFraction,
+  tacticLineRate,
   createResponseState,
   dispatchTeam,
   dispatchable,
   escalate,
   expectedArrival,
-  noteArrival,
   onContained,
   placeOrder,
   respondToNewFire,
@@ -243,6 +246,13 @@ export interface Team {
   coverStation: string | null;
   /** Ordered from off the board: leaves the board when released. */
   demobilise: boolean;
+  /** Off-road reach on its fire (response/reach.ts): how it works, from when, how far it parked, its reach radius. */
+  workMode: WorkMode | null;
+  workStartAt: number | null;
+  parkedM: number | null;
+  reachM: number;
+  /** Whether it parked at the end of a known road leg (false: straight-line estimate, parked at its target). */
+  accessKnown: boolean;
 }
 
 export interface RouteOption {
@@ -779,6 +789,11 @@ function buildTeams(zones: BaseZone[], env: DemoEnvironment): { teams: Team[]; s
         outOfServiceUntil: null,
         coverStation: null,
         demobilise: false,
+        workMode: null,
+        workStartAt: null,
+        parkedM: null,
+        reachM: 0,
+        accessKnown: false,
       });
     }
   }
@@ -1257,13 +1272,9 @@ function stepOnce(board: Board, dt: number, landOn: number | null): void {
   for (const team of board.teams) {
     if (team.status !== "en_route" || team.arriveAt === null || team.arriveAt > board.minute) continue;
     const fire = board.fires.find((f) => f.id === team.fireId);
-    if (fire && fire.status === "burning") {
-      team.position = team.target ?? crewTarget(fire);
-      team.status = "on_scene";
-      team.departAt = team.arriveAt = team.rollAt = null;
-      team.route = null;
-      noteArrival(board, fire);
-    } else release(board, team);
+    // Parks at the end of its road leg and plans how to reach the edge (boardResponse.arriveOnScene).
+    if (fire && fire.status === "burning") arriveOnScene(board, team, fire);
+    else release(board, team);
   }
 
   for (const fire of board.fires) {
@@ -1398,6 +1409,8 @@ export function containedIn(board: Board, fire: Fire, arrivals: number[], units:
   if (tactic === "flank") return null;
   const rate = (u: UnitWork) => (u.kind && !buildsOn(u.kind, tactic) ? 0 : u.lineMPerMin * (u.kind ? tacticRateFactor(u.kind, fuel, tactic) : 1));
   let line = fire.lineM;
+  const reach = reachFraction(board, fire) ?? 1;
+  const airLine = board.response.fires.get(fire.id)?.airLineM ?? 0;
   for (let t = 1; t <= FORECAST_MINUTES; t += 1) {
     let holds = 0;
     for (let i = 0; i < arrivals.length; i += 1) {
@@ -1409,7 +1422,8 @@ export function containedIn(board: Board, fire: Fire, arrivals: number[], units:
     const perimeter = perimeterIn(board, fire, t);
     // Parallel line carries the offset ring; indirect is forecast as parallel (its own plan is set when chosen).
     const needed = lineNeededMeters(tactic === "indirect" ? "parallel" : tactic, perimeter, null);
-    line = Math.min(line, needed);
+    // Ground line covers only the reachable share of the edge; aircraft line already laid adds to it.
+    line = Math.min(line, needed * reach + airLine);
     const holdsHead = tactic === "direct" ? lineHoldsHead(fire, holds) : tacticHoldsFeet(tactic, holds) >= fire.rates.headFlameFeet;
     if (holds > 0 && line >= needed && holdsHead) return t;
   }
@@ -1418,12 +1432,19 @@ export function containedIn(board: Board, fire: Fire, arrivals: number[], units:
 
 function teamArrival(board: Board, team: Team, fire: Fire): number {
   if (team.fireId === fire.id) {
-    return team.status === "on_scene" ? 0 : Math.max(0, (team.arriveAt ?? board.minute) - board.minute);
+    // On scene: from when it starts building line (after any hike in; response/reach.ts).
+    if (team.status === "on_scene" || team.status === "refilling") return Math.max(0, (team.workStartAt ?? board.minute) - board.minute);
+    return Math.max(0, (team.arriveAt ?? board.minute) - board.minute);
   }
   return travelMinutes(board, team, fire);
 }
 
 function workOf(board: Board, team: Team, fire: Fire): UnitWork {
+  // A unit on scene works as its reach plan says (out of reach: no line; engine crew on foot: hand line).
+  if (team.fireId === fire.id && team.workMode !== null) {
+    const lineMPerMin = tacticLineRate(board, fire, [{ ...team, workStartAt: null }], "direct");
+    return { lineMPerMin, holdsFt: team.workMode === "out_of_reach" ? 0 : holdsFlameFeet(team.kind) };
+  }
   return { lineMPerMin: unitLineOn(board, team, fire), holdsFt: holdsFlameFeet(team.kind), kind: team.kind };
 }
 
