@@ -25,7 +25,7 @@ from pymongo.errors import PyMongoError
 from rest_framework.decorators import api_view, authentication_classes, permission_classes
 from rest_framework.permissions import AllowAny
 
-from . import incidents
+from . import incidents, pollcache
 from .common import (
     ApiError,
     actor_from_request,
@@ -171,7 +171,10 @@ def live_view(methods: list[str], roles: Collection[str] | None = None, auth: bo
                 )
                 scoped = incidents.set_request_incident(incident_id)
                 try:
-                    return func(request, *args, principal=principal, **kwargs)
+                    response = func(request, *args, principal=principal, **kwargs)
+                    if request.method not in ("GET", "HEAD", "OPTIONS") and response.status_code < 400:
+                        pollcache.bump(incident_id)  # the next console poll shows this write
+                    return response
                 finally:
                     incidents.reset_request_incident(scoped)
                     reset_request_actor(actor)

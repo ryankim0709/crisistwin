@@ -8,6 +8,7 @@ import {
   DECIDE_URL,
   runOutcomeUrl,
   type DecisionEvent,
+  type DecisionUsage,
   type Observation,
   type RunOutcome,
 } from "./contracts";
@@ -18,6 +19,8 @@ export class DecisionError extends Error {
   constructor(
     readonly code: string,
     message: string,
+    /** Tokens and cost when the call reached the model before failing (refusal, truncation, no orders). */
+    readonly usage: DecisionUsage | null = null,
   ) {
     super(message);
     this.name = "DecisionError";
@@ -95,8 +98,8 @@ export async function streamNdjson<TFinal>(
       if (line) {
         const event = parseEvent(line, isFinal);
         if (event.type === "error") {
-          const { error, detail } = event as { error?: unknown; detail?: unknown };
-          throw new DecisionError(String(error), String(detail));
+          const { error, detail, usage } = event as { error?: unknown; detail?: unknown; usage?: DecisionUsage | null };
+          throw new DecisionError(String(error), String(detail), usage ?? null);
         }
         if (event.type === "thinking" || event.type === "text") onEvent(event as StreamDelta);
         else return event as TFinal;

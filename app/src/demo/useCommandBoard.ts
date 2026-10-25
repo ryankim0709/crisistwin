@@ -526,10 +526,11 @@ export function useCommandBoard({ token, incidentId, data: commandData, studioBo
         ? "operator"
         : null;
   const clockRunning = clockPause === null;
-  // Auto speed (autoSpeed.ts): 1× while Claude is deciding, 60× while the board is idle (after a
-  // short hold), else 20×. It only sets how many board minutes pass per real second; step() lands
-  // on the same minutes and events at any rate. With the agent off it shows what it would pick.
-  const thinking = agent.status === "thinking";
+  // Auto speed (autoSpeed.ts): 1× while Claude decides on an urgent wake, 5× while it reviews
+  // (routine wake), 60× while the board is idle (after a short hold), else 20×. It only sets how
+  // many board minutes pass per real second; step() lands on the same minutes and events at any
+  // rate. With the agent off it shows what it would pick.
+  const thinking = agent.status === "thinking" ? (agent.urgency ?? "urgent") : null;
   const autoState = useRef<{ board: Board | null; state: AutoSpeedState | null }>({ board: null, state: null });
   useEffect(() => {
     if (!board) return;

@@ -121,6 +121,11 @@ export default function Outcomes({
           detail={`${people(o.caught.people)} caught · ${people(o.needsTransport.people)} need transport`}
         />
         <Metric
+          label="Homes burned"
+          value={nf(o.homes.burned)}
+          detail={`in ${nf(o.homes.zones)} zone${o.homes.zones === 1 ? "" : "s"} · ${nf(o.homes.reachedSaved)} reached by fire, saved by crews`}
+        />
+        <Metric
           label="Close calls"
           value={people(o.closeCalls.people)}
           detail={`left under ${CLOSE_CALL_MINUTES} min before fire · ${households(o.closeCalls.households)}`}
@@ -175,7 +180,9 @@ export default function Outcomes({
           <dd>
             Caught: still home when fire reached their zone's core (zones still overrun; {people(o.caughtRun.people)}{" "}
             over the whole run, including zones since reopened). Need transport: persons of households without a
-            vehicle still home in threatened zones; the board has no pickup, so they cannot leave on their own.
+            vehicle still home in threatened zones; the board has no pickup, so they cannot leave on their own. This
+            drill assumes every household has a vehicle (the snapshot's carless households drive one car each), so
+            it is 0 here.
           </dd>
           <dt>Close calls</dt>
           <dd>
@@ -183,6 +190,11 @@ export default function Outcomes({
             model catches whoever is still home then), in zones still overrun. Departure minutes are the traffic
             model's whole-minute steps, so a margin can read up to 1 min short. The {CLOSE_CALL_MINUTES}-minute
             threshold is an assumption for display.
+          </dd>
+          <dt>Homes burned</dt>
+          <dd>
+            {o.homes.method} A home on a cell still burning counts as burned; one on a cell crews put out before it
+            burned out counts as reached and saved.
           </dd>
           <dt>Arrived by destination</dt>
           <dd>Arrivals so far, by the destination each household left toward.</dd>

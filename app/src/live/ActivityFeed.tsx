@@ -9,6 +9,14 @@ import type { Decision } from "./types";
 import "./activity-feed.css";
 
 const NO_BOARD = {};
+/** Characters of the wake reasons shown under "Claude is deciding…" (the full list is in the decision's details). */
+const WOKE_CHARS = 320;
+
+/** The wake reasons on one readable line, cut at WOKE_CHARS. */
+function wokeLine(reasons: string[]): string {
+  const text = reasons.join("; ");
+  return text.length <= WOKE_CHARS ? text : `${text.slice(0, WOKE_CHARS - 1)}…`;
+}
 
 /** Shape per state (with screen-reader text), so state never rests on colour. */
 const STATE_MARK: Record<FeedState, string> = {
@@ -172,8 +180,11 @@ export default function ActivityFeed({
                 <span className="lc-feed-sr">Proposed: </span>
               </span>
               <div className="lc-feed-body">
-                <p className="lc-feed-title">Claude is deciding…</p>
-                {agent.lastWoke.length ? <p className="lc-feed-sub">Woke because: {agent.lastWoke.join("; ")}</p> : null}
+                <p className="lc-feed-title">
+                  {agent.urgency === "routine" ? "Claude is reviewing the board…" : "Claude is deciding (urgent)…"}
+                </p>
+                {agent.lastWoke.length ? <p className="lc-feed-sub">Woke because: {wokeLine(agent.lastWoke)}</p> : null}
+                {agent.queued ? <p className="lc-feed-meta">Next: {agent.queued === "urgent" ? "urgent follow-up queued" : "follow-up queued"}</p> : null}
                 <p className="lc-feed-meta">Claude · {board ? simClock(board.minute) : "now"}</p>
               </div>
               {live ? (

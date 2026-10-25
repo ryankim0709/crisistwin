@@ -401,7 +401,9 @@ function ZoneDetail({
           { label: "On the road", value: nf(c.enRoute) },
           { label: "Out", value: nf(c.out) },
           { label: "Caught by fire", value: nf(c.caught) },
-          { label: "No vehicle", value: `${nf(zone.noVehicle)} households, need transport` },
+          zone.carlessGivenCar > 0
+            ? { label: "No vehicle (data)", value: `${nf(zone.carlessGivenCar)} households, given one car each (assumption: every household drives)` }
+            : { label: "No vehicle", value: `${nf(zone.noVehicle)} households, need transport` },
           { label: "Fire at edge", value: eta(forecast?.edgeEta ?? null) },
           { label: "Fire at core", value: eta(forecast?.coreEta ?? null) },
           ...(slack !== null && zone.orderedAt === null

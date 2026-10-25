@@ -558,9 +558,17 @@ function renderGroup(ctx: Ctx, g: Group): Rendered {
     case "line_late":
       return {
         title: `Fire reached ${fireLabel(ctx, fireId)}${r.positionId ? ` ${r.positionId}` : ""} before ${unitsText(ctx, teamIds)}.`,
-        sub: "Building what line it can",
+        sub: "Did not engage; free to be re-tasked",
         state: "in_progress",
         attention: { tone: "warning", label: "Too late" },
+        boardRef: fireRef,
+      };
+    case "line_overrun":
+      return {
+        title: `Fire reached ${fireLabel(ctx, fireId)}${r.positionId ? ` ${r.positionId}` : ""} before its line was finished${r.lineM !== undefined ? ` (${nf(r.lineM)} m built)` : ""}.`,
+        sub: `${unitsText(ctx, teamIds)} pulled back; free to be re-tasked`,
+        state: "info",
+        attention: { tone: "warning", label: "Pulled back" },
         boardRef: fireRef,
       };
     case "road_cut":

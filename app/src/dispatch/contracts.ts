@@ -293,6 +293,24 @@ export type WireOrder =
     }
   | { type: "recall_unit"; unit_id: string; reason: string };
 
+/**
+ * Token usage of one decision call and its cost (api/dispatch.py decision_usage), on the final
+ * "orders" line and on an "error" line sent after the model answered. Prompt size =
+ * input_tokens (uncached) + cache_read_input_tokens + cache_creation_input_tokens
+ * (= cache_write_5m + cache_write_1h). cost_usd is from the server's list-price table for
+ * `model`; null when that model is not priced there.
+ */
+export interface DecisionUsage {
+  model: string;
+  input_tokens: number;
+  cache_read_input_tokens: number;
+  cache_creation_input_tokens: number;
+  cache_write_5m: number;
+  cache_write_1h: number;
+  output_tokens: number;
+  cost_usd: number | null;
+}
+
 export type DecisionEvent =
   /** Streamed summary of the model's reasoning (adaptive thinking, summarized). */
   | { type: "thinking"; text: string }
@@ -309,5 +327,6 @@ export type DecisionEvent =
       /** Earlier runs on these roads the agent was shown from the run journal (0 = none). */
       recalled_runs?: number;
       evidence_class: "ai_decision";
+      usage?: DecisionUsage | null;
     }
-  | { type: "error"; error: string; detail: string };
+  | { type: "error"; error: string; detail: string; usage?: DecisionUsage | null };

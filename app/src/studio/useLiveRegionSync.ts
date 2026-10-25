@@ -1,8 +1,8 @@
 /**
  * Live -> Studio region sync, for /simulation only (`enabled`). Once on load, Studio selects the
- * region of the Live command drill when it is a Studio drill package whose region is in the
- * catalog, overriding the remembered region; it never fights a later pick (a pick, or a run,
- * before the drill is read cancels the sync). Studio -> Live happens on Run (usePublishLiveFire).
+ * board (region and area size) of the Live command drill when it is a Studio drill package whose
+ * region is in the catalog, overriding the remembered region; it never fights a later pick (a
+ * region or size pick, or a run, before the drill is read cancels the sync). Studio -> Live happens on Run (usePublishLiveFire).
  *
  * While the page is visible the drill is re-read every 15 s (and when the tab becomes visible),
  * so a drill switched from Live command updates `note`; the selected region is never changed
@@ -37,7 +37,8 @@ export function useLiveRegionSync({
   liveFire: LiveFireState;
   /** True once a run has started or finished: the load-time sync then stays out of the way. */
   blocked: boolean;
-  select: (id: string) => void;
+  /** Select a board: region id and size (null: the region's own board). */
+  select: (id: string, radiusMeters: number | null) => void;
 }): { note: string | null; userPicked: () => void } {
   const [read, setRead] = useState<{ drill: Drill; fire: LiveFireState } | null>(null);
   const fireRef = useRef(liveFire);
@@ -63,9 +64,10 @@ export function useLiveRegionSync({
           active.source === "package" &&
           drillRegion
         ) {
-          // The drill's board id may carry a size ("<region>@10km"); the sync picks its region.
+          // The drill's board id may carry a size ("<region>@10km"): the sync picks that board,
+          // region and size, so Studio's board id matches the drill's.
           const board = parseStudioBoardId(drillRegion);
-          if (board) selectRef.current(board.region.id);
+          if (board) selectRef.current(board.region.id, board.radiusMeters);
         }
       })
       .catch(() => undefined);

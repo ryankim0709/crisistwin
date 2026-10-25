@@ -97,9 +97,10 @@ import { MAX_ORDER_COUNT, ORDERABLE, type Orderable } from "../response/runCards
 import { buildsOn, chooseTactic, lineNeededMeters, tacticHoldsFeet, tacticRateFactor, type Tactic } from "../response/containment";
 import { applyStrategyOrder, commanderTactic, type SetStrategyOrder } from "./strategyOptions";
 import { uniform } from "../response/rng";
-import type { WorkMode } from "../response/reach";
+import { engineCrewHandLineMPerMin, type WorkMode, type WorkPlan } from "../response/reach";
 import { AVAILABILITY_DRAW_EVERY_MINUTES, ENGINE_WATER_USE_GPM, OUT_OF_SERVICE_MINUTES, OUT_OF_SERVICE_PROBABILITY, TANK_GALLONS } from "../response/units";
 import {
+  accessWorkPlan,
   accrueContainmentLine,
   advanceContainment,
   arriveHome,
@@ -117,6 +118,7 @@ import {
   releaseAircraftOrder,
   respondToNewFire,
   responseTick,
+  unitAccessText,
   unreportedRefusal,
   sendHome,
   tacticLineRate,
@@ -268,9 +270,10 @@ export interface Fire {
    * The Studio publish it came from: board tag ("S1"), scenario name and ignition name, and
    * reportAfterMin = Studio report_minute - start_minute: minutes after ignition the fire is
    * reported to dispatch, as the Studio user set it (an assumption); null = not set, so the
-   * board models the report delay (boardResponse.ts reportFor).
+   * board models the report delay (boardResponse.ts reportFor). `ignitionId` is the Studio
+   * ignition's own id (StudioFire ignitions[].id), so a rerun of the same ignition is recognised.
    */
-  studio: { tag: string; name: string; ignition: string; reportAfterMin: number | null };
+  studio: { tag: string; name: string; ignition: string; ignitionId: string; reportAfterMin: number | null };
   origin: LonLat;
   ignitedAt: number;
   /** Whole board minute the solver lets it spread from (ceil of `ignitedAt`). */
@@ -406,10 +409,16 @@ export interface ZoneState {
   name: string;
   households: number;
   /**
-   * Households with no vehicle: they cannot drive out and need transport (snapshot
-   * `needs_transport_households`; without a snapshot the environment's ACS carless count).
+   * Households with no vehicle on the board: they cannot drive out and need transport. 0 while
+   * EVERY_HOUSEHOLD_DRIVES (the drill simplification): the data's carless households are in
+   * `carlessGivenCar` and drive one car each.
    */
   noVehicle: number;
+  /**
+   * The data's carless households (snapshot `needs_transport_households`; without a snapshot the
+   * environment's ACS carless count) that EVERY_HOUSEHOLD_DRIVES gives one car each; 0 when off.
+   */
+  carlessGivenCar: number;
   /** Where households, persons and vehicles come from: the resource snapshot, or the drill file. */
   demand: "snapshot" | "drill";
   /** Persons in the zone; null when unknown (no snapshot, or households with unknown occupants). Never 0 for unknown. */
@@ -608,7 +617,10 @@ export type BoardEventAction =
   | "strategy_set"
   | "line_breached"
   | "line_finished"
+  /** A unit reached its attack line after the fire did; it does not engage and heads back (refs.positionId). */
   | "line_late"
+  /** Fire reached an unfinished line's anchor; its units pulled back (withdrawFromOverrunLines; refs.positionId, refs.lineM built). */
+  | "line_overrun"
   | "road_cut"
   /** A trip given up after MAX_FIRE_CUT_REROUTES fire-cut reroutes (model.ts rerouteTeam); the unit stops, free. */
   | "road_blocked"
@@ -1440,6 +1452,26 @@ function countOrNull(v: unknown): number | null {
   return typeof v === "number" && Number.isFinite(v) ? Math.max(0, Math.round(v)) : null;
 }
 
+/**
+ * ASSUMPTION (drill simplification, not data): every household has a vehicle. The board has no
+ * transport for carless households, so the snapshot's carless households (needs_transport) drive
+ * one car each: they leave on an evacuation order like any household with a vehicle, and add one
+ * car each to the zone's evacuating vehicles (so to the traffic loads). Applied when the board is
+ * built (zoneState); the snapshot data itself is unchanged. Shown in observation.inputs.demand
+ * and on the /live panels.
+ */
+export const EVERY_HOUSEHOLD_DRIVES = true;
+export const EVERY_HOUSEHOLD_DRIVES_LABEL =
+  "Assumption (drill simplification): every household has a vehicle; the snapshot's carless households drive one car each";
+
+/**
+ * Carless households and their vehicles as the board runs them (EVERY_HOUSEHOLD_DRIVES): with the
+ * simplification on, none stays carless and each adds one evacuating vehicle.
+ */
+function carlessOnBoard(carless: number, vehicles: number): { noVehicle: number; carlessGivenCar: number; vehicles: number } {
+  return EVERY_HOUSEHOLD_DRIVES ? { noVehicle: 0, carlessGivenCar: carless, vehicles: vehicles + carless } : { noVehicle: carless, carlessGivenCar: 0, vehicles };
+}
+
 /** A zone's starting state: from its snapshot row when there is one, else the drill file and the environment. */
 function zoneState(z: BaseZone, snap: SnapshotZone | undefined, env: DemoEnvironment): ZoneState {
   const common = {
@@ -1461,25 +1493,32 @@ function zoneState(z: BaseZone, snap: SnapshotZone | undefined, env: DemoEnviron
     const households = count(snap.households);
     const unknown = Math.min(households, count(snap.unknown_households));
     const occupants = unknown > 0 ? null : countOrNull(snap.occupants);
+    const carless = carlessOnBoard(Math.min(households, count(snap.needs_transport_households)), count(snap.evacuating_vehicles));
     return {
       ...common,
       households,
-      noVehicle: Math.min(households, count(snap.needs_transport_households)),
+      noVehicle: carless.noVehicle,
+      carlessGivenCar: carless.carlessGivenCar,
       demand: "snapshot",
       occupants,
       knownOccupants: count(snap.known_occupants),
       unknownOccupantHouseholds: unknown,
-      needsTransportOccupants: occupants === null ? null : Math.min(occupants, count(snap.needs_transport_occupants)),
+      // Persons of the households still carless on the board (0 when every household drives).
+      needsTransportOccupants: occupants === null ? null : carless.noVehicle > 0 ? Math.min(occupants, count(snap.needs_transport_occupants)) : 0,
       vehiclesOwned: countOrNull(snap.vehicles),
       caughtPeople: occupants === null ? null : 0,
-      vehicles: count(snap.evacuating_vehicles),
+      vehicles: carless.vehicles,
     };
   }
   const households = count(z.households);
+  const carlessData = Math.min(households, count(env.noVehicle.get(z.id) ?? 0));
+  // Missing drill vehicles = one per household already (carless included): no car is added then.
+  const carless = carlessOnBoard(carlessData, z.vehicles === undefined ? (EVERY_HOUSEHOLD_DRIVES ? households - carlessData : households) : count(z.vehicles));
   return {
     ...common,
     households,
-    noVehicle: Math.min(households, count(env.noVehicle.get(z.id) ?? 0)),
+    noVehicle: carless.noVehicle,
+    carlessGivenCar: carless.carlessGivenCar,
     demand: "drill",
     occupants: null,
     knownOccupants: 0,
@@ -1487,7 +1526,7 @@ function zoneState(z: BaseZone, snap: SnapshotZone | undefined, env: DemoEnviron
     needsTransportOccupants: null,
     vehiclesOwned: null,
     caughtPeople: null,
-    vehicles: z.vehicles === undefined ? households : count(z.vehicles),
+    vehicles: carless.vehicles,
   };
 }
 
@@ -1874,6 +1913,12 @@ export function ingestStudioFire(board: Board, fire: StudioFire): boolean {
   const grid = board.env.landscape;
   const outside = new Set(fire.outside_drill);
   const taken = new Set([...board.fires.map((f) => f.id), ...board.scheduled.map((s) => s.id)]);
+  // The same Studio ignition at the same place, still burning, contained or waiting to start, is
+  // already this board's fire: a Studio rerun (or another Studio tab synced to the same shared
+  // world) republishes it, and starting it again would stack a duplicate fire on the same cell.
+  const onBoard = new Map<string, { id: string; origin: LonLat }>();
+  for (const f of board.fires) if (f.status !== "out") onBoard.set(f.studio.ignitionId, { id: f.id, origin: f.origin });
+  for (const s of board.scheduled) onBoard.set(s.studio.ignitionId, { id: s.id, origin: s.origin });
   const skipped: string[] = [];
   let scheduled = 0;
   let reportSet = 0;
@@ -1887,6 +1932,11 @@ export function ingestStudioFire(board: Board, fire: StudioFire): boolean {
       skipped.push(`${name} is off the board's landscape (${board.env.landscapeRegion.name})`);
       return;
     }
+    const same = onBoard.get(ign.id);
+    if (same && cellAt(grid, { longitude: same.origin[0], latitude: same.origin[1] }) === cellAt(grid, { longitude: ign.lon, latitude: ign.lat })) {
+      skipped.push(`${name} is already on the board as ${same.id} (same Studio ignition and place)`);
+      return;
+    }
     const base = `${tag}-${ignitionPart(name, i)}`;
     let id = base;
     for (let k = 2; taken.has(id); k += 1) id = `${base}-${k}`;
@@ -1896,7 +1946,7 @@ export function ingestStudioFire(board: Board, fire: StudioFire): boolean {
       origin: [ign.lon, ign.lat],
       at: board.minute + Math.max(0, ign.start_minute),
       // Same offset convention as the start: the report comes report_minute - start_minute after ignition.
-      studio: { tag, name: fire.name, ignition: name, reportAfterMin: studioReportAfterMin(ign) },
+      studio: { tag, name: fire.name, ignition: name, ignitionId: ign.id, reportAfterMin: studioReportAfterMin(ign) },
     });
     scheduled += 1;
     if (studioReportAfterMin(ign) !== null) reportSet += 1;
@@ -2484,10 +2534,13 @@ function plansFor(board: Board, fire: Fire): AttackPlan[] {
   return plans;
 }
 
-/** Attack positions of a burning fire now: the planned ones, with any unfinished line kept where it was laid out. */
+/** Attack positions of a burning fire now: the planned ones, with any unfinished line the fire has not reached kept where it was laid out. */
 export function attackPositions(board: Board, fire: Fire): AttackPosition[] {
   if (fire.status !== "burning") return [];
-  const open = board.lines.filter((l) => l.fireId === fire.id && l.completedAt === null);
+  // An unfinished line whose anchor the fire has reached is no longer a position (its crew pulled
+  // back, withdrawFromOverrunLines; its built cells stay in the solver): it neither shadows the
+  // re-planned position of the same id nor stays listed with the fire already there.
+  const open = board.lines.filter((l) => l.fireId === fire.id && l.completedAt === null && positionEta(board, l.plan) !== 0);
   const out: AttackPosition[] = plansFor(board, fire).map((p) => {
     const line = open.find((l) => l.plan.id === p.id) ?? null;
     return { ...(line?.plan ?? p), line };
@@ -2503,9 +2556,28 @@ export function positionEta(board: Board, plan: AttackPlan): number | null {
   return Math.max(0, a - board.minute);
 }
 
-/** A unit's line production on a line, m/min (sourced rate at the anchor's fuel and slope). */
-export function unitLineRateOn(team: Team, plan: AttackPlan): number {
+/**
+ * A unit's line production on a line, m/min, working it in `mode` (default: its own work mode):
+ * the sourced rate at the anchor's fuel and slope (realism.ts lineMetersPerMinute); none out of
+ * reach; an engine crew on foot beyond hose reach builds hand line at the PMS 465 p.39 per-person
+ * rate (response/reach.ts engineCrewHandLineMPerMin), as on direct attack (boardResponse.tacticLineRate).
+ */
+export function unitLineRateOn(team: Team, plan: AttackPlan, mode: WorkMode | null = team.workMode): number {
+  if (mode === "out_of_reach") return 0;
+  if (mode === "hand_line" && (team.kind === "engine_t3" || team.kind === "engine_t1")) return engineCrewHandLineMPerMin(team.kind, plan.fuelCode);
   return lineMetersPerMinute(team.kind, plan.fuelCode, plan.slopePercent);
+}
+
+/**
+ * How a unit parked at `parked` (the end of its road leg) works the line at `plan`: off-road reach
+ * (response/reach.ts planWork, boardResponse.accessWorkPlan) from the park point to the line's
+ * anchor, where the crew starts building. Hose within reach, else the crew hikes in (Tobler) and
+ * builds hand line, else it is out of reach and builds nothing. The router snaps a target to a
+ * road node up to 1 km away (livecore/inbound.py INBOUND_SNAP_MAX_M), and a class that cannot
+ * drive to it stops up to 3 km short (STOP_SHORT_MAX_M), so this walk is not negligible.
+ */
+export function lineAccessPlan(board: Board, team: Team, parked: LonLat, plan: AttackPlan): WorkPlan & { distanceM: number } {
+  return accessWorkPlan(board, team.kind, parked, plan.point);
 }
 
 /** Id of the line a unit would build at `plan` (also its trip key, see travelKey). */
@@ -2545,12 +2617,17 @@ export function lineBuiltExtent(line: AttackLine): { a: number; b: number } {
   return builtExtent(line.builtM, line.plan.aM, line.plan.bM);
 }
 
-/** Units on scene building `line`: total m/min and the longest flame their line holds. */
-function lineWork(board: Board, line: AttackLine): { rate: number; holdsFt: number } {
+/**
+ * Units on scene building `line` at board minute `at`: total m/min and the longest flame their
+ * line holds. A unit still hiking in from where it parked (workStartAt ahead) or parked out of
+ * reach of the line's anchor builds nothing (lineAccessPlan).
+ */
+function lineWork(board: Board, line: AttackLine, at = board.minute): { rate: number; holdsFt: number } {
   let rate = 0;
   let holdsFt = 0;
   for (const t of board.teams) {
     if (t.lineId !== line.id || t.status !== "on_scene") continue;
+    if (t.workMode === "out_of_reach" || (t.workStartAt !== null && t.workStartAt > at + 1e-9)) continue;
     rate += unitLineRateOn(t, line.plan);
     holdsFt = Math.max(holdsFt, holdsFlameFeet(t.kind));
   }
@@ -2566,7 +2643,7 @@ function nextLineChunkM(line: AttackLine): number {
 function buildLines(board: Board, from: number, dt: number): void {
   for (const line of board.lines) {
     if (line.completedAt !== null || dt <= 0) continue;
-    const { rate, holdsFt } = lineWork(board, line);
+    const { rate, holdsFt } = lineWork(board, line, from);
     if (rate <= 0) continue;
     const b0 = line.builtM;
     let b1 = Math.min(line.lengthM, b0 + rate * dt);
@@ -2593,6 +2670,33 @@ function buildLines(board: Board, from: number, dt: number): void {
         { action: "line_finished", fireId: line.fireId, positionId: line.plan.id, lineM: line.lengthM, teamIds: crew.map((t) => t.id) },
       );
     }
+  }
+}
+
+/**
+ * Fire has reached the anchor of an unfinished attack line (the solver's arrival there is past:
+ * the front got there first, or crossed the line where it was built): every unit on that line,
+ * or still driving to it, pulls back. It is released (drives back to its station, dispatchable on
+ * the way) and the line built so far stays in the fire model. Crews do not keep building where
+ * the fire has arrived: LCES and the Standard Firefighting Orders ("Base all actions on current
+ * and expected behavior of the fire", "Identify escape routes and safety zones") in the NWCG
+ * Incident Response Pocket Guide (PMS 461) require disengaging before the fire reaches the
+ * line. A safety mechanic of the board, like the release when a line is finished; where the units
+ * go next stays the AI agent's order.
+ */
+function withdrawFromOverrunLines(board: Board): void {
+  for (const line of board.lines) {
+    if (line.completedAt !== null || positionEta(board, line.plan) !== 0) continue;
+    const crew = board.teams.filter((t) => t.lineId === line.id);
+    if (crew.length === 0) continue;
+    for (const t of crew) release(board, t);
+    log(
+      board,
+      "team",
+      "board",
+      `Fire reached ${line.fireId} ${line.plan.id} before its line was finished (${Math.round(line.builtM)} of ${Math.round(line.lengthM)} m); ${crew.map((t) => t.id).join(", ")} pulled back (escape route, LCES). The built line stays in the fire model.`,
+      { action: "line_overrun", fireId: line.fireId, positionId: line.plan.id, lineM: line.builtM, teamIds: crew.map((t) => t.id) },
+    );
   }
 }
 
@@ -2662,8 +2766,10 @@ function heldByLine(board: Board, fire: Fire): number | null {
 /** One order option at a position: the n nearest free units that can reach it, added to those on the line. */
 export interface PositionOption {
   teams: string[];
-  /** Minutes until the last of these units is there. */
+  /** Minutes until the last of these units is there (end of its road leg). */
   arriveMin: number;
+  /** Minutes until the last of these units starts building: arrival plus the walk from where it parks to the anchor (lineStart). */
+  startMin: number;
   /** "road": every unit's time is its road leg; "estimate": at least one road leg is not known yet (ASSUMPTION straight line). */
   route: "road" | "estimate";
   /** Minutes until the line is finished with the assigned units plus these; null = not within LINE_DONE_LOOK_MINUTES. */
@@ -2692,9 +2798,32 @@ function lineDoneIn(remainingM: number, arrivals: number[], rates: number[]): nu
   return null;
 }
 
-function lineArrival(board: Board, team: Team): number {
-  if (team.status === "on_scene") return 0;
-  return Math.max(0, (team.arriveAt ?? board.minute) - board.minute);
+/**
+ * When a unit starts building the line at `plan` (minutes from now) and at what rate: on scene,
+ * from the end of its hike in; driving or about to, its road arrival plus the walk from the end
+ * of its road leg (`parked`, when that leg is known) to the anchor (lineAccessPlan). Without a
+ * known leg the walk is not known and not counted (the option's route is "estimate" then).
+ */
+function lineStart(board: Board, team: Team, plan: AttackPlan, arriveMin: number, parked: LonLat | null): { startMin: number; rate: number } {
+  if (team.status === "on_scene" && team.lineId !== null) {
+    return { startMin: Math.max(0, (team.workStartAt ?? board.minute) - board.minute), rate: unitLineRateOn(team, plan) };
+  }
+  if (!parked) return { startMin: arriveMin, rate: unitLineRateOn(team, plan, null) };
+  const access = lineAccessPlan(board, team, parked, plan);
+  return { startMin: arriveMin + access.startDelayMinutes, rate: unitLineRateOn(team, plan, access.mode) };
+}
+
+/** An assigned unit's start on its line (lineStart): on scene, or en route on its road leg. */
+function assignedLineStart(board: Board, team: Team, plan: AttackPlan): { startMin: number; rate: number } {
+  const arrive = team.status === "on_scene" ? 0 : Math.max(0, (team.arriveAt ?? board.minute) - board.minute);
+  const parked = team.status === "en_route" && team.travel !== "pending" && team.route && team.route.length > 1 ? team.route[team.route.length - 1] : null;
+  return lineStart(board, team, plan, arrive, parked);
+}
+
+/** Where a unit's road leg to `to` (trip `destKey`) from where it is would end (where it parks), or null while that leg is not known. */
+export function legEnd(board: Board, team: Team, destKey: string, to: LonLat): LonLat | null {
+  const leg = board.travel.get(travelKey(team, tripStart(board, team).from, destKey, to));
+  return leg && leg.line.length > 0 ? leg.line[leg.line.length - 1] : null;
 }
 
 /** Line completion with the units already on this position (minutes), or null. */
@@ -2703,7 +2832,8 @@ export function positionLineDone(board: Board, pos: AttackPosition): number | nu
   if (!line) return null;
   const teams = board.teams.filter((t) => t.lineId === line.id);
   if (teams.length === 0) return null;
-  return lineDoneIn(line.lengthM - line.builtM, teams.map((t) => lineArrival(board, t)), teams.map((t) => unitLineRateOn(t, pos)));
+  const starts = teams.map((t) => assignedLineStart(board, t, pos));
+  return lineDoneIn(line.lengthM - line.builtM, starts.map((s) => s.startMin), starts.map((s) => s.rate));
 }
 
 /** Trip destination id of a position (its line's id, also the travelKey destination). */
@@ -2725,11 +2855,28 @@ export function reachableFree(board: Board, destKey: string, to: LonLat): { team
     .sort((a, b) => a.eta - b.eta || a.team.id.localeCompare(b.team.id));
 }
 
-/** Sending the n nearest free units that can reach it (by arrival at the anchor) to a position, n = 1..max. */
-export function positionOptions(board: Board, fire: Fire, pos: AttackPosition, max = 2): PositionOption[] {
+/**
+ * Free units that can work a position's line, nearest by when they start building first:
+ * reachableFree, with each unit's walk from the end of its known road leg to the anchor
+ * (lineStart); a unit whose leg ends out of its reach of the anchor (lineAccessPlan
+ * out_of_reach) is left out, as it would build nothing there.
+ */
+export function lineWorkers(board: Board, fire: Fire, pos: AttackPosition): { team: Team; eta: number; road: boolean; startMin: number; rate: number }[] {
   const destKey = positionDestKey(fire, pos);
+  return reachableFree(board, destKey, pos.point)
+    .flatMap((r) => {
+      const parked = r.road ? legEnd(board, r.team, destKey, pos.point) : null;
+      const s = lineStart(board, r.team, pos, r.eta, parked);
+      return s.rate > 0 ? [{ ...r, ...s }] : [];
+    })
+    .sort((a, b) => a.startMin - b.startMin || a.team.id.localeCompare(b.team.id));
+}
+
+/** Sending the n units that start building first (lineWorkers: road arrival plus the walk in) to a position, n = 1..max. */
+export function positionOptions(board: Board, fire: Fire, pos: AttackPosition, max = 2): PositionOption[] {
   const assigned = pos.line ? board.teams.filter((t) => t.lineId === pos.line!.id) : [];
-  const free = reachableFree(board, destKey, pos.point);
+  const assignedStarts = assigned.map((t) => assignedLineStart(board, t, pos));
+  const free = lineWorkers(board, fire, pos);
   const remaining = (pos.line ? pos.line.lengthM - pos.line.builtM : pos.aM + pos.bM);
   const out: PositionOption[] = [];
   for (let n = 1; n <= Math.min(max, free.length); n += 1) {
@@ -2737,11 +2884,12 @@ export function positionOptions(board: Board, fire: Fire, pos: AttackPosition, m
     out.push({
       teams: pick.map((p) => p.team.id),
       arriveMin: Math.max(...pick.map((p) => p.eta)),
+      startMin: Math.max(...pick.map((p) => p.startMin)),
       route: pick.every((p) => p.road) ? "road" : "estimate",
       lineDoneMin: lineDoneIn(
         remaining,
-        [...assigned.map((t) => lineArrival(board, t)), ...pick.map((p) => p.eta)],
-        [...assigned.map((t) => unitLineRateOn(t, pos)), ...pick.map((p) => unitLineRateOn(p.team, pos))],
+        [...assignedStarts.map((s) => s.startMin), ...pick.map((p) => p.startMin)],
+        [...assignedStarts.map((s) => s.rate), ...pick.map((p) => p.rate)],
       ),
     });
   }
@@ -3637,15 +3785,30 @@ function stepOnce(board: Board, dt: number, landOn: number | null): void {
       arriveOnScene(board, team, fire);
       continue;
     }
-    // Attack line: at its anchor (the end of its road leg), building line outward.
-    team.position = team.route && team.route.length > 0 ? team.route[team.route.length - 1] : (team.target ?? line.plan.point);
+    // Attack line: parks at the end of its road leg, then reaches the line's anchor as its
+    // off-road reach allows (hose, hike in and build hand line, or out of reach: lineAccessPlan),
+    // and builds outward from the anchor once there (lineWork).
+    const road = !!team.route && team.route.length > 1;
+    const parked = road ? team.route![team.route!.length - 1] : (team.target ?? line.plan.point);
+    const arrivedAt = Math.min(board.minute, team.arriveAt ?? board.minute);
+    const access = lineAccessPlan(board, team, parked, line.plan);
+    team.position = parked;
     team.status = "on_scene";
     team.departAt = team.rollAt = team.arriveAt = null;
     team.route = null;
     team.legKey = null;
-    team.accessKnown = true;
+    team.accessKnown = road;
+    team.workMode = access.mode;
+    team.workStartAt = arrivedAt + access.startDelayMinutes;
+    team.parkedM = access.distanceM;
+    team.reachM = access.reachMeters;
+    if (access.mode === "hand_line" || access.mode === "dozer" || access.mode === "out_of_reach") {
+      log(board, "team", "board", unitAccessText(board, team), { action: "unit_access", teamIds: [team.id], fireId: fire.id, positionId: line.plan.id, workMode: access.mode });
+    }
     if (positionEta(board, line.plan) === 0) {
-      log(board, "team", "board", `${team.id} reached ${fire.id} ${line.plan.id}, but fire got there first; it builds what line it can.`, {
+      // The fire is already at the anchor: the crew does not engage there (withdrawFromOverrunLines).
+      release(board, team);
+      log(board, "team", "board", `${team.id} reached ${fire.id} ${line.plan.id}, but fire got there first; it does not engage and ${statusOf(team) === "returning" ? "heads back to its station" : "stays free"}.`, {
         action: "line_late",
         teamIds: [team.id],
         fireId: fire.id,
@@ -3653,6 +3816,9 @@ function stepOnce(board: Board, dt: number, landOn: number | null): void {
       });
     }
   }
+
+  // Crews pull back from lines the fire has reached before they were finished (whole minutes only).
+  if (decide) withdrawFromOverrunLines(board);
 
   // Units putting burning cells out, one whole minute at a time (demo/suppression.ts).
   if (decide) suppressionTick(board, board.minute);

@@ -258,7 +258,7 @@ browser; nothing here is stored.
   points; body at most 300 kB; 120/min) returns `{zones: [{zone_id, options}], evidence_class:
   "simulated"}`: each drill zone's best route and up to 3 alternatives around the fires, from
   `livecore.routing` over the drill road graph. Distances are metres, `eta_min` minutes.
-- `POST /api/demo/decide[?incident=]` `{observation}` (at most 200 kB; 40/min) streams `application/x-ndjson`
+- `POST /api/demo/decide[?incident=]` `{observation, urgency?}` (at most 200 kB; 40/min) streams `application/x-ndjson`
   like `/api/dispatch/decide`: `thinking`/`text` lines, then one `orders` or `error` line. Claude
   can `send_crew`, `release_crew`, `order_evacuation` (`zone_id`, `destination_id`, `start_minute`:
   absolute board minute departures start, `null` = now, at most 240 min ahead), `cancel_evacuation`
@@ -266,7 +266,18 @@ browser; nothing here is stored.
   one of `engine_strike_team`, `crew_strike_team`, `dozer_strike_team`, `airtanker`, `helicopter`,
   integer `count` up to 5/5/2/4/2; burning fires only); each order is validated against the ids
   in the observation (at most 20 per decision). See [docs/response-model.md](../../docs/response-model.md). Needs `ANTHROPIC_API_KEY` (else 503
-  `ai_unavailable`) and reuses `DISPATCH_AGENT_MODEL` and `DISPATCH_AGENT_EFFORT`.
+  `ai_unavailable`) and reuses `DISPATCH_AGENT_MODEL` and `DISPATCH_AGENT_EFFORT`. `urgency`
+  (`"urgent"`, the default, or `"routine"` for the page's continuous reviews) picks the effort:
+  urgent uses `DISPATCH_AGENT_EFFORT`, routine `DISPATCH_AGENT_ROUTINE_EFFORT` (default `low`,
+  never above the urgent effort); `DISPATCH_AGENT_ROUTINE_MODEL` (default: the urgent model)
+  picks the routine model. Prompt caching: tools + system carry a 1-hour breakpoint and the
+  run-static half of the observation (`split_observation`: clock constants, inputs, wind
+  provenance, crew and department identity fields) a 5-minute one, sent as an
+  `<observation_static>` block before the rest. Each decision's token usage (uncached, cache read,
+  cache write by TTL, output) and its list-price cost (`dispatch.decision_usage`,
+  `MODEL_PRICES_USD_PER_MTOK`) is logged by `api.dispatch` at INFO (`config/settings.py`
+  `LOGGING`) and sent as `usage` on the final NDJSON line (also on an error line after the model
+  answered). Cost notes: [docs/command-demo-realism.md](../../docs/command-demo-realism.md) "AI agent cadence".
 
 ### Live drill API (`/api/live/…`)
 
