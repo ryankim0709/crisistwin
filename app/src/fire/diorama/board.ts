@@ -3,6 +3,9 @@ import { PALETTE } from "../../diorama/scene/palette";
 import { hash2 } from "../../diorama/scene/geometry";
 import type { LandscapeGrid } from "../landscape";
 import { FIELD_STRIPES, FuelFamily, GROUND_COLORS, OVERLAY_COLORS, fuelFamily } from "./fuelStyle";
+import { CELL_CODE_MASK, CELL_CONTAINED_BIT, CELL_STATE, CELL_STATE_MAX, FIRE_STATE_COLORS } from "./cellStates";
+
+export { CELL_STATE } from "./cellStates";
 
 /** Board width (world units) of the longer grid side, whatever the loaded radius. */
 export const BOARD_SIZE = 600;
@@ -392,30 +395,33 @@ export type FireUniforms = {
   uRelief: { value: number };
   uMaxH: { value: number };
   /**
-   * Opt-in per-cell fire states (`FireDioramaSceneApi.setCellStates`): codes 0 unburned,
-   * 1 burning, 2 burned out, 3 extinguished, same texel layout as `uArrival`. Used only while
-   * `uUseState` is 1; otherwise the arrival field and burn window decide (the default).
+   * Opt-in per-cell fire states (`FireDioramaSceneApi.setCellStates`, cellStates.ts CELL_STATE),
+   * same texel layout as `uArrival`: red = code (+128 when the cell's fire is contained or out),
+   * green = smouldering heat 0-255. Used only while `uUseState` is 1; otherwise the arrival field
+   * and burn window decide (the default).
    */
   uState: { value: THREE.DataTexture };
   uUseState: { value: number };
 };
 
-/** Cell fire state codes understood by the terrain shader and the cover (setCellStates). */
-export const CELL_STATE = { unburned: 0, burning: 1, burnedOut: 2, extinguished: 3 } as const;
 /**
  * Approximate on-screen colours of put-out (extinguished) ground in the terrain shader (lit,
  * sRGB), for legend swatches: the slate fill, its pale hatch and the dashed cool outline.
  */
 export const EXTINGUISHED_LEGEND = { fill: "#7d8c99", hatch: "#d0dde8", edge: "#cce6ff" } as const;
-/** When several cells share a texel, the most telling state wins: burning, then put out, then burned out. */
-const STATE_RANK = [0, 3, 1, 2] as const;
+/**
+ * When several cells share a texel, the most telling state wins: the hottest flame, then put out,
+ * then smouldering, then burned out (by code, CELL_STATE).
+ */
+const STATE_RANK = [0, 5, 1, 4, 2, 6, 7, 8, 9, 10] as const;
 
 export function emptyArrivalTexture(): THREE.DataTexture {
   return arrivalTexture(new Float32Array([NEVER]), 1, 1);
 }
 
+/** Two bytes per texel: code (+ CELL_CONTAINED_BIT) and smouldering heat. */
 function stateTexture(data: Uint8Array, w: number, h: number) {
-  const tex = new THREE.DataTexture(data, w, h, THREE.RedFormat, THREE.UnsignedByteType);
+  const tex = new THREE.DataTexture(data, w, h, THREE.RGFormat, THREE.UnsignedByteType);
   tex.minFilter = THREE.NearestFilter;
   tex.magFilter = THREE.NearestFilter;
   tex.generateMipmaps = false;
@@ -425,35 +431,61 @@ function stateTexture(data: Uint8Array, w: number, h: number) {
 }
 
 export function emptyStateTexture(): THREE.DataTexture {
-  return stateTexture(new Uint8Array([0]), 1, 1);
+  return stateTexture(new Uint8Array([0, 0]), 1, 1);
 }
 
 /**
- * Packs per-cell state codes (row-major, CELL_STATE) into a texture laid out like the
- * arrival texture reduced by `factor`; the most telling state of a texel's cells wins.
+ * Packs per-cell state codes (row-major, CELL_STATE, optionally with CELL_CONTAINED_BIT) and
+ * smouldering heat (0-255, or null) into a texture laid out like the arrival texture reduced by
+ * `factor`; the most telling state of a texel's cells wins. `reuse`, when it has the right size,
+ * is refilled in place (no new GPU texture), else a new texture is made.
  */
 export function buildStateTexture(
   frame: BoardFrame,
   states: Uint8Array,
   factor: number,
+  heat: Uint8Array | null = null,
+  reuse: THREE.DataTexture | null = null,
 ): THREE.DataTexture {
   const w = Math.ceil(frame.cols / factor);
   const h = Math.ceil(frame.rows / factor);
-  const data = new Uint8Array(w * h);
+  const fits = reuse && reuse.image.width === w && reuse.image.height === h && reuse.format === THREE.RGFormat;
+  const data = fits ? (reuse.image.data as Uint8Array) : new Uint8Array(w * h * 2);
   if (factor === 1) {
-    for (let i = 0; i < data.length; i++) data[i] = states[i] <= 3 ? states[i] : 0;
+    for (let i = 0; i < w * h; i++) {
+      const s = states[i];
+      const code = s & CELL_CODE_MASK;
+      data[2 * i] = code <= CELL_STATE_MAX ? s : 0;
+      data[2 * i + 1] = heat && code === CELL_STATE.smouldering ? heat[i] : 0;
+    }
   } else {
+    data.fill(0);
     for (let r = 0; r < frame.rows; r++) {
       const tr = Math.floor(r / factor);
       for (let c = 0; c < frame.cols; c++) {
-        const s = states[r * frame.cols + c];
-        if (!s || s > 3) continue;
+        const i = r * frame.cols + c;
+        const s = states[i];
+        const code = s & CELL_CODE_MASK;
+        if (!code || code > CELL_STATE_MAX) continue;
         const ti = tr * w + Math.floor(c / factor);
-        if (STATE_RANK[s] > STATE_RANK[data[ti]]) data[ti] = s;
+        const prev = data[2 * ti] & CELL_CODE_MASK;
+        if (STATE_RANK[code] > STATE_RANK[prev]) data[2 * ti] = s | (data[2 * ti] & CELL_CONTAINED_BIT);
+        else data[2 * ti] |= s & CELL_CONTAINED_BIT;
+        if (heat && code === CELL_STATE.smouldering && heat[i] > data[2 * ti + 1]) data[2 * ti + 1] = heat[i];
       }
     }
   }
+  if (fits) {
+    reuse.needsUpdate = true;
+    return reuse;
+  }
   return stateTexture(data, w, h);
+}
+
+/** A palette colour as a GLSL vec3 in the shader's (linear) working space. */
+function glslColor(hex: number): string {
+  const c = new THREE.Color(hex);
+  return `vec3(${c.r.toFixed(4)}, ${c.g.toFixed(4)}, ${c.b.toFixed(4)})`;
 }
 
 function arrivalTexture(data: Float32Array, w: number, h: number) {
@@ -551,12 +583,44 @@ uniform float uUseState;
 varying vec2 vFireXZ;
 varying float vFireY;
 
-// Opt-in cell state code (0 unburned, 1 burning, 2 burned out, 3 extinguished; see uState).
-float stateCode(ivec2 c) { return floor(texelFetch(uState, c, 0).r * 255.0 + 0.5); }
+// Opt-in cell state (cellStates.ts CELL_STATE; see uState): red = code + 128 when the cell's
+// fire is contained or out, green = smouldering heat.
+const vec3 FLAME_1 = ${glslColor(FIRE_STATE_COLORS.flameLow)};
+const vec3 FLAME_2 = ${glslColor(FIRE_STATE_COLORS.flameModerate)};
+const vec3 FLAME_3 = ${glslColor(FIRE_STATE_COLORS.flameHigh)};
+const vec3 FLAME_4 = ${glslColor(FIRE_STATE_COLORS.flameExtreme)};
+const vec3 FLAME_5 = ${glslColor(FIRE_STATE_COLORS.crown)};
+const vec3 EMBER_C = ${glslColor(FIRE_STATE_COLORS.ember)};
+const vec3 ASH_C = ${glslColor(FIRE_STATE_COLORS.ash)};
+const vec3 PERIM_BURNING = ${glslColor(FIRE_STATE_COLORS.perimeterBurning)};
+const vec3 PERIM_CONTAINED = ${glslColor(FIRE_STATE_COLORS.perimeterContained)};
+float rawState(ivec2 c) { return floor(texelFetch(uState, c, 0).r * 255.0 + 0.5); }
+float stateCode(ivec2 c) { float r = rawState(c); return r >= 128.0 ? r - 128.0 : r; }
 bool inField(ivec2 c) { return c.x >= 0 && c.y >= 0 && c.x < int(uArrivalSize.x) && c.y < int(uArrivalSize.y); }
+bool flameCode(float s) { return (s > 0.5 && s < 1.5) || s > 4.5; }
 float extCell(ivec2 c) {
   if (uUseState < 0.5 || !inField(c)) return 0.0;
-  return stateCode(c) > 2.5 ? 1.0 : 0.0;
+  float s = stateCode(c);
+  return s > 2.5 && s < 3.5 ? 1.0 : 0.0;
+}
+// x: flame band x lit (band 0.2 low .. 1.0 crown; unclassified burning 0.4), y: lit,
+// z: burned out (ash), w: the cell's fire is contained or out.
+vec4 stateCell(ivec2 c) {
+  if (uUseState < 0.5 || !inField(c)) return vec4(0.0);
+  float r = rawState(c);
+  float cont = r >= 128.0 ? 1.0 : 0.0;
+  float s = r - 128.0 * cont;
+  if (s < 0.5) return vec4(0.0);
+  float lit = flameCode(s) ? 1.0 : 0.0;
+  float band = s > 4.5 ? (s - 4.0) / 5.0 : 0.4;
+  float ash = s > 1.5 && s < 2.5 ? 1.0 : 0.0;
+  return vec4(band * lit, lit, ash, cont);
+}
+vec3 flameRamp(float b) {
+  vec3 c = mix(FLAME_1, FLAME_2, smoothstep(0.2, 0.4, b));
+  c = mix(c, FLAME_3, smoothstep(0.4, 0.6, b));
+  c = mix(c, FLAME_4, smoothstep(0.6, 0.8, b));
+  return mix(c, FLAME_5, smoothstep(0.8, 1.0, b));
 }
 
 float fHash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
@@ -620,11 +684,12 @@ vec4 fireCell(ivec2 c) {
   float age = uSimT - arr;
   if (uUseState > 0.5) {
     // States decide; the arrival only freshens the front (fresh = arrived within the window).
+    // Smouldering glows by its heat (fading over the smoulder window); burned out is quiet.
     float s = stateCode(c);
     if (s < 0.5) return vec4(0.0);
-    float lit = s < 1.5 ? 1.0 : 0.0;
+    float lit = flameCode(s) ? 1.0 : 0.0;
     float hot = lit * (1.0 - smoothstep(0.0, 0.22 * uWindow, max(age, 0.0)));
-    float glowing = (s > 1.5 && s < 2.5) ? 1.0 - smoothstep(uWindow, uWindow * 3.0, age) : 0.0;
+    float glowing = (s > 3.5 && s < 4.5) ? texelFetch(uState, c, 0).g : 0.0;
     return vec4(1.0, lit, hot, glowing);
   }
   if (age < 0.0) return vec4(0.0);
@@ -688,6 +753,16 @@ vec3 applyFire(inout vec3 base) {
   float n2 = fNoise(q * 1.3 + vec2(uTime * 0.4, 3.0));
   vec3 charC = mix(vec3(0.022, 0.018, 0.016), vec3(0.085, 0.075, 0.068), fNoise(q * 0.35));
   base = mix(base, charC, arrived * 0.94);
+  // Legible states (opt-in): flame band, burned-out ash and the contained flag, interpolated.
+  vec4 st = vec4(0.0);
+  if (byState) {
+    st = mix(mix(stateCell(c), stateCell(c + ivec2(1, 0)), f.x), mix(stateCell(c + ivec2(0, 1)), stateCell(c + ivec2(1, 1)), f.x), f.y);
+    // Burned out: ash grey over the char, mottled, no glow.
+    float ash = smoothstep(0.3, 0.7, st.z);
+    base = mix(base, ASH_C * (0.75 + 0.5 * fNoise(q * 0.8 + 5.0)), ash * 0.85);
+    // Smouldering: darker char with a red cast under its ember glow.
+    base = mix(base, vec3(0.05, 0.018, 0.012), clamp(a.w, 0.0, 1.0) * 0.7);
+  }
 
   // Extinguished (put out) ground, opt-in states only: cool wet slate with pale diagonal hatch,
   // no glow, no embers, and a dashed cool outline below; burned-out ground stays plain char.
@@ -710,17 +785,32 @@ vec3 applyFire(inout vec3 base) {
     a.w *= 1.0 - ext;
   }
 
-  float head = clamp((dot(vFireXZ, uWindDir) - uHeadRange.x) / max(uHeadRange.y - uHeadRange.x, 1.0), 0.0, 1.0);
-  float headGain = 0.35 + 0.65 * smoothstep(0.3, 1.0, head);
-  front *= headGain;
-  burning *= 0.6 + 0.4 * headGain;
   vec3 coral = vec3(1.0, 0.24, 0.08);
   vec3 amber = vec3(1.0, 0.55, 0.12);
-  base = mix(base, vec3(0.06, 0.012, 0.006), burning * 0.85);
-  vec3 em = mix(coral, amber, n * 0.8) * burning * (0.3 + 0.45 * n2) * 0.6;
-  em += mix(amber, vec3(1.0, 0.7, 0.28), n2) * front * 0.8;
-  float sparks = smoothstep(0.8, 0.96, fNoise(q * 2.1 + uTime * 0.05));
-  em += amber * a.w * sparks * (1.0 - burning) * 0.9;
+  vec3 em;
+  if (byState) {
+    // Colour and brightness by the cells' flame-length band (Hauling chart, cellStates.ts), not
+    // by position: deep red low flames .. pale yellow-white crown fire.
+    float band = st.y > 1e-3 ? st.x / st.y : 0.4;
+    vec3 fc = flameRamp(band);
+    float gain = 0.45 + 1.1 * band;
+    base = mix(base, vec3(0.06, 0.012, 0.006), burning * 0.85);
+    em = mix(fc * 0.8, fc, n * 0.8) * burning * (0.35 + 0.45 * n2) * 0.75 * gain;
+    em += mix(fc, vec3(1.0, 0.85, 0.6), 0.35 * n2) * front * 0.8 * gain;
+    // Smouldering: a dim ember glow that twinkles and fades with its heat.
+    float twinkle = smoothstep(0.5, 0.95, fNoise(q * 2.1 + uTime * 0.05));
+    em += EMBER_C * a.w * (0.12 + 0.55 * twinkle) * (1.0 - burning) * 0.9;
+  } else {
+    float head = clamp((dot(vFireXZ, uWindDir) - uHeadRange.x) / max(uHeadRange.y - uHeadRange.x, 1.0), 0.0, 1.0);
+    float headGain = 0.35 + 0.65 * smoothstep(0.3, 1.0, head);
+    front *= headGain;
+    burning *= 0.6 + 0.4 * headGain;
+    base = mix(base, vec3(0.06, 0.012, 0.006), burning * 0.85);
+    em = mix(coral, amber, n * 0.8) * burning * (0.3 + 0.45 * n2) * 0.6;
+    em += mix(amber, vec3(1.0, 0.7, 0.28), n2) * front * 0.8;
+    float sparks = smoothstep(0.8, 0.96, fNoise(q * 2.1 + uTime * 0.05));
+    em += amber * a.w * sparks * (1.0 - burning) * 0.9;
+  }
 
   // Current perimeter: where arrival crosses t, a constant ~1.5 px wide. When cells
   // are smaller than a pixel the field is pre-smoothed over the pixel footprint so the line
@@ -742,11 +832,17 @@ vec3 applyFire(inout vec3 base) {
   vec3 lineC = vec3(1.0, 0.82, 0.55);
   float cool = 0.0;
   if (byState) {
-    // The edge of put-out ground: a cool, dashed, unlit outline instead of the warm perimeter.
-    cool = smoothstep(0.05, 0.35, extRaw);
+    // A contained or out fire's perimeter turns solid cool blue; the edge of put-out ground of a
+    // burning fire is a cool, dashed, unlit outline instead of the warm perimeter.
+    float held = smoothstep(0.05, 0.3, st.w);
+    lineC = mix(PERIM_BURNING, PERIM_CONTAINED, held);
+    cool = smoothstep(0.05, 0.35, extRaw) * (1.0 - held);
     float dash = step(0.45, fract((vFireXZ.x - vFireXZ.y) / (hatchPeriod * 1.3)));
     line *= mix(1.0, dash, cool);
     lineC = mix(lineC, vec3(0.80, 0.90, 1.0), cool);
+    base = mix(base, lineC, line * 0.9);
+    em += lineC * line * mix(0.55, 0.4, held) * (1.0 - cool);
+    return em;
   }
   base = mix(base, lineC, line * 0.85);
   em += lineC * line * 0.55 * (1.0 - cool);

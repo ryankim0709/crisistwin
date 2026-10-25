@@ -21,6 +21,7 @@ import {
   type FireUniforms,
 } from "./board";
 import { CoverLayer } from "./cover";
+import { CELL_CODE_MASK, isFlamingCode } from "./cellStates";
 import { FireSampler, FxLayer, burnWindowMinutes } from "./fx";
 import { FuelFamily } from "./fuelStyle";
 import { LabelLayer, type ClipOptions } from "./labels";
@@ -183,6 +184,8 @@ export class FireDioramaScene implements FireDioramaSceneApi {
   private coverHouses = true;
   /** Opt-in per-cell fire states (setCellStates); null = the arrival field decides. */
   private cellStates: Uint8Array | null = null;
+  /** Smouldering heat per cell (0-255) alongside the states, or null. */
+  private cellHeat: Uint8Array | null = null;
   private streets: BoardStreets | null = null;
   private reducedMotion: boolean;
   private clickCallback: ((point: GeoPoint) => void) | null = null;
@@ -496,18 +499,19 @@ export class FireDioramaScene implements FireDioramaSceneApi {
     );
   }
 
-  setCellStates(states: Uint8Array | null): void {
+  setCellStates(states: Uint8Array | null, heat: Uint8Array | null = null): void {
     if (this.disposed) return;
     const prev = this.cellStates;
-    if (states === prev) return;
-    if (
-      states &&
-      prev &&
-      states.length === prev.length &&
-      states.every((v, i) => v === prev[i])
-    )
+    const prevHeat = this.cellHeat;
+    const sameHeat =
+      heat === prevHeat ||
+      (!!heat && !!prevHeat && heat.length === prevHeat.length && sameBytes(heat, prevHeat));
+    if (states === prev && sameHeat) return;
+    if (states && prev && states.length === prev.length && sameBytes(states, prev) && sameHeat)
       return;
-    this.cellStates = states ? states.slice() : null;
+    // Copied into reused buffers: the caller may refill its arrays (no per-update allocation).
+    this.cellStates = states ? copyInto(prev, states) : null;
+    this.cellHeat = heat ? copyInto(prevHeat, heat) : null;
     this.applyStates();
   }
 
@@ -550,10 +554,13 @@ export class FireDioramaScene implements FireDioramaSceneApi {
       this.cellStates && frame.grid && this.cellStates.length === frame.cols * frame.rows
         ? this.cellStates
         : null;
-    board.fire.uState.value.dispose();
-    board.fire.uState.value = states
-      ? buildStateTexture(frame, states, board.fireFactor)
+    const heat = states && this.cellHeat && this.cellHeat.length === states.length ? this.cellHeat : null;
+    const old = board.fire.uState.value;
+    const next = states
+      ? buildStateTexture(frame, states, board.fireFactor, heat, old)
       : emptyStateTexture();
+    if (next !== old) old.dispose();
+    board.fire.uState.value = next;
     board.fire.uUseState.value = states ? 1 : 0;
     board.cover.setCellStates(states);
     this.sampler.setStates(states);
@@ -976,7 +983,7 @@ export class FireDioramaScene implements FireDioramaSceneApi {
         for (let r = Math.max(0, r0 - 1); r <= Math.min(rows - 1, r0 + 1); r++) {
           for (let c = Math.max(0, c0 - 1); c <= Math.min(cols - 1, c0 + 1); c++) {
             if (states) {
-              if (states[r * cols + c] === 1) return true;
+              if (isFlamingCode(states[r * cols + c] & CELL_CODE_MASK)) return true;
               continue;
             }
             const a = arrival[r * cols + c];
@@ -1063,6 +1070,20 @@ export class FireDioramaScene implements FireDioramaSceneApi {
 }
 
 const NO_HOUSES: readonly GeoPoint[] = [];
+
+function sameBytes(a: Uint8Array, b: Uint8Array): boolean {
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+  return true;
+}
+
+/** `src` copied into `into` when it has the same length, else into a new array. */
+function copyInto(into: Uint8Array | null, src: Uint8Array): Uint8Array {
+  if (into && into.length === src.length && into !== src) {
+    into.set(src);
+    return into;
+  }
+  return src.slice();
+}
 
 /** Disposes geometries, materials and material textures under `root`. */
 function disposeTree(root: THREE.Object3D) {

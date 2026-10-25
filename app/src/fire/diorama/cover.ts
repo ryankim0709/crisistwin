@@ -4,6 +4,7 @@ import { PALETTE } from "../../diorama/scene/palette";
 import type { BoardFrame } from "./board";
 import type { BoardHome, ProjectedStreets } from "./streets";
 import { BUSH_DENSITY, FALLBACK_CANOPY, FuelFamily, PINE_SHARE } from "./fuelStyle";
+import { CELL_CODE_MASK, CELL_STATE, isFlamingCode } from "./cellStates";
 
 /** Instance caps (totals across kinds); dense or large grids are thinned uniformly. */
 export const COVER_CAPS = { trees: 18_000, bushes: 7_000, houses: 6_000 } as const;
@@ -213,11 +214,11 @@ class FireInstances {
     const states = this.cellStates;
     for (let i = 0; i < this.count; i++) {
       const age = t - this.arrival[i];
-      const code = states ? states[this.cells[i]] : -1;
+      const code = states ? states[this.cells[i]] & CELL_CODE_MASK : -1;
       const state = states
-        ? code === 1
+        ? isFlamingCode(code)
           ? State.Burning
-          : code === 2 || code === 3
+          : code !== CELL_STATE.unburned
             ? State.Burned
             : State.Unburned
         : !(age >= 0)
