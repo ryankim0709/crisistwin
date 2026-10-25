@@ -26,6 +26,8 @@ All outputs are planning experiments, not operational fire or evacuation guidanc
 | `gen_comms.py` | Seeded synthetic 911, radio and rescue items (`simulated`) for any scenario, in the ground-record item schema, calibrated by `GroundRateParams`; `generate_comms()` ([generator](../docs/ground-data-calibration.md#generator), [ADR](../docs/adr/0035-comms-generator.md)) |
 | `gen_noise.py` | Seeded noisy and adversarial ground data on top of the honest generators (honest error, duplicates, late uploads, stale truth, rumours, out of area, malicious), profiles `clean`/`typical`/`hostile`, and the hidden truth map; `apply_noise()`. Inject with `python manage.py live_inject_noise` ([ADR](../docs/adr/0042-adversarial-ground-data.md)) |
 | `triage_quality.py` | Scores triage against the truth log (confirm and dismiss precision and recall, time to detect truth changes, decisions on false reports, rumour containment); the AAR's `triage_quality` and `evaluation.TRIAGE_METRICS` |
+| `fuel_moisture.py` | Dead 1-h/10-h/100-h moisture from hourly temperature and RH (Rothermel 1983 / Fosberg & Deeming tables, timelag response) and assumed live moisture by date and region; `GET /api/conditions` ([doc](../docs/scenario-weather.md#fuel-moisture-from-the-dates-weather)) |
+| `conditions_presets.py` | Region and historical-fire date presets for `GET /api/conditions/presets` (typical season dates and phenology classes are assumptions) |
 | `bundle.py` | Assemble the web-app replay bundle ([contract](../docs/replay-bundle.md)) |
 | `__main__.py` | CLI |
 

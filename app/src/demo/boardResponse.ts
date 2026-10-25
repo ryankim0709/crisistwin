@@ -1,0 +1,1231 @@
+/**
+ * The /live command board's rule-based fire response: the shared response model
+ * (app/src/response/) applied to the board (demo/model.ts). Pure: no React, network or LLM;
+ * every draw comes from the board's seeded response stream. See docs/response-model.md.
+ *
+ * What it does each board step (model.ts stepOnce calls in this order):
+ * - respondToNewFire (from ignite): the run card for the fire's dispatch level, filled by the
+ *   closest units by expected arrival (turnout + road time x congestion), within each
+ *   department's drawdown; a shortfall is ordered as immediate-need mutual aid.
+ * - responseTick: unit lifecycle (returning, refilling, resting, out of service, move-up and
+ *   cover), work/rest and water, fire-cut roads, aircraft cycles, and orders reaching the board.
+ * - advanceContainment: tactic by flame length, line per tactic, the seeded holding test.
+ * - escalate: initial-attack failure and the extended-attack orders.
+ *
+ * Coupling: this module imports model.ts functions and model.ts imports this module; neither
+ * uses the other at module load (only inside functions), so the cycle is safe.
+ */
+
+import { DEVELOPED_FUEL_CODE, cellAt } from "../fire/spread";
+import type { LonLat } from "../live/types";
+import { DROP_HOLDS_FLAME_FEET, nearestWaterKm } from "../studio/aircraft";
+import { DEFAULT_START_LOCAL_ISO } from "../studio/firefighting";
+import {
+  BREACH_LINE_LOSS_SHARE,
+  BREACH_RETRY_MINUTES,
+  INDIRECT_LEAD_MINUTES,
+  buildsOn,
+  chooseTactic,
+  holdingTest,
+  lineNeededMeters,
+  tacticHoldsFeet,
+  tacticRateFactor,
+  TACTIC_LABEL,
+  type Tactic,
+} from "../response/containment";
+import { OWN_AREA_RADIUS_M, type AirResponseKind, type Department, type GroundResponseKind, type Tier, type UnitSeed, type AircraftSeed } from "../response/fleet";
+import {
+  MUTUAL_AID_ASSEMBLY_MINUTES,
+  STATE_AIR_DISTANCE_KM,
+  STATE_MAX_AIRCRAFT,
+  STATE_MAX_GROUND_UNITS,
+  UNABLE_TO_FILL_RETRY_MINUTES,
+  fills,
+  stateGroundLeadMinutes,
+  variedLead,
+} from "../response/orders";
+import { chance, deriveStream, uniform, type RngStream } from "../response/rng";
+import {
+  CREWS_PER_STRIKE_TEAM,
+  DOZERS_PER_STRIKE_TEAM,
+  ENGINES_PER_STRIKE_TEAM,
+  ESCALATION_ORDERS,
+  ESCALATION_STAGE_ACRES,
+  HECTARES_PER_ACRE,
+  IA_SUCCESS_MAX_HA,
+  IMMEDIATE_NEED_CAPS,
+  dispatchLevel,
+  groundFamilyOf,
+  runCard,
+  type DispatchLevel,
+  type Orderable,
+  type ResourceCounts,
+} from "../response/runCards";
+import {
+  REROUTE_DETOUR_FACTOR,
+  VEHICLES_PER_HOUSEHOLD,
+  buildFlowIndex,
+  congestionOnLeg,
+  routeCutAt,
+  travelVariation,
+  type FlowIndex,
+} from "../response/travel";
+import {
+  AVAILABILITY_DRAW_EVERY_MINUTES,
+  ENGINE_REFILL_MINUTES,
+  ENGINE_WATER_USE_GPM,
+  KNOTS_PER_METER_PER_SECOND,
+  MAX_SHIFT_MINUTES,
+  MOPUP_KEEP,
+  MOVE_UP_CHECK_EVERY_MINUTES,
+  MOVE_UP_EMPTY_MINUTES,
+  OUT_OF_SERVICE_MINUTES,
+  OUT_OF_SERVICE_PROBABILITY,
+  TANK_GALLONS,
+  dropCycleMinutes,
+  dropLineMeters,
+  firstOverFireMinutes,
+  mayFly,
+  restMinutesAfter,
+} from "../response/units";
+import {
+  ACTIVITY,
+  cellLonLat,
+  crewTarget,
+  departed,
+  distanceM,
+  fallbackDriveMinutes,
+  logEvent,
+  perimeterIn,
+  teamPosition,
+  travelKey,
+  unitLineOn,
+  type Board,
+  type BoardEvent,
+  type Fire,
+  type Station,
+  type Team,
+} from "./model";
+import { KIND_PREFIX, holdsFlameFeet, kindShort, windAt } from "./realism";
+
+// ---- state ----
+
+export interface FireResponse {
+  level: DispatchLevel;
+  structure: boolean;
+  dispatchedAt: number;
+  /** First unit (ground or air) on scene, board minute. */
+  firstArrivalAt: number | null;
+  tactic: Tactic;
+  tacticAt: number;
+  /** Indirect line plan: the perimeter the line is built on and when the fire reaches it. */
+  target: { minute: number; perimeterM: number } | null;
+  retryAt: number;
+  breaches: number;
+  /** Escalation stages ordered (0 = initial attack only). */
+  stage: number;
+  ia: "in_progress" | "contained" | "failed";
+  /** Cal OES OB#1 immediate need used for this incident (one time per incident). */
+  immediateNeedUsed: boolean;
+  airLineM: number;
+  dipKm: number | null;
+  /** Area when the response first knew it, ha (for the record). */
+  containedHa: number | null;
+}
+
+export type AircraftStatus = "available" | "en_route" | "over_fire" | "returning" | "grounded";
+export interface Aircraft {
+  id: string;
+  kind: AirResponseKind;
+  baseName: string;
+  base: LonLat;
+  /** Straight-line km from base to its fire (the cycle distance); STATE_AIR_DISTANCE_KM for state aircraft. */
+  baseKm: number;
+  status: AircraftStatus;
+  fireId: string | null;
+  overFireAt: number | null;
+  nextDropAt: number | null;
+  returnAt: number | null;
+  drops: number;
+  tier: Tier;
+}
+
+export type OrderStatus = "pending" | "unable_to_fill" | "arrived" | "cancelled";
+export interface PendingOrder {
+  id: string;
+  fireId: string;
+  resource: Orderable;
+  tier: "mutual_aid" | "state";
+  placedAt: number;
+  readyAt: number;
+  status: OrderStatus;
+  /** Ground units it brings (mutual aid: real off-board stations; state: from the board edge). */
+  seeds: UnitSeed[];
+  air: AirResponseKind | null;
+  by: BoardEvent["actor"];
+}
+
+export interface ResponseStats {
+  fires: number;
+  iaContained: number;
+  iaFailed: number;
+  breaches: number;
+  ordersPlaced: number;
+  ordersUnableToFill: number;
+  moveUps: number;
+  routeCuts: number;
+  firstArrivalMinutes: number[];
+}
+
+export interface ResponseState {
+  rng: RngStream;
+  /** Rule-based initial attack on every new fire (CAD run cards). */
+  autoDispatch: boolean;
+  /** Rule-based escalation (extended attack orders) when initial attack fails. */
+  autoEscalate: boolean;
+  departments: Department[];
+  /** Off-board units not yet ordered (mutual-aid pool). */
+  pool: UnitSeed[];
+  offBoardStations: Map<string, Station>;
+  aircraft: Aircraft[];
+  /** Aircraft at off-board bases (mutual-aid air), not yet ordered. */
+  airPool: AircraftSeed[];
+  orders: PendingOrder[];
+  fires: Map<string, FireResponse>;
+  stats: ResponseStats;
+  counters: Record<string, number>;
+  nextAvailabilityDraw: number;
+  nextMoveUpCheck: number;
+  stationEmptySince: Map<string, number>;
+  flows: { minute: number; index: FlowIndex | null } | null;
+  /** UTC epoch ms of board minute 0 (the wind series' start, else DEFAULT_START_LOCAL_ISO). */
+  startEpochMs: number;
+  label: string;
+}
+
+const MAX_TEAMS = 160;
+const MAX_ORDERS_KEPT = 60;
+const TACTIC_REVIEW_MINUTES = 10;
+const HOME_M = 60;
+
+export function createResponseState(
+  seed: number,
+  departments: Department[],
+  pool: UnitSeed[],
+  offBoardStations: Station[],
+  aircraftSeeds: AircraftSeed[],
+  onBoard: (p: LonLat) => boolean,
+  startUtc: string | null,
+  label: string,
+): ResponseState {
+  const parsed = startUtc ? Date.parse(startUtc) : NaN;
+  const counters: Record<string, number> = {};
+  const aircraft: Aircraft[] = [];
+  const airPool: AircraftSeed[] = [];
+  // Aircraft at bases within flight range all answer initial attack (aircraft are dispatched
+  // statewide by closest resource); none are "off the board" for flying. airPool stays for
+  // ordered aircraft beyond the bases list (state tier).
+  for (const a of aircraftSeeds) {
+    const prefix = a.kind === "air_attack" ? "AA" : a.kind === "helicopter_t2" ? "H" : "T";
+    counters[prefix] = (counters[prefix] ?? 0) + 1;
+    aircraft.push({
+      id: `${prefix}${counters[prefix]}`,
+      kind: a.kind,
+      baseName: a.baseName,
+      base: a.location,
+      baseKm: 0,
+      status: "available",
+      fireId: null,
+      overFireAt: null,
+      nextDropAt: null,
+      returnAt: null,
+      drops: 0,
+      tier: onBoard(a.location) ? "closest" : "mutual_aid",
+    });
+  }
+  return {
+    rng: deriveStream(seed, "response"),
+    autoDispatch: true,
+    autoEscalate: true,
+    departments,
+    pool,
+    offBoardStations: new Map(offBoardStations.map((s) => [s.id, s])),
+    aircraft,
+    airPool,
+    orders: [],
+    fires: new Map(),
+    stats: { fires: 0, iaContained: 0, iaFailed: 0, breaches: 0, ordersPlaced: 0, ordersUnableToFill: 0, moveUps: 0, routeCuts: 0, firstArrivalMinutes: [] },
+    counters,
+    nextAvailabilityDraw: 0,
+    nextMoveUpCheck: MOVE_UP_CHECK_EVERY_MINUTES,
+    stationEmptySince: new Map(),
+    flows: null,
+    startEpochMs: Number.isFinite(parsed) ? parsed : Date.parse(DEFAULT_START_LOCAL_ISO),
+    label,
+  };
+}
+
+export function fireResponse(board: Board, fire: Fire): FireResponse | null {
+  return board.response.fires.get(fire.id) ?? null;
+}
+
+// ---- helpers ----
+
+const isEngine = (k: GroundResponseKind) => k === "engine_t3" || k === "engine_t1";
+const DISPATCHABLE = new Set(["available", "returning", "moving_up"]);
+
+export function dispatchable(team: Team): boolean {
+  return DISPATCHABLE.has(team.status);
+}
+
+function nextId(board: Board, prefix: string): string {
+  const c = board.response.counters;
+  if (c[prefix] === undefined) {
+    // Continue after the ids already on the board.
+    let max = 0;
+    for (const t of board.teams) if (t.id.startsWith(prefix)) max = Math.max(max, Number(t.id.slice(prefix.length)) || 0);
+    c[prefix] = max;
+  }
+  c[prefix] += 1;
+  return `${prefix}${c[prefix]}`;
+}
+
+/** Outbound evacuation flows on the board's routes now, indexed for congestion lookups (cached per minute). */
+export function flowIndex(board: Board): FlowIndex | null {
+  const minute = Math.floor(board.minute);
+  const cached = board.response.flows;
+  if (cached && cached.minute === minute) return cached.index;
+  const flows = [];
+  const WINDOW = 10;
+  for (const zone of board.zones) {
+    const route = zone.route ?? zone.shadowRoute;
+    if (!route || route.line.length < 2) continue;
+    const households = departed(zone, minute) - departed(zone, minute - WINDOW);
+    if (households <= 0) continue;
+    flows.push({ line: route.line, vehiclesPerHour: (households / WINDOW) * 60 * VEHICLES_PER_HOUSEHOLD });
+  }
+  const lat0 = board.zones[0]?.core[1] ?? 0;
+  const index = flows.length > 0 ? buildFlowIndex(flows, lat0) : null;
+  board.response.flows = { minute, index };
+  return index;
+}
+
+/** Free-flow drive minutes and the line for a unit going from `from` to `fire` (road leg if known). */
+function legFor(board: Board, team: Team, from: LonLat, fire: Fire): { drive: number; line: LonLat[]; road: boolean } {
+  const leg = board.travel.get(travelKey(team, from, fire.id));
+  const target = crewTarget(fire);
+  if (leg) return { drive: leg.driveMinutes, line: leg.line, road: true };
+  return { drive: fallbackDriveMinutes(from, target), line: [from, target], road: false };
+}
+
+/** Turnout applies only to a unit starting from rest (not one already rolling). */
+function turnoutFor(team: Team): number {
+  return team.status === "available" ? team.turnoutMinutes : 0;
+}
+
+/** Expected minutes to on scene (no seeded variation): turnout + drive x congestion. */
+export function expectedArrival(board: Board, team: Team, fire: Fire): number {
+  if (team.fireId === fire.id) {
+    return team.status === "on_scene" || team.status === "refilling" ? 0 : Math.max(0, (team.arriveAt ?? board.minute) - board.minute);
+  }
+  const from = teamPosition(board, team);
+  const leg = legFor(board, team, from, fire);
+  return turnoutFor(team) + leg.drive * congestionOnLeg(flowIndex(board), leg.line).multiplier;
+}
+
+/** Whether the unit's department lets it go (drawdown), unless the fire is in the department's own area. */
+function departmentAllows(board: Board, team: Team, fire: Fire): boolean {
+  if (!isEngine(team.kind)) return true;
+  const dept = board.response.departments.find((d) => d.id === team.department);
+  if (!dept || dept.keepEngines <= 0) return true;
+  const own = dept.stationIds.some((id) => {
+    const s = board.stations.find((st) => st.id === id);
+    return s ? distanceM(s.location, fire.origin) <= OWN_AREA_RADIUS_M : false;
+  });
+  if (own) return true;
+  return freeEngines(board, dept.id) - 1 >= dept.keepEngines;
+}
+
+/** A department's uncommitted engines: free on the board plus still in the off-board pool. */
+function freeEngines(board: Board, departmentId: string): number {
+  return (
+    board.teams.filter((t) => t.department === departmentId && isEngine(t.kind) && t.status === "available").length +
+    board.response.pool.filter((s) => s.departmentId === departmentId && isEngine(s.kind)).length
+  );
+}
+
+/** Drawdown for a unit still in the off-board pool: its department lends it only while it keeps its reserve. */
+function poolAllows(board: Board, seed: UnitSeed): boolean {
+  if (!isEngine(seed.kind)) return true;
+  const dept = board.response.departments.find((d) => d.id === seed.departmentId);
+  if (!dept || dept.keepEngines <= 0) return true;
+  return freeEngines(board, dept.id) - 1 >= dept.keepEngines;
+}
+
+/**
+ * Sends `team` to `fire` (the send_crew order and the run card both use this). Arrival = now +
+ * turnout (from rest) + free-flow drive x congestion x a seeded variation; the factor is kept so
+ * a road leg that arrives later re-times the unit consistently.
+ */
+export function dispatchTeam(board: Board, team: Team, fire: Fire, actor: BoardEvent["actor"], why = ""): void {
+  const from = teamPosition(board, team);
+  const leg = legFor(board, team, from, fire);
+  const congestion = congestionOnLeg(flowIndex(board), leg.line);
+  const factor = congestion.multiplier * travelVariation(board.response.rng);
+  const turnout = turnoutFor(team);
+  team.position = from;
+  team.status = "en_route";
+  team.fireId = fire.id;
+  team.departAt = board.minute;
+  team.rollAt = board.minute + turnout;
+  team.target = crewTarget(fire);
+  team.route = leg.road ? leg.line : null;
+  team.travel = leg.road ? (board.travel.get(travelKey(team, from, fire.id))?.basis ?? "road") : "straight_line";
+  team.travelFactor = factor;
+  team.coverStation = null;
+  team.arriveAt = board.minute + turnout + leg.drive * factor;
+  const slow = congestion.multiplier > 1.05 ? `, slowed x${congestion.multiplier.toFixed(1)} by evacuation traffic` : "";
+  logEvent(
+    board,
+    "team",
+    actor,
+    `${team.id} (${kindShort(team.kind)}) sent to ${fire.id}${why}, on scene in ${Math.ceil(team.arriveAt - board.minute)} min${leg.road ? "" : " (straight-line estimate)"}${slow}.`,
+  );
+}
+
+/** Sends a unit home (or to its demobilisation point); it can be redispatched while returning. */
+export function sendHome(board: Board, team: Team): void {
+  const at = teamPosition(board, team);
+  team.position = at;
+  team.fireId = null;
+  team.route = null;
+  team.travel = null;
+  const home = team.coverStation ? (board.stations.find((s) => s.id === team.coverStation)?.location ?? team.home) : team.home;
+  if (distanceM(at, home) <= HOME_M) {
+    arriveHome(board, team);
+    return;
+  }
+  team.status = "returning";
+  team.target = home;
+  team.departAt = board.minute;
+  team.rollAt = board.minute;
+  team.arriveAt = board.minute + fallbackDriveMinutes(at, home);
+}
+
+function arriveHome(board: Board, team: Team): void {
+  team.position = team.target ?? team.home;
+  team.target = null;
+  team.departAt = team.arriveAt = team.rollAt = null;
+  if (team.restOwed > 0) {
+    team.status = "resting";
+    team.restUntil = board.minute + team.restOwed;
+    team.restOwed = 0;
+    team.workMinutes = 0;
+    return;
+  }
+  team.status = "available";
+}
+
+// ---- initial attack ----
+
+/** The run card for a new fire, filled by the closest units (and aircraft); a shortfall goes to mutual aid. */
+export function respondToNewFire(board: Board, fire: Fire): void {
+  const r = board.response;
+  const ground = board.env.spread.ground;
+  const structure = ground.fuelCodeAt(fire.origin) === DEVELOPED_FUEL_CODE;
+  const wind = windAt(board.env.spread.wind, board.minute);
+  const level = dispatchLevel(ACTIVITY[board.activity].moisture, wind.speedMetersPerSecond);
+  r.fires.set(fire.id, {
+    level,
+    structure,
+    dispatchedAt: board.minute,
+    firstArrivalAt: null,
+    tactic: structure ? "structure" : "direct",
+    tacticAt: -Infinity,
+    target: null,
+    retryAt: -Infinity,
+    breaches: 0,
+    stage: 0,
+    ia: "in_progress",
+    immediateNeedUsed: false,
+    airLineM: 0,
+    dipKm: null,
+    containedHa: null,
+  });
+  r.stats.fires += 1;
+  if (!r.autoDispatch || fire.noSpread !== null) return;
+  const card = runCard(level, structure);
+  logEvent(board, "team", "board", `${fire.id}: ${structure ? "structure" : level} dispatch level, run card ${cardText(card)}.`);
+  const short = fillCard(board, fire, card);
+  const shortGround = short.engines + short.hand_crews + short.dozers;
+  if (shortGround > 0 && r.autoEscalate) {
+    // Closest-resource shortfall: ordered from the adjacent area as immediate need (OB#1).
+    if (short.engines > 0) placeOrder(board, fire, "engine_strike_team", 1, "board", "run card short of engines");
+    if (short.hand_crews > 0) placeOrder(board, fire, "crew_strike_team", 1, "board", "run card short of crews");
+    if (short.dozers > 0) placeOrder(board, fire, "dozer_strike_team", 1, "board", "run card short of dozers");
+  }
+}
+
+function cardText(c: ResourceCounts): string {
+  const parts = [
+    [c.engines, "engine"],
+    [c.hand_crews, "crew"],
+    [c.dozers, "dozer"],
+    [c.air_attack, "air attack"],
+    [c.airtankers, "airtanker"],
+    [c.helicopters, "helicopter"],
+  ] as const;
+  return parts
+    .filter(([n]) => n > 0)
+    .map(([n, label]) => `${n} ${label}${n > 1 && !label.endsWith("attack") ? "s" : ""}`)
+    .join(", ");
+}
+
+/** Off-board pool units considered per kind per run card (nearest by straight line), to bound the work. */
+const POOL_CANDIDATES_PER_KIND = 8;
+
+/**
+ * Dispatches the closest units to fill `card`; returns what it could not fill. Candidates are
+ * the board's dispatchable units and the off-board stations' units (closest-resource concept:
+ * an off-board station nearer than any free board unit answers initial attack directly, from
+ * its station, with its own turnout; it leaves the board again when released). Two passes:
+ * the first keeps each department's drawdown reserve, the second (only for what is still
+ * short) does not, because the closest resource is sent rather than none.
+ */
+function fillCard(board: Board, fire: Fire, card: ResourceCounts): ResourceCounts {
+  const short: ResourceCounts = { ...card };
+  const r = board.response;
+  type Candidate = { t: Team | null; seed: UnitSeed | null; kind: GroundResponseKind; eta: number; id: string };
+  const candidates: Candidate[] = board.teams
+    .filter((t) => dispatchable(t) && t.fireId === null)
+    .map((t) => ({ t, seed: null, kind: t.kind, eta: expectedArrival(board, t, fire), id: t.id }));
+  const flows = flowIndex(board);
+  const byDistance = [...r.pool].sort((a, b) => distanceM(a.location, fire.origin) - distanceM(b.location, fire.origin));
+  const perKind = new Map<string, number>();
+  const poolNear = byDistance.filter((s) => {
+    const n = perKind.get(s.kind) ?? 0;
+    perKind.set(s.kind, n + 1);
+    return n < POOL_CANDIDATES_PER_KIND;
+  });
+  for (const seed of poolNear) {
+    const target = crewTarget(fire);
+    const eta = seed.turnoutMinutes + fallbackDriveMinutes(seed.location, target) * congestionOnLeg(flows, [seed.location, target]).multiplier;
+    candidates.push({ t: null, seed, kind: seed.kind, eta, id: `pool:${seed.stationId}` });
+  }
+  candidates.sort((a, b) => a.eta - b.eta || a.id.localeCompare(b.id));
+  const used = new Set<Candidate>();
+  for (const pass of [0, 1]) {
+    for (const c of candidates) {
+      if (used.has(c)) continue;
+      const family = groundFamilyOf(c.kind);
+      if (short[family] <= 0) continue;
+      let team = c.t;
+      if (team && pass === 0 && !departmentAllows(board, team, fire)) continue;
+      if (!team && c.seed) {
+        if (pass === 0 && !poolAllows(board, c.seed)) continue;
+        if (board.teams.length >= MAX_TEAMS) continue;
+        r.pool = r.pool.filter((s) => s !== c.seed);
+        team = teamFromSeed(board, c.seed);
+        team.demobilise = true;
+        const st = r.offBoardStations.get(c.seed.stationId);
+        if (st && !board.stations.some((s) => s.id === st.id)) board.stations.push(st);
+        board.teams.push(team);
+      }
+      if (!team) continue;
+      used.add(c);
+      dispatchTeam(board, team, fire, "board", c.seed ? " (run card, closest resource from off the board)" : " (run card)");
+      short[family] -= 1;
+    }
+  }
+  for (const family of ["air_attack", "airtankers", "helicopters"] as const) {
+    const kind: AirResponseKind = family === "air_attack" ? "air_attack" : family === "airtankers" ? "airtanker_s2t" : "helicopter_t2";
+    const free = board.response.aircraft
+      .filter((a) => a.kind === kind && a.status === "available")
+      .sort((a, b) => distanceM(a.base, fire.origin) - distanceM(b.base, fire.origin));
+    for (const a of free.slice(0, short[family])) {
+      dispatchAircraft(board, a, fire);
+      short[family] -= 1;
+    }
+  }
+  return short;
+}
+
+function dispatchAircraft(board: Board, a: Aircraft, fire: Fire): void {
+  const km = a.tier === "state" ? STATE_AIR_DISTANCE_KM : distanceM(a.base, fire.origin) / 1000;
+  a.baseKm = km;
+  a.status = "en_route";
+  a.fireId = fire.id;
+  a.overFireAt = board.minute + firstOverFireMinutes(a.kind, km);
+  a.nextDropAt = null;
+  a.returnAt = null;
+  logEvent(board, "team", "board", `${a.id} (${a.kind.replace("_", " ")}) from ${a.baseName} to ${fire.id}, over the fire in ${Math.ceil(a.overFireAt - board.minute)} min.`);
+}
+
+// ---- orders ----
+
+const RESOURCE_UNITS: Record<Exclude<Orderable, "airtanker" | "helicopter">, { kind: GroundResponseKind; per: number }> = {
+  engine_strike_team: { kind: "engine_t3", per: ENGINES_PER_STRIKE_TEAM },
+  crew_strike_team: { kind: "hand_crew_t1", per: CREWS_PER_STRIKE_TEAM },
+  dozer_strike_team: { kind: "dozer_t2", per: DOZERS_PER_STRIKE_TEAM },
+};
+
+/**
+ * Orders `count` of a resource for `fire`. Ground strike teams: first from the mutual-aid pool
+ * (real off-board stations, nearest first, within their department's drawdown) as immediate
+ * need, once per incident and within the OB#1 caps; otherwise, or when the draw says the area
+ * cannot fill it, from the state system (arriving at the board edge). Aircraft: from the state
+ * system. Returns a short description of what was placed.
+ */
+export function placeOrder(board: Board, fire: Fire, resource: Orderable, count: number, by: BoardEvent["actor"], why: string): string {
+  const r = board.response;
+  const fr = r.fires.get(fire.id);
+  const placed: string[] = [];
+  for (let i = 0; i < count; i += 1) {
+    r.stats.ordersPlaced += 1;
+    const id = `O${r.stats.ordersPlaced}`;
+    if (resource === "airtanker" || resource === "helicopter") {
+      const air: AirResponseKind = resource === "airtanker" ? "airtanker_s2t" : "helicopter_t2";
+      const ok = stateHasRoom(board, true, 1) && fills(r.rng, "state", board.activity);
+      const lead = firstOverFireMinutes(air, STATE_AIR_DISTANCE_KM);
+      pushOrder(board, { id, fireId: fire.id, resource, tier: "state", placedAt: board.minute, readyAt: board.minute + (ok ? variedLead(r.rng, lead) : UNABLE_TO_FILL_RETRY_MINUTES), status: ok ? "pending" : "unable_to_fill", seeds: [], air, by });
+      if (!ok) r.stats.ordersUnableToFill += 1;
+      placed.push(`${id} ${resource} (state${ok ? "" : ", unable to fill yet"})`);
+      continue;
+    }
+    const spec = RESOURCE_UNITS[resource];
+    const capKey = resource === "engine_strike_team" ? "engine_strike_teams" : resource === "crew_strike_team" ? "crew_strike_teams" : "dozer_strike_teams";
+    const usedHere = r.orders.filter((o) => o.fireId === fire.id && o.tier === "mutual_aid" && o.resource === resource).length;
+    let tier: "mutual_aid" | "state" = !fr?.immediateNeedUsed && usedHere < IMMEDIATE_NEED_CAPS[capKey] ? "mutual_aid" : "state";
+    let seeds: UnitSeed[] = [];
+    if (tier === "mutual_aid") {
+      const candidates = r.pool
+        .filter((s) => s.kind === spec.kind)
+        .sort((a, b) => distanceM(a.location, fire.origin) - distanceM(b.location, fire.origin));
+      const picked: UnitSeed[] = [];
+      for (const s of candidates) {
+        if (picked.length >= spec.per) break;
+        if (!poolAllows(board, s)) continue;
+        picked.push(s);
+        r.pool = r.pool.filter((x) => x !== s); // so the next pick sees the reduced reserve
+      }
+      if (picked.length >= spec.per && fills(r.rng, "mutual_aid", board.activity)) {
+        seeds = picked;
+      } else {
+        r.pool.push(...picked);
+        tier = "state";
+      }
+    }
+    if (tier === "state") {
+      const ok = stateHasRoom(board, false, spec.per) && fills(r.rng, "state", board.activity);
+      const entry = boardEntry(board, fire.origin);
+      seeds = Array.from({ length: spec.per }, () => ({
+        kind: spec.kind,
+        stationId: "state",
+        departmentId: "state",
+        location: entry,
+        turnoutMinutes: 0,
+        tier: "state" as Tier,
+      }));
+      const lead = stateGroundLeadMinutes();
+      pushOrder(board, { id, fireId: fire.id, resource, tier, placedAt: board.minute, readyAt: board.minute + (ok ? variedLead(r.rng, lead) : UNABLE_TO_FILL_RETRY_MINUTES), status: ok ? "pending" : "unable_to_fill", seeds, air: null, by });
+      if (!ok) r.stats.ordersUnableToFill += 1;
+      placed.push(`${id} ${resource.replace(/_/g, " ")} (state system${ok ? `, at the board edge in about ${Math.round(lead / 60)} h` : ", unable to fill yet"})`);
+    } else {
+      pushOrder(board, { id, fireId: fire.id, resource, tier, placedAt: board.minute, readyAt: board.minute + variedLead(r.rng, MUTUAL_AID_ASSEMBLY_MINUTES), status: "pending", seeds, air: null, by });
+      placed.push(`${id} ${resource.replace(/_/g, " ")} (mutual aid from ${r.offBoardStations.get(seeds[0].stationId)?.name ?? "an adjacent area"})`);
+    }
+  }
+  if (fr && placed.length > 0) fr.immediateNeedUsed = fr.immediateNeedUsed || r.orders.some((o) => o.fireId === fire.id && o.tier === "mutual_aid");
+  const text = `${fire.id}: ordered ${placed.join("; ")}${why ? ` (${why})` : ""}.`;
+  logEvent(board, "team", by, text);
+  return text;
+}
+
+/** Whether the state system can still send this board `n` more aircraft or ground units (STATE_MAX_*). */
+function stateHasRoom(board: Board, air: boolean, n: number): boolean {
+  const r = board.response;
+  const pending = r.orders.filter((o) => o.tier === "state" && o.status === "pending" && (o.air !== null) === air);
+  if (air) {
+    const flying = r.aircraft.filter((a) => a.tier === "state").length;
+    return flying + pending.length + n <= STATE_MAX_AIRCRAFT;
+  }
+  const units = board.teams.filter((t) => t.tier === "state").length + pending.reduce((s, o) => s + o.seeds.length, 0);
+  return units + n <= STATE_MAX_GROUND_UNITS;
+}
+
+function pushOrder(board: Board, order: PendingOrder): void {
+  board.response.orders.push(order);
+  if (board.response.orders.length > MAX_ORDERS_KEPT) {
+    const i = board.response.orders.findIndex((o) => o.status === "arrived" || o.status === "cancelled");
+    board.response.orders.splice(i >= 0 ? i : 0, 1);
+  }
+}
+
+/** The board-edge point nearest `p` (where out-of-region resources enter; ASSUMPTION). */
+export function boardEntry(board: Board, p: LonLat): LonLat {
+  const grid = board.env.landscape;
+  const sw = cellLonLat(grid, (grid.height - 1) * grid.width);
+  const ne = cellLonLat(grid, grid.width - 1);
+  const [w, s, e, n] = [Math.min(sw[0], ne[0]), Math.min(sw[1], ne[1]), Math.max(sw[0], ne[0]), Math.max(sw[1], ne[1])];
+  const candidates: LonLat[] = [
+    [w, Math.min(n, Math.max(s, p[1]))],
+    [e, Math.min(n, Math.max(s, p[1]))],
+    [Math.min(e, Math.max(w, p[0])), s],
+    [Math.min(e, Math.max(w, p[0])), n],
+  ];
+  return candidates.reduce((best, c) => (distanceM(c, p) < distanceM(best, p) ? c : best));
+}
+
+function materialiseOrder(board: Board, order: PendingOrder): void {
+  const fire = board.fires.find((f) => f.id === order.fireId);
+  if (!fire || fire.status !== "burning") {
+    order.status = "cancelled";
+    // Unused mutual-aid units go back to their pool.
+    if (order.tier === "mutual_aid") board.response.pool.push(...order.seeds);
+    logEvent(board, "team", "board", `Order ${order.id} cancelled: ${order.fireId} no longer needs it.`);
+    return;
+  }
+  order.status = "arrived";
+  if (order.air) {
+    const prefix = order.air === "helicopter_t2" ? "H" : "T";
+    const a: Aircraft = {
+      id: nextAirId(board, prefix),
+      kind: order.air,
+      baseName: "state resources (out of region)",
+      base: boardEntry(board, fire.origin),
+      baseKm: STATE_AIR_DISTANCE_KM,
+      status: "over_fire",
+      fireId: fire.id,
+      overFireAt: board.minute,
+      nextDropAt: board.minute,
+      returnAt: null,
+      drops: 0,
+      tier: "state",
+    };
+    board.response.aircraft.push(a);
+    logEvent(board, "team", "board", `${a.id} (state airtanker or helicopter) over ${fire.id} (order ${order.id}).`);
+    return;
+  }
+  for (const seed of order.seeds) {
+    if (board.teams.length >= MAX_TEAMS) break;
+    const team = teamFromSeed(board, seed);
+    if (seed.tier === "mutual_aid") {
+      const st = board.response.offBoardStations.get(seed.stationId);
+      if (st && !board.stations.some((s) => s.id === st.id)) board.stations.push(st);
+    }
+    team.demobilise = true;
+    board.teams.push(team);
+    dispatchTeam(board, team, fire, "board", ` (order ${order.id}, ${seed.tier === "state" ? "state" : "mutual aid"})`);
+  }
+}
+
+function nextAirId(board: Board, prefix: string): string {
+  const c = board.response.counters;
+  c[prefix] = (c[prefix] ?? 0) + 1;
+  return `${prefix}${c[prefix]}`;
+}
+
+/** A board Team for a fleet seed (at its station, available). */
+export function teamFromSeed(board: Board, seed: UnitSeed): Team {
+  const tank = TANK_GALLONS[seed.kind];
+  return {
+    id: nextId(board, KIND_PREFIX[seed.kind]),
+    kind: seed.kind,
+    station: seed.stationId,
+    position: seed.location,
+    status: "available",
+    fireId: null,
+    departAt: null,
+    arriveAt: null,
+    target: null,
+    route: null,
+    travel: null,
+    department: seed.departmentId,
+    tier: seed.tier,
+    home: seed.location,
+    turnoutMinutes: seed.turnoutMinutes,
+    rollAt: null,
+    travelFactor: 1,
+    waterGallons: tank ?? null,
+    workMinutes: 0,
+    restOwed: 0,
+    restUntil: null,
+    outOfServiceUntil: null,
+    coverStation: null,
+    demobilise: false,
+  };
+}
+
+// ---- tick ----
+
+/** Unit lifecycle, aircraft, orders, availability, move-up and fire-cut roads for one step. */
+export function responseTick(board: Board, dt: number, wholeMinute: boolean): void {
+  const r = board.response;
+  const now = board.minute;
+  const removed = new Set<Team>();
+  for (const team of board.teams) {
+    // Work clock (travel to, work on and refilling at a fire count as work; idle time is rest at 2:1).
+    if (team.fireId !== null && (team.status === "en_route" || team.status === "on_scene" || team.status === "refilling")) {
+      team.workMinutes += dt;
+    } else if (team.status === "available") {
+      team.workMinutes = Math.max(0, team.workMinutes - 2 * dt);
+    }
+    if (team.fireId !== null && team.workMinutes >= MAX_SHIFT_MINUTES) {
+      team.restOwed = restMinutesAfter(team.workMinutes);
+      logEvent(board, "team", "board", `${team.id} relieved from ${team.fireId} after ${Math.round(team.workMinutes / 60)} h (work/rest 2:1): rests ${Math.round(team.restOwed / 60)} h.`);
+      if (team.demobilise) team.restOwed = 0;
+      sendHome(board, team);
+      continue;
+    }
+    if (team.status === "on_scene" && team.waterGallons !== null && team.fireId !== null) {
+      team.waterGallons -= ENGINE_WATER_USE_GPM * dt;
+      if (team.waterGallons <= 0) {
+        team.waterGallons = 0;
+        team.status = "refilling";
+        team.restUntil = now + ENGINE_REFILL_MINUTES;
+      }
+    } else if (team.status === "refilling" && team.restUntil !== null && now >= team.restUntil) {
+      team.waterGallons = TANK_GALLONS[team.kind] ?? null;
+      team.restUntil = null;
+      const fire = board.fires.find((f) => f.id === team.fireId);
+      if (fire && fire.status !== "out") team.status = "on_scene";
+      else sendHome(board, team);
+    } else if ((team.status === "returning" || team.status === "moving_up") && team.arriveAt !== null && now >= team.arriveAt) {
+      if (team.demobilise && team.status === "returning") {
+        removed.add(team);
+        if (team.tier === "mutual_aid") r.pool.push({ kind: team.kind, stationId: team.station, departmentId: team.department, location: team.home, turnoutMinutes: team.turnoutMinutes, tier: "mutual_aid" });
+        continue;
+      }
+      arriveHome(board, team);
+    } else if (team.status === "resting" && team.restUntil !== null && now >= team.restUntil) {
+      team.status = "available";
+      team.restUntil = null;
+    } else if (team.status === "out_of_service" && team.outOfServiceUntil !== null && now >= team.outOfServiceUntil) {
+      team.status = "available";
+      team.outOfServiceUntil = null;
+    }
+  }
+  if (removed.size > 0) board.teams = board.teams.filter((t) => !removed.has(t));
+
+  // Seeded availability: idle units at home may go out of service (maintenance, training, elsewhere).
+  if (now >= r.nextAvailabilityDraw) {
+    r.nextAvailabilityDraw = now + AVAILABILITY_DRAW_EVERY_MINUTES;
+    for (const team of board.teams) {
+      if (team.status !== "available" || team.demobilise) continue;
+      if (chance(r.rng, OUT_OF_SERVICE_PROBABILITY)) {
+        team.status = "out_of_service";
+        const [lo, hi] = OUT_OF_SERVICE_MINUTES;
+        team.outOfServiceUntil = now + lo + (hi - lo) * uniform(r.rng);
+      }
+    }
+  }
+
+  for (const order of r.orders) {
+    if (order.readyAt > now) continue;
+    if (order.status === "pending") materialiseOrder(board, order);
+    else if (order.status === "unable_to_fill") {
+      const fire = board.fires.find((f) => f.id === order.fireId);
+      if (!fire || fire.status !== "burning") {
+        order.status = "cancelled";
+        continue;
+      }
+      // Retry with the state system.
+      const ok = stateHasRoom(board, order.air !== null, Math.max(1, order.seeds.length)) && fills(r.rng, "state", board.activity);
+      order.tier = "state";
+      if (ok) {
+        order.status = "pending";
+        order.readyAt = now + variedLead(r.rng, order.air ? firstOverFireMinutes(order.air, STATE_AIR_DISTANCE_KM) : stateGroundLeadMinutes());
+      } else {
+        order.readyAt = now + UNABLE_TO_FILL_RETRY_MINUTES;
+        r.stats.ordersUnableToFill += 1;
+      }
+    }
+  }
+
+  aircraftTick(board);
+  if (wholeMinute) {
+    cutRoads(board);
+    if (now >= r.nextMoveUpCheck) {
+      r.nextMoveUpCheck = now + MOVE_UP_CHECK_EVERY_MINUTES;
+      moveUpAndCover(board);
+    }
+  }
+}
+
+/** Units arriving on scene: record the fire's first arrival. */
+export function noteArrival(board: Board, fire: Fire): void {
+  const fr = board.response.fires.get(fire.id);
+  if (fr) fr.tacticAt = -Infinity; // review the tactic with the new arrival
+  if (fr && fr.firstArrivalAt === null) {
+    fr.firstArrivalAt = board.minute;
+    board.response.stats.firstArrivalMinutes.push(board.minute - fire.ignitedAt);
+    if (board.response.stats.firstArrivalMinutes.length > 500) board.response.stats.firstArrivalMinutes.shift();
+  }
+}
+
+function burnedAt(board: Board): (p: LonLat) => boolean {
+  const field = board.solver.field;
+  const grid = board.env.landscape;
+  return (p) => {
+    if (!field) return false;
+    const cell = cellAt(grid, { longitude: p[0], latitude: p[1] });
+    return cell >= 0 && field.arrivalMinutes[cell] <= board.minute;
+  };
+}
+
+/** En-route units whose road ahead has burned stop where they are and reroute (straight line x detour until a new road leg). */
+function cutRoads(board: Board): void {
+  const burned = burnedAt(board);
+  for (const team of board.teams) {
+    if (team.status !== "en_route" || !team.route || team.route.length < 2 || team.fireId === null || team.arriveAt === null || team.rollAt === null) continue;
+    const span = team.arriveAt - team.rollAt;
+    const u = span > 0 ? Math.max(0, Math.min(1, (board.minute - team.rollAt) / span)) : 1;
+    const cut = routeCutAt(team.route, u, burned);
+    if (!cut) continue;
+    const fire = board.fires.find((f) => f.id === team.fireId);
+    const here = teamPosition(board, team);
+    const key = travelKey(team, team.position, team.fireId);
+    board.travel.delete(key);
+    team.position = here;
+    team.departAt = board.minute;
+    team.rollAt = board.minute;
+    team.route = null;
+    team.travel = "straight_line";
+    const target = team.target ?? (fire ? crewTarget(fire) : here);
+    team.arriveAt = board.minute + fallbackDriveMinutes(here, target) * REROUTE_DETOUR_FACTOR * team.travelFactor;
+    board.response.stats.routeCuts += 1;
+    logEvent(board, "team", "board", `${team.id}: road to ${team.fireId} cut by fire; rerouting, now ${Math.ceil(team.arriveAt - board.minute)} min.`);
+  }
+}
+
+/** Move-up and cover: a station whose units have all been committed for MOVE_UP_EMPTY_MINUTES gets a free engine from a station with two or more. */
+function moveUpAndCover(board: Board): void {
+  const r = board.response;
+  const homes = new Map<string, Team[]>();
+  for (const t of board.teams) {
+    if (!isEngine(t.kind) || t.demobilise || t.tier !== "closest") continue;
+    const list = homes.get(t.station);
+    if (list) list.push(t);
+    else homes.set(t.station, [t]);
+  }
+  const atStation = (t: Team, stationId: string) => {
+    const s = board.stations.find((st) => st.id === stationId);
+    return !!s && t.status === "available" && distanceM(t.position, s.location) <= HOME_M;
+  };
+  for (const [stationId, own] of homes) {
+    const covered = board.teams.some((t) => t.coverStation === stationId && (t.status === "available" || t.status === "moving_up"));
+    const home = own.some((t) => atStation(t, stationId));
+    if (home) {
+      r.stationEmptySince.delete(stationId);
+      // Its own engines are back: covering engines go home.
+      for (const t of board.teams) if (t.coverStation === stationId && t.status === "available") {
+        t.coverStation = null;
+        sendHome(board, t);
+      }
+      continue;
+    }
+    if (covered) continue;
+    const since = r.stationEmptySince.get(stationId);
+    if (since === undefined) {
+      r.stationEmptySince.set(stationId, board.minute);
+      continue;
+    }
+    if (board.minute - since < MOVE_UP_EMPTY_MINUTES) continue;
+    const station = board.stations.find((s) => s.id === stationId);
+    if (!station) continue;
+    const donors = [...homes.entries()].filter(([id, list]) => id !== stationId && list.filter((t) => atStation(t, id)).length >= 2);
+    let best: Team | null = null;
+    for (const [id, list] of donors) {
+      for (const t of list) {
+        if (!atStation(t, id) || t.coverStation) continue;
+        if (!best || distanceM(t.position, station.location) < distanceM(best.position, station.location)) best = t;
+      }
+    }
+    if (!best) continue;
+    best.status = "moving_up";
+    best.coverStation = stationId;
+    best.target = station.location;
+    best.departAt = board.minute;
+    best.rollAt = board.minute + best.turnoutMinutes;
+    best.arriveAt = best.rollAt + fallbackDriveMinutes(best.position, station.location);
+    r.stats.moveUps += 1;
+    logEvent(board, "team", "board", `${best.id} moves up to cover ${station.name} (its engines committed for ${Math.round(board.minute - since)} min).`);
+  }
+}
+
+// ---- aircraft ----
+
+function aircraftTick(board: Board): void {
+  const now = board.minute;
+  const wind = windAt(board.env.spread.wind, now);
+  const windKt = wind.speedMetersPerSecond * KNOTS_PER_METER_PER_SECOND;
+  const epochMs = board.response.startEpochMs + now * 60_000;
+  for (const a of board.response.aircraft) {
+    if (a.status === "available" || a.status === "grounded") continue;
+    const fire = a.fireId ? board.fires.find((f) => f.id === a.fireId) : undefined;
+    if (a.status === "returning") {
+      if (a.returnAt !== null && now >= a.returnAt) {
+        if (a.tier === "state") a.status = "grounded"; // released state aircraft leave the board (pruned below)
+        else {
+          a.status = "available";
+          a.fireId = null;
+          a.returnAt = null;
+        }
+      }
+      continue;
+    }
+    if (!fire || fire.status !== "burning") {
+      releaseAircraft(board, a);
+      continue;
+    }
+    if (a.status === "en_route" && a.overFireAt !== null && now >= a.overFireAt) {
+      a.status = "over_fire";
+      a.nextDropAt = now;
+    }
+    if (a.status !== "over_fire" || a.nextDropAt === null || now < a.nextDropAt) continue;
+    const supervised = board.response.aircraft.some((o) => o.kind === "air_attack" && o.fireId === fire.id && o.status === "over_fire");
+    if (!mayFly(a.kind, epochMs, fire.origin, windKt, supervised)) {
+      a.nextDropAt = now + 15; // ASSUMPTION: re-check flight conditions every 15 min
+      continue;
+    }
+    const cycle = dropCycleMinutes(a.kind, a.baseKm, dipKmFor(board, fire));
+    if (cycle === null) continue; // air attack: supervision only
+    // A load holds only where retardant or water can hold the head (PMS 465 pp.171, 174: not above 8 ft; not on crown fire).
+    const fr = board.response.fires.get(fire.id);
+    const fuel = board.env.spread.ground.fuelCodeAt(fire.origin);
+    const usable = !fire.rates.crowning && (fire.rates.headFlameFeet <= DROP_HOLDS_FLAME_FEET || fr?.tactic === "parallel" || fr?.tactic === "indirect");
+    const line = usable ? dropLineMeters(a.kind, fuel, windKt) : 0;
+    if (line > 0) {
+      fire.lineM += line;
+      if (fr) fr.airLineM += line;
+    }
+    a.drops += 1;
+    a.nextDropAt = now + cycle;
+  }
+  board.response.aircraft = board.response.aircraft.filter((a) => !(a.tier === "state" && a.status === "grounded"));
+}
+
+function releaseAircraft(board: Board, a: Aircraft): void {
+  a.status = "returning";
+  a.returnAt = board.minute + (a.baseKm > 0 ? firstOverFireMinutes(a.kind, a.baseKm) - firstOverFireMinutes(a.kind, 0) : 0);
+  a.fireId = null;
+  a.nextDropAt = a.overFireAt = null;
+}
+
+function dipKmFor(board: Board, fire: Fire): number | null {
+  const fr = board.response.fires.get(fire.id);
+  if (!fr) return null;
+  if (fr.dipKm === null) fr.dipKm = nearestWaterKm(board.env.landscape, fire.origin) ?? -1;
+  return fr.dipKm < 0 ? null : fr.dipKm;
+}
+
+// ---- containment ----
+
+/** Units on scene that build line on this fire now. */
+function builders(board: Board, fire: Fire): Team[] {
+  return board.teams.filter((t) => t.fireId === fire.id && t.status === "on_scene");
+}
+
+function directHolds(board: Board, fire: Fire, teams: Team[]): number {
+  let holds = 0;
+  for (const t of teams) holds = Math.max(holds, holdsFlameFeet(t.kind));
+  const fr = board.response.fires.get(fire.id);
+  if (fr && fr.airLineM > 0) holds = Math.max(holds, DROP_HOLDS_FLAME_FEET);
+  return holds;
+}
+
+function structureFront(board: Board, fire: Fire): boolean {
+  if (fire.rates.cell >= 0) return fire.rates.fuelCode === DEVELOPED_FUEL_CODE;
+  return board.env.spread.ground.fuelCodeAt(fire.origin) === DEVELOPED_FUEL_CODE;
+}
+
+/** Line per minute these units build on this fire with this tactic. */
+export function tacticLineRate(board: Board, fire: Fire, teams: Team[], tactic: Tactic): number {
+  const fuel = board.env.spread.ground.fuelCodeAt(fire.origin);
+  let rate = 0;
+  for (const t of teams) {
+    if (!buildsOn(t.kind, tactic)) continue;
+    rate += unitLineOn(board, t, fire) * tacticRateFactor(t.kind, fuel, tactic);
+  }
+  return rate;
+}
+
+/**
+ * The line a fire's on-scene and en-route units would have built `t` minutes from now with a
+ * tactic (each from its arrival), metres.
+ */
+function projectedLine(board: Board, fire: Fire, tactic: Tactic, t: number): number {
+  let line = fire.lineM;
+  for (const team of board.teams) {
+    if (team.fireId !== fire.id) continue;
+    const eta = expectedArrival(board, team, fire);
+    if (eta >= t || !buildsOn(team.kind, tactic)) continue;
+    line += tacticLineRate(board, fire, [team], tactic) * (t - eta);
+  }
+  return line;
+}
+
+function reviewTactic(board: Board, fire: Fire, fr: FireResponse, teams: Team[]): void {
+  const assigned = board.teams.filter((t) => t.fireId === fire.id);
+  const droppers = board.response.aircraft.some((a) => a.fireId === fire.id && a.kind !== "air_attack");
+  if (assigned.length === 0 && !droppers) return; // nothing to choose a tactic for yet
+  const holds = directHolds(board, fire, teams);
+  const assignedHolds = Math.max(holds, droppers ? DROP_HOLDS_FLAME_FEET : 0, ...assigned.map((t) => holdsFlameFeet(t.kind)));
+  const parallelNeed = (t: number) => lineNeededMeters("parallel", perimeterIn(board, fire, t), null);
+  const parallelFeasible = [30, 60, 120].some((t) => projectedLine(board, fire, "parallel", t) >= parallelNeed(t));
+  const tactic = chooseTactic({
+    structure: structureFront(board, fire),
+    crowning: fire.rates.crowning,
+    headFlameFeet: fire.rates.headFlameFeet,
+    directHoldsFeet: assignedHolds,
+    parallelFeasible,
+  });
+  if (tactic !== fr.tactic) {
+    logEvent(board, "team", "board", `${fire.id}: ${TACTIC_LABEL[tactic].toLowerCase()} (head flame ${fire.rates.headFlameFeet.toFixed(1)} ft${fire.rates.crowning ? ", crowning" : ""}).`);
+    fr.tactic = tactic;
+    fr.target = null;
+  }
+  if (tactic === "indirect" && fr.target === null) {
+    let chosen = INDIRECT_LEAD_MINUTES[INDIRECT_LEAD_MINUTES.length - 1] as number;
+    for (const lead of INDIRECT_LEAD_MINUTES) {
+      if (projectedLine(board, fire, "indirect", lead) >= perimeterIn(board, fire, lead)) {
+        chosen = lead;
+        break;
+      }
+    }
+    fr.target = { minute: board.minute + chosen, perimeterM: perimeterIn(board, fire, chosen) };
+  }
+  fr.tacticAt = board.minute;
+}
+
+/**
+ * One step of the containment race on a burning fire. Returns true when the fire is contained
+ * this step (the caller marks it contained).
+ */
+export function advanceContainment(board: Board, fire: Fire, dt: number): boolean {
+  const fr = board.response.fires.get(fire.id);
+  if (!fr) return false;
+  const teams = builders(board, fire);
+  if (board.minute - fr.tacticAt >= TACTIC_REVIEW_MINUTES) reviewTactic(board, fire, fr, teams);
+  if (teams.length === 0 && fr.airLineM <= 0) return false;
+  const needed = lineNeededMeters(fr.tactic, fire.perimeterM, fr.target?.perimeterM ?? null);
+  const rate = tacticLineRate(board, fire, teams, fr.tactic);
+  // Line cannot exceed what the tactic needs; flank line is outflanked as the perimeter grows.
+  fire.lineM = Math.min(needed, fire.lineM + rate * dt);
+  // Aircraft lay line, but only ground resources on scene finish and hold it (retardant supports ground forces).
+  if (fr.tactic === "flank" || teams.length === 0) return false;
+  if (fr.tactic === "indirect" && fr.target) {
+    if (board.minute < fr.target.minute) return false;
+    if (fire.lineM < fr.target.perimeterM) {
+      breach(board, fire, fr, "the fire reached an unfinished indirect line");
+      return false;
+    }
+  } else if (fire.lineM < needed - 1e-6) return false;
+  if (board.minute < fr.retryAt) return false;
+  // Direct attack waits for a unit whose line holds the head (crews alone at 4-8 ft do not test it).
+  if (fr.tactic === "direct" && directHolds(board, fire, teams) < fire.rates.headFlameFeet) return false;
+  const holds = tacticHoldsFeet(fr.tactic, directHolds(board, fire, teams));
+  const test = holdingTest(board.response.rng, fire.rates.headFlameFeet, holds);
+  if (test.held) return true;
+  breach(board, fire, fr, `a ${test.flameFeet.toFixed(1)} ft flame crossed the line (holds ${holds} ft)`);
+  return false;
+}
+
+function breach(board: Board, fire: Fire, fr: FireResponse, why: string): void {
+  fire.lineM *= 1 - BREACH_LINE_LOSS_SHARE;
+  fr.breaches += 1;
+  fr.retryAt = board.minute + BREACH_RETRY_MINUTES;
+  fr.target = null;
+  fr.tacticAt = -Infinity;
+  board.response.stats.breaches += 1;
+  logEvent(board, "team", "board", `${fire.id}: line breached, ${why}; ${Math.round(BREACH_LINE_LOSS_SHARE * 100)}% of the line lost.`);
+}
+
+/** At containment: the IA record, and every unit beyond the mop-up detail is released. */
+export function onContained(board: Board, fire: Fire): void {
+  const fr = board.response.fires.get(fire.id);
+  if (fr) {
+    fr.containedHa = fire.areaHa;
+    if (fr.ia === "in_progress") {
+      // CAL FIRE's goal metric: contained at 10 acres or less (whatever resources it took).
+      if (fire.areaHa <= IA_SUCCESS_MAX_HA) {
+        fr.ia = "contained";
+        board.response.stats.iaContained += 1;
+      } else {
+        fr.ia = "failed";
+        board.response.stats.iaFailed += 1;
+      }
+    }
+  }
+  const keep: Record<string, number> = { ...MOPUP_KEEP };
+  const assigned = board.teams
+    .filter((t) => t.fireId === fire.id)
+    .sort((a, b) => Number(a.demobilise) - Number(b.demobilise) || distanceM(a.home, fire.origin) - distanceM(b.home, fire.origin));
+  for (const t of assigned) {
+    const family = groundFamilyOf(t.kind);
+    if (t.status === "on_scene" && (keep[family] ?? 0) > 0) {
+      keep[family] -= 1;
+      continue;
+    }
+    sendHome(board, t);
+  }
+  for (const a of board.response.aircraft) if (a.fireId === fire.id) releaseAircraft(board, a);
+  // Orders not yet on the board are cancelled; unused mutual-aid units go back to their pool.
+  for (const o of board.response.orders) {
+    if (o.fireId !== fire.id || (o.status !== "pending" && o.status !== "unable_to_fill")) continue;
+    o.status = "cancelled";
+    if (o.tier === "mutual_aid") board.response.pool.push(...o.seeds);
+  }
+}
+
+/**
+ * Escalation: when initial attack fails (the fire passes the IA size, a line is breached, or the
+ * units on scene cannot catch it), the stage's extended-attack orders are placed; later stages
+ * by size.
+ */
+export function escalate(board: Board, fire: Fire, iaCannotCatch: () => boolean): void {
+  const r = board.response;
+  const fr = r.fires.get(fire.id);
+  if (!fr || fire.status !== "burning") return;
+  // Initial attack has failed once a burning fire is past the IA size (CAL FIRE goal metric).
+  if (fr.ia === "in_progress" && fire.areaHa > IA_SUCCESS_MAX_HA) {
+    fr.ia = "failed";
+    r.stats.iaFailed += 1;
+  }
+  if (fr.stage >= ESCALATION_ORDERS.length) return;
+  const acres = fire.areaHa / HECTARES_PER_ACRE;
+  let why: string | null = null;
+  if (acres >= ESCALATION_STAGE_ACRES[fr.stage]) why = `${Math.round(acres)} acres, past ${ESCALATION_STAGE_ACRES[fr.stage]}`;
+  else if (fr.stage === 0 && fr.breaches > 0) why = "line breached in initial attack";
+  else if (fr.stage === 0 && fr.firstArrivalAt !== null && board.minute - fr.tacticAt < 1 && iaCannotCatch()) why = "initial attack cannot catch it";
+  if (!why) return;
+  const order = ESCALATION_ORDERS[fr.stage];
+  fr.stage += 1;
+  if (!r.autoEscalate) {
+    logEvent(board, "team", "board", `${fire.id}: escalation stage ${fr.stage} due (${why}); automatic ordering is off.`);
+    return;
+  }
+  const parts: [Orderable, number][] = [
+    ["engine_strike_team", order.engine_strike_teams],
+    ["crew_strike_team", order.crew_strike_teams],
+    ["dozer_strike_team", order.dozer_strike_teams],
+    ["airtanker", order.airtankers],
+    ["helicopter", order.helicopters],
+  ];
+  for (const [res, n] of parts) if (n > 0) placeOrder(board, fire, res, n, "board", `stage ${fr.stage}: ${why}`);
+}
+
+/** Departments with their engine counts (for the observation). */
+export function departmentStatus(board: Board): { id: string; name: string; tier: Tier; engines: number; engines_available: number; keep_engines: number }[] {
+  return board.response.departments.map((d) => ({
+    id: d.id,
+    name: d.name,
+    tier: d.tier,
+    engines: d.engines,
+    engines_available:
+      d.tier === "closest"
+        ? board.teams.filter((t) => t.department === d.id && isEngine(t.kind) && t.status === "available").length
+        : board.response.pool.filter((s) => s.departmentId === d.id && isEngine(s.kind)).length,
+    keep_engines: d.keepEngines,
+  }));
+}

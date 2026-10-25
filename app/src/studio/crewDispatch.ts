@@ -36,6 +36,7 @@ import {
 import type { CrewArrival } from "./firefighting";
 import { RULE_TEXT, edgeAccessTable, type EdgeAccess, type RoadRule } from "./roadAccess";
 import { CREW_TYPES, STATION_TYPES, type SuppressionBases } from "./suppressionBases";
+import { engineTurnoutMinutes } from "../response/fleet";
 
 /** NFPA 1710 turnout time for fire calls: 80 s (data: response_times.turnout_s, unverified). */
 export const TURNOUT_MINUTES = dataValue<number>("response_times.turnout_s") / 60;
@@ -120,6 +121,8 @@ interface Origin {
   node: number | null;
   location: LonLat;
   approachMeters: number;
+  /** Facilities-layer staffing (P/C/V) of an off-board base, when known: sets an engine's turnout. */
+  staffing?: string | null;
 }
 
 interface Leg {
@@ -318,7 +321,7 @@ export function planCrewDispatch(
       .filter((b) => filter(b.type, b.agency) && !(origin === "mutual_aid" && nearBoardStation(b)))
       .sort((a, b) => a.distanceKm - b.distanceKm || a.id.localeCompare(b.id))
       .slice(0, 12)
-      .map((b) => ({ name: b.name, origin, node: null, location: [b.lon, b.lat] as LonLat, approachMeters: 0 }));
+      .map((b) => ({ name: b.name, origin, node: null, location: [b.lon, b.lat] as LonLat, approachMeters: 0, staffing: b.staffing ?? null }));
   const mutualAid = offBoard((type) => STATION_TYPES.has(type), "mutual_aid");
   const crewCamps = offBoard((type) => CREW_TYPES.has(type), "crew_camp");
   const dozerBases = offBoard(
@@ -446,7 +449,11 @@ export function planCrewDispatch(
       }
       used.set(`${kind}|${pick.origin.name}`, (used.get(`${kind}|${pick.origin.name}`) ?? 0) + 1);
     }
-    const departMinute = reportMinute + spec.turnoutMinutes;
+    // Engines from a base whose staffing the layer gives: 80 s paid, 120 s otherwise (response/fleet.ts,
+    // as livecore/apparatus.py); board OSM stations (staffing unknown) keep the kind's turnout.
+    const turnout =
+      spec.line?.kind === "engine" && pick.origin.staffing != null ? engineTurnoutMinutes(pick.origin.staffing) : spec.turnoutMinutes;
+    const departMinute = reportMinute + turnout;
     const leg = pick.leg;
     const limit = leg.node !== fireNode ? limitOf(cls, sourceOf(pick.origin)) : null;
     trips[index] = {

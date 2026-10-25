@@ -27,6 +27,7 @@ import { useCrewRoutes } from "./useCrewRoutes";
 import { useDemoAgent } from "./useDemoAgent";
 import { WEATHER_PRESETS, useDemoEnvironment, zonesCenter } from "./useDemoEnvironment";
 import { useDemoRoutes } from "./useDemoRoutes";
+import { useFireSolver } from "./useFireSolver";
 import { useArrivalField } from "./useArrivalField";
 
 /**
@@ -165,6 +166,8 @@ export function useCommandBoard({ token, incidentId, data: commandData }: Comman
     },
     [bump],
   );
+  // Keeps the fire field solved in a worker; the board clock holds while a needed solve runs.
+  const solver = useFireSolver(board, version, bump);
   const agent = useDemoAgent({ board, version, incidentId, routes: routes.routes, forecasts, enabled: autopilot, apply });
 
   // The simulation clock. Holds while Claude decides, if asked to.
@@ -215,6 +218,16 @@ export function useCommandBoard({ token, incidentId, data: commandData }: Comman
   const onIgnite = (coord: LonLat) => {
     act((b) => (ignite(b, coord, "manual", "you") ? null : "Too many active fires on the board."));
     setIgniteMode(false);
+  };
+
+  /** Rule-based response (run cards on new fires, extended-attack orders on IA failure); on by default. */
+  const ruleResponse = board?.response.autoDispatch ?? true;
+  const setRuleResponse = (on: boolean) => {
+    const b = boardRef.current;
+    if (!b) return;
+    b.response.autoDispatch = on;
+    b.response.autoEscalate = on;
+    bump();
   };
 
   const changeActivity = (value: Activity) => {
@@ -270,6 +283,11 @@ export function useCommandBoard({ token, incidentId, data: commandData }: Comman
     hold,
     setHold,
     agent,
+    // Fire solver state (why a solve is running, last solve time, last error)
+    solver,
+    // Rule-based dispatch and escalation (demo/boardResponse.ts)
+    ruleResponse,
+    setRuleResponse,
     // Map interaction
     igniteMode,
     setIgniteMode,

@@ -3,6 +3,7 @@ import { Map, Marker, NavigationControl, type MapOptions } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { Button, IconButton } from "../../ui";
 import type { GeoPoint } from "../spread";
+import { AERIAL_STYLE } from "../../maps/basemap";
 import { AREA_PRESETS } from "./areaPresets";
 
 /** Rough CONUS box; a click outside it cannot load LANDFIRE fuels. */
@@ -19,22 +20,7 @@ function insideConus(point: GeoPoint): boolean {
   );
 }
 
-const LOCATOR_STYLE: MapOptions["style"] = {
-  version: 8,
-  sources: {
-    imagery: {
-      type: "raster",
-      tiles: [
-        "https://basemap.nationalmap.gov/arcgis/rest/services/USGSImageryOnly/MapServer/tile/{z}/{y}/{x}",
-      ],
-      tileSize: 256,
-      maxzoom: 16,
-      attribution:
-        '<a href="https://www.usgs.gov/programs/national-geospatial-program/national-map">USDA / USGS The National Map</a> · Aerial imagery',
-    },
-  },
-  layers: [{ id: "imagery", type: "raster", source: "imagery" }],
-};
+const LOCATOR_STYLE: MapOptions["style"] = AERIAL_STYLE;
 
 type AreaPickerProps = {
   current: GeoPoint;

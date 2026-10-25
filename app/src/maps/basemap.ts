@@ -1,4 +1,38 @@
-import type { MapOptions } from "maplibre-gl";
+import type { MapOptions, StyleSpecification } from "maplibre-gl";
+
+/**
+ * USGS aerial imagery, served through the backend's read-through cache
+ * (`GET /api/geo/imagery/{z}/{y}/{x}`, app/backend/api/geo_cache.py), which fetches
+ * USGSImageryOnly once and keeps the tile in MongoDB. MapLibre loads tiles in a worker, so
+ * the URL must be absolute.
+ */
+export const GEO_API_PATH = "/api/geo";
+export function absoluteUrl(path: string): string {
+  return typeof window === "undefined" ? path : `${window.location.origin}${path}`;
+}
+export const IMAGERY_TILES_URL = absoluteUrl(`${GEO_API_PATH}/imagery/{z}/{y}/{x}`);
+/** Terrarium elevation tiles through the same cache (`/api/geo/terrarium/{z}/{x}/{y}.png`). */
+export const TERRAIN_TILES_URL = absoluteUrl(`${GEO_API_PATH}/terrarium/{z}/{x}/{y}.png`);
+const USGS_LINK =
+  '<a href="https://www.usgs.gov/programs/national-geospatial-program/national-map">USDA / USGS The National Map</a>';
+
+/** The one imagery raster source every map uses; `note` follows the credit. */
+export function imagerySource(note = "Aerial imagery") {
+  return {
+    type: "raster" as const,
+    tiles: [IMAGERY_TILES_URL],
+    tileSize: 256,
+    maxzoom: 16,
+    attribution: `${USGS_LINK} \u00b7 ${note}`,
+  };
+}
+
+/** Imagery only, no preview images: the shared satellite style of the Studio, /live and pickers. */
+export const AERIAL_STYLE: StyleSpecification = {
+  version: 8,
+  sources: { imagery: imagerySource() },
+  layers: [{ id: "imagery", type: "raster", source: "imagery" }],
+};
 
 // Local, georeferenced previews fill the initial view while detailed USGS tiles stream.
 // Sources, retrieval time, and bounds are recorded in public/map-preview/provenance.json.
@@ -55,16 +89,7 @@ export const SATELLITE_STYLE: MapOptions["style"] = {
         [-122.63499566818868, 37.66120482921475],
       ],
     },
-    imagery: {
-      type: "raster",
-      tiles: [
-        "https://basemap.nationalmap.gov/arcgis/rest/services/USGSImageryOnly/MapServer/tile/{z}/{y}/{x}",
-      ],
-      tileSize: 256,
-      maxzoom: 16,
-      attribution:
-        '<a href="https://www.usgs.gov/programs/national-geospatial-program/national-map">USDA / USGS The National Map</a> \u00b7 Historical imagery',
-    },
+    imagery: imagerySource("Historical imagery"),
   },
   layers: [
     {

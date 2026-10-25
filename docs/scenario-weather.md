@@ -262,9 +262,143 @@ raw_sha256}` where `series` is every hourly sample (UTC time, `speed_ms`, `speed
 `wind_from_deg` still hold that applied value. The backend package builder ignores the extra key.
 
 Still open: a time-varying solver (step the wind through the series, interpolating direction
-through the shortest arc), moisture from the series, and the wind-shift inject for live drills
+through the shortest arc), wiring moisture from the series into the pages (the endpoint exists:
+see "Fuel moisture from the date's weather" below), and the wind-shift inject for live drills
 (ADR 0030), recorded as `evidence_class: "simulated"`. Keep observed, forecast, derived and
 assumed series separate wherever they are stored.
+
+## Fuel moisture from the date's weather
+
+`GET /api/conditions` (`app/backend/api/conditions.py`) answers "what were (or would be) the fire
+conditions here on this date": the hourly weather above plus dead and live fuel moisture per hour,
+in the `FuelMoisture` fraction shape `app/src/fire/rothermel.ts` takes. It is the `moisture.mode =
+"derived"` source of the shared world (`conditions` in `docs/shared-world.md`). The model is
+`sim/fuel_moisture.py` (pure, stdlib), region defaults are `sim/conditions_presets.py`, and the
+TypeScript client and the apply helper are `app/src/world/conditions.ts`. Not wired into a page yet.
+
+### Model and evidence
+
+| Output | Evidence | Method | Source |
+| --- | --- | --- | --- |
+| Wind, gust, temperature, RH | as the weather: `observed`, `derived` (climatology), `forecast` | `sim.weather.scenario_wind`, 20 ft conversion as `GET /api/weather/scenario` | above |
+| `dead1h` | derived | Fosberg and Deeming tables. Day (0800-1959): Table A reference + Table B (May-Jul), C (Feb-Apr, Aug-Oct) or D (Nov-Jan) correction for exposure, aspect, slope class and elevation band. Night (2000-0759): Table E; Table F only with `night_inversion=1` | Rothermel, R.C. 1983, *How to predict the spread and intensity of forest and range fires*, USDA FS GTR INT-143, Exhibit II-2 (pp. 15-19); same tables as the NWCG IRPG |
+| `dead10h`, `dead100h` | derived; forcing and starting state assumed | First-order timelag `dm/dt = (E - m)/tau`, `tau` = 10 h and 100 h, solved exactly each hour. `E` = that hour's 1-h table value (assumed: 1-h fuels reach equilibrium within the hour). Start = mean `E` of the first 24 forcing hours (assumed) | Timelag definition (Byram 1963; Fosberg 1970) |
+| `liveHerb`, `liveWoody` | assumed | Stage of development to moisture: fresh 300 %, maturing 200 %, mature 100 %, entering dormancy 50 %, cured 30 % (printed "less than 30, treat as a dead fuel"). The stage on a date comes from an assumed regional calendar (`PHENOLOGY_CALENDARS`), interpolated between mid-month anchors | Rothermel 1983 Table II-2 (p. 13); the calendars are planning assumptions, not data |
+
+Units: tables in deg F and percent (converted from the station's deg C at the boundary,
+`F = C * 9/5 + 32`); output fractions of oven-dry weight. The tables' clock bands are read in
+**local mean solar time**, `UTC + lon/15 h` (assumption: the bands encode sun position). Temperature
+and RH gaps up to 3 h are filled linearly (`met_filled: true`); longer gaps leave the hour's
+moisture `null` and hold the lagged state.
+
+Spin-up: for `historical_replay` the server fetches the 48 observed hours before `start` from the
+same station; for `climatology_percentile` the 48 hours before the analog's real start. `forecast`
+has no earlier hours, so its 10-h/100-h start from the first day's mean (`provenance.spinup.note`).
+Climatology analogs are relabelled to the scenario start by `sim.weather`; the moisture tables use
+the analog's real clock (`provenance.table_clock.shift_hours`), so a night observation is never read
+as an afternoon one.
+
+Not modelled, and therefore biased: **precipitation and dew** (the report's own caution: the
+tables "assume that there has not been recent precipitation"; values after rain are too dry), cloud
+cover (pass `shading=shaded` for overcast hours), wetting/drying hysteresis, and live moisture from
+measurements. The day/night switch at 0800 and 2000 is a step, as in the tables: at the Camp
+station on 2018-11-08 the 1-h value goes from 4 % at 07:54 solar (Table E) to 8 % at 08:54 (Table A
+3 % + Table D early-morning correction 5 %). That is the published method, not smoothed here.
+
+Check against the report: `sim.fuel_moisture.rothermel_1983_worked_examples()` reproduces the six
+answers of the two worked examples on p. 20 (6, 4, 7, 10, 9, 22 %).
+
+### `GET /api/conditions`
+
+Public, throttled 30/min per client, cached in MongoDB `conditions_cache` by the normalized query
+and `model_version` (forecast entries expire after 1 h). Same weather limits as
+`/api/weather/scenario`: `hours` 1-72, archive coverage per station, California stations only. A
+nearest station more than 100 km away (`MAX_STATION_DISTANCE_KM`, assumption) is refused with
+`502 no_station_coverage` rather than used (the Marshall Fire, Colorado, gets this answer).
+
+| Query | Meaning |
+| --- | --- |
+| `lon`, `lat`, `start`, `hours`, `mode`, `percentile` | as `/api/weather/scenario` |
+| `sector` | `from,to` degrees, climatology only; default `315,90` (offshore) |
+| `aspect` | `N`, `E`, `S`, `W` or a bearing in degrees; default `S` |
+| `slope_pct` | default 0 (tables split at 30 %) |
+| `shading` | `exposed` (< 50 % shading of surface fuels) or `shaded` (canopy or cloud); default `exposed` |
+| `elevation` | `B`, `L`, `A`: projection point 1000-2000 ft below, within 1000 ft, 1000-2000 ft above the station; default `L` |
+| `night_inversion`, `station_aspect` | `1` applies Table F at night (strong inversion); default `0` |
+| `region` / `phenology` | picks the live calendar; otherwise the nearest preset region within 60 km, else `ca_coastal` |
+
+Answer (`schema: "crisistwin.conditions/1"`): `query`, `units`, `station`, `source`,
+`height_conversion`, `site` (with `given: false` when all defaults), `phenology {class, label,
+chosen_by}`, `evidence {weather, wind_20ft, dead1h, dead10h_dead100h, live, site}`,
+`hours_series[]`, `summary`, `provenance {weather, spinup, lag_initial_pct, table_clock, model}`,
+`cache {hit, stored_utc, key}`. One hour:
+
+```jsonc
+{
+  "t_utc": "2018-11-08T12:00:00Z",
+  "wind_speed_20ft_ms": 14.305, "wind_speed_20ft_mph": 32.0,  // open 20 ft wind
+  "wind_speed_reported_ms": 14.305, "wind_from_deg": 38.0, "gust_ms": 23.246,
+  "temp_c": 9.4, "rh_pct": 22.0, "n_obs": 1,
+  "moisture": { "dead1h": 0.05, "dead10h": 0.0566, "dead100h": 0.0538, "liveHerb": 0.3, "liveWoody": 0.5 },
+  "fine_fuel": { "moisture_pct": 5.0, "period": "night", "reference_pct": 5, "correction_pct": 0, "table": "E",
+                 "reference_is_lower_bound": false, "temp_outside_table": false, "local_solar_time": "2018-11-08T03:54" },
+  "dead_lag_pct": { "dead10h": 5.66, "dead100h": 5.38, "held_through_gap": false },
+  "live": { "herb_pct": 30.0, "woody_pct": 50.0, "herb_stage": "cured", "woody_stage": "dormancy", ... },
+  "met_filled": false
+}
+```
+
+`summary`: `peak_wind_hour {t_utc, wind_speed_20ft_mph, wind_speed_20ft_ms, wind_from_deg, moisture}`,
+`max_gust_ms`, `min_dead1h {t_utc, dead1h, rh_pct, temp_c}`, `min_rh_pct`, `max_temp_c`, and counts
+of hours without wind or moisture. Errors are `{error, detail}`: 400 bad query, 502 no data / no
+station coverage / upstream parse failure, 503 upstream unreachable.
+
+```sh
+curl "http://127.0.0.1:8000/api/conditions?lon=-121.434&lat=39.813&start=2018-11-08T12:00:00Z&hours=24&mode=historical_replay&region=camp-2018"
+curl "http://127.0.0.1:8000/api/conditions?lon=-122.23&lat=37.895&start=2025-10-15T20:00:00Z&mode=climatology_percentile&percentile=95&region=berkeley-hills-tilden&aspect=N&slope_pct=35"
+```
+
+### `GET /api/conditions/presets[?region=<id>]`
+
+Per catalogue region (`app/src/fire/regions.ts`) and historical fire (`camp-2018`, `kincade-2019`,
+`woolsey-2018`, `marshall-2021`): `phenology_class`, `typical_season_date` (assumed `MM-DD`:
+Bay Area and Central Coast 10-15, Central Sierra and Kern 09-15, Southern California 11-01, the
+three SoCal mountain regions 10-25, Marshall 12-15), `weather_coverage`, and `presets[]` of ready
+`/api/conditions` queries: `peak-season-p95` and `peak-season-p50` (climatology at the season
+date, label year 2025) and, for the fires, `actual-ignition` (historical replay around the
+ignition time, with the time's source). Without `region`: `{regions: [...]}`. 404 for an unknown id.
+
+| Fire | Point (source) | Ignition (source) |
+| --- | --- | --- |
+| Camp 2018 | -121.434, 39.813 (`sim/firefront.py`, assumed approximate origin) | 2018-11-08T14:20Z (NIST TN 2252 via `sim/ground_rates.py`) |
+| Kincade 2019 | -122.85, 38.585 (package bbox centre, not the origin) | 2019-10-24T04:27Z (package, CAL FIRE) |
+| Woolsey 2018 | -118.70128, 34.235 (package, CAL FIRE published point) | 2018-11-08T22:24Z first report (package) |
+| Marshall 2021 | -105.175, 39.965 (package bbox centre) | 2021-12-30T18:05Z, latest bound (package events table); weather not covered |
+
+### Measured on real dates (2026-10-24 run)
+
+| Query | Station | Peak 20 ft wind | Min 1-h | 10-h range | Live herb / woody |
+| --- | --- | --- | --- | --- | --- |
+| Camp, 2018-11-08T12Z, 24 h | Jarbo Gap RAWS (JBGC1), 9.8 km | 32 mph from 38 deg at 12Z | 3 % (05Z Nov 9, RH 13 %) | 4.6-5.8 % | 0.30 / 0.50 |
+| Woolsey, 2018-11-08T21Z, 36 h | Simi Valley RAWS (OKPC1), 10.8 km | 16.1 mph from 53 deg at 04Z Nov 9 | 1 % (04Z Nov 9, RH 4 %; RH 1-7 % all window) | 15.8 % falling to 3.3 % | 0.30 / 0.50 |
+| Kincade, 2019-10-24T03Z, 24 h | Santa Rosa ASOS (STS), 9.7 km | 10 mph from 340 deg | 2 % (21Z, RH 9 %) | 8.6 % falling to 4.0 % | 0.30 / 0.50 |
+| Berkeley Hills, climatology P95, Oct 15 | Concord ASOS (CCR), 18.9 km | 25 mph from 0 deg | 4 % | 5.6-8.3 % | 0.30 / 0.50 |
+
+Against an observation: Jarbo Gap RAWS also reports its 10-h fuel stick (SHEF `MMIRGZ`, percent),
+4-5 % through the Camp window. The derived `dead10h` over the same 25 hours: mean absolute
+difference 0.7 percentage points, bias +0.7 (model wetter). Nothing was tuned to this. The
+Kincade row shows the station limit, not the moisture model: a bbox-centre point picks the valley
+airport, whose wind is far below the ridge-top winds of that night.
+
+### Applying an hour (`app/src/world/conditions.ts`)
+
+`fetchConditions(query)`, `fetchConditionPresets(region)`, `fetchAllConditionPresets()`;
+`conditionsHourAt(conditions, tUtc)` (the hour bin containing a time), `peakWindHour(conditions)`,
+and `applyConditionsHour(hour, {maxWindMph?})`, which returns `{ok: true, inputs: {windSpeedMph,
+windFromDegrees, moisture}, calm, clampedFromMph}` (the `FireScenario` fields) or `{ok: false,
+missing: [...]}`: it never fills a missing wind or moisture. A zero wind is applied with direction 0
+and `calm: true`. The solver still takes one wind and one moisture per run, so a page choosing an
+hour (start, peak wind, driest hour) must say which.
 
 ## Fixtures
 

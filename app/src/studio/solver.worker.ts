@@ -1,4 +1,9 @@
-/** Runs one scheduled-fire solve per message off the main thread. See contracts.ts. */
+/**
+ * Runs one scheduled-fire solve per message off the main thread. See contracts.ts.
+ * Stochastic spread rides on `request.input.settings.stochastic` (fire/stochastic.ts; off when
+ * absent), so the firefighting and initial-attack re-solves below use the same seed: every
+ * tactic is compared on the same realisation of the fire.
+ */
 
 import { simulateScheduledFireSpread } from "../fire/spread";
 import { InvalidIgnitionsError } from "../fire/scheduledTypes";
