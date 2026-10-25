@@ -39,6 +39,11 @@ distance of home. Same value as the planner's be-ready distance (``livecore.plan
 FIRE_CUE_M = 2000.0
 """ASSUMPTION reused from ``sim.behavior.BehaviorParams.fire_cue_distance_m``: fire this close to home is the
 "saw the fire" cue that wait-and-see households and shadow evacuees act on."""
+FIRE_AT_DOOR_M = 500.0
+"""ASSUMPTION: fire this close to home makes every household that would ever evacuate leave now, whatever its
+drawn trigger (a shadow non-evacuee or someone still packing does not wait for the fire to arrive)."""
+FIRE_AT_DOOR_DELAY_MAX_MIN = 10.0
+"""ASSUMPTION: with fire at the door, a household leaves within 10 min (its drawn delay if shorter)."""
 IN_DANGER_M = 500.0
 """ASSUMPTION: a person not yet out within this distance of the fire estimate (or inside it) is flagged In danger."""
 LATE_AFTER_MIN = 60
@@ -186,7 +191,7 @@ def draw_extras(seed: int, key: str) -> dict[str, Any]:
 
 def initial_state(home: LonLat) -> dict[str, Any]:
     return {
-        "phase": "home", "aware_at": None, "ordered_at": None, "cue_at": None, "decided_at": None,
+        "phase": "home", "aware_at": None, "ordered_at": None, "cue_at": None, "door_at": None, "decided_at": None,
         "trigger_at": None, "depart_at": None, "trip_from": None, "arrived_at": None, "picked_at": None,
         "dest_id": None, "dest_name": None, "recommended_id": None, "different_road": False, "route_safety": None,
         "path": None, "total_min": None, "progress": 0.0, "motion": None, "stuck_since": None,
@@ -210,7 +215,7 @@ def _emit(state: dict[str, Any], key: str, event: dict[str, Any]) -> None:
 
 
 def _path_length(path: Sequence[Sequence[float]]) -> float:
-    return sum(haversine_m(tuple(a), tuple(b)) for a, b in zip(path, path[1:]))
+    return sum(haversine_m(tuple(a), tuple(b)) for a, b in zip(path, path[1:], strict=False))
 
 
 def point_along(path: Sequence[Sequence[float]], fraction: float) -> list[float]:
@@ -220,7 +225,7 @@ def point_along(path: Sequence[Sequence[float]], fraction: float) -> list[float]
     total = _path_length(path)
     target = min(1.0, max(0.0, fraction)) * total
     walked = 0.0
-    for a, b in zip(path, path[1:]):
+    for a, b in zip(path, path[1:], strict=False):
         d = haversine_m(tuple(a), tuple(b))
         if walked + d >= target and d > 0:
             f = (target - walked) / d
@@ -260,7 +265,7 @@ def _trigger_time(spec: Mapping[str, Any], state: Mapping[str, Any]) -> datetime
         cands = [state["cue_at"]]
     else:
         return None
-    cands = [c for c in cands if c is not None]
+    cands = [c for c in cands + [state.get("door_at")] if c is not None]
     return min(cands) if cands else None
 
 
@@ -350,6 +355,8 @@ def step(spec: Mapping[str, Any], state: dict[str, Any], ctx: MinuteContext) -> 
             _emit(state, "fire_seen", {"type": "report", "at": t, "kind": "fire_seen", "severity": None,
                                        "coord": list(spec["home"]), "note": "Flames visible from home"})
 
+    if state.get("door_at") is None and fire_m is not None and fire_m <= FIRE_AT_DOOR_M:
+        state["door_at"] = t
     decided = min((x for x in (state["ordered_at"], state["cue_at"]) if x is not None), default=None)
     if state["phase"] == "home":
         cannot_drive = not spec["has_vehicle"]
@@ -369,6 +376,12 @@ def step(spec: Mapping[str, Any], state: dict[str, Any], ctx: MinuteContext) -> 
                 trip_min = min(TRIP_MAX_MIN, delay) if c.get("trip_before_leaving") else 0.0
                 state.update(phase="packing", trigger_at=trig, depart_at=depart,
                              trip_from=depart - timedelta(minutes=trip_min) if trip_min else None)
+    if state["phase"] in ("packing", "trip") and state.get("door_at") is not None:
+        hurry = state["door_at"] + timedelta(minutes=FIRE_AT_DOOR_DELAY_MAX_MIN)
+        if state["depart_at"] > hurry:
+            state["depart_at"] = hurry
+            if state["trip_from"] is not None and state["trip_from"] > hurry:
+                state["trip_from"] = None
     if state["phase"] in ("packing", "trip"):
         if state["trip_from"] is not None and t >= state["trip_from"]:
             state["phase"] = "trip"

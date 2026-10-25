@@ -25,6 +25,7 @@ import hashlib
 import hmac
 import json
 import logging
+import threading
 import uuid
 from collections import defaultdict
 from datetime import UTC, datetime, timedelta
@@ -32,14 +33,16 @@ from typing import Any
 
 from django.conf import settings
 from django.test import RequestFactory
+from pymongo import ReturnDocument, UpdateOne
+
 from livecore import drill as drillmod
+from livecore import routing
 from livecore import virtual_people as vp
 from livecore.fire import estimate_fire
 from livecore.geo import haversine_m, simplify_line
-from pymongo import ReturnDocument, UpdateOne
 
-from . import twin_service
 from . import injects as injects_mod
+from . import twin_service
 from .auth import CIVILIAN_TOKEN_TTL, Principal, live_view, token_hash
 from .common import col, error, iso, json_body, ok, wall_now
 from .drillcache import get_index
@@ -86,13 +89,15 @@ def _token(incident_id: str, party_key: str) -> str:
     return hmac.new(key, f"{TOKEN_KEY}:{incident_id}:{party_key}".encode(), hashlib.sha256).hexdigest()
 
 
-def _ensure_device(incident_id: str, party_key: str, now: datetime) -> str:
-    """The person's civilian device (``simulated: true``), written as ``auth.issue_token`` writes one."""
+def _ensure_device(incident_id: str, party_key: str, name: str, now: datetime) -> str:
+    """The person's civilian device (``simulated: true``, display name and kind as ``POST me/profile`` sets
+    them), written as ``auth.issue_token`` writes one. It has no ``location``: positions are estimates and are
+    served only by ``list_participants`` (``position_source: estimated``)."""
     tok = _token(incident_id, party_key)
     col("live_devices").update_one(
         {"party_key": party_key},
         {"$set": {"token_hash": token_hash(tok), "role": "civilian", "incident_id": incident_id, "simulated": True,
-                  "last_seen_at": now, "expires_at": now + CIVILIAN_TOKEN_TTL},
+                  "name": name, "kind": "resident", "last_seen_at": now, "expires_at": now + CIVILIAN_TOKEN_TTL},
          "$setOnInsert": {"party_key": party_key, "created_at": now}},
         upsert=True,
     )
@@ -132,7 +137,7 @@ def _new_person(incident_id: str, index, seed: int, n: int, active_from: datetim
     stored = {k: v for k, v in choices.to_dict().items() if k not in ("sources", "narrative", "household_key")}
     stored["evidence"] = {k: sorted({s["label"] for s in v}) for k, v in sorted(choices.sources.items())}
     return {
-        "incident_id": incident_id, "id": f"sim-{n}", "n": n, "seed": seed, "name": f"Simulated {n}",
+        "incident_id": incident_id, "id": party_key, "n": n, "seed": seed, "name": f"Simulated {n}",
         "party_key": party_key, "zone_id": zone_id, "home": [home[0], home[1]], "has_vehicle": has_vehicle,
         "choices": stored, "narrative": choices.narrative(), "shadow_leaves": shadow.evacuates,
         "draws": vp.draw_extras(seed, party_key), "active_from": active_from, "created_at": wall_now(),
@@ -251,7 +256,10 @@ def _zone_motion(snapshot) -> dict[str, vp.ZoneMotion] | None:
 
 
 def _nearest_exit(index, home: list[float]) -> tuple[str, str, tuple[float, float]] | None:
-    exits = [d for d in index.destinations.values() if d.kind == "exit"] or list(index.destinations.values())
+    """The nearest exit the planner can route to (``routing`` keeps destinations with a road node nearby)."""
+    routable = routing._index(index.drill).destination_nodes
+    dests = [d for d in index.destinations.values() if d.id in routable] or list(index.destinations.values())
+    exits = [d for d in dests if d.kind == "exit"] or dests
     if not exits:
         return None
     d = min(exits, key=lambda d: (haversine_m(tuple(home), d.coord), d.id))
@@ -421,6 +429,26 @@ def tick_quietly(incident_id: str, snapshot=None) -> None:
         log.exception("virtual people %s: tick failed", incident_id)
 
 
+_background: dict[str, threading.Thread] = {}
+_background_lock = threading.Lock()
+
+
+def tick_in_background(incident_id: str, snapshot=None) -> None:
+    """``tick_quietly`` on a background thread (one per incident per process), for the console's command poll:
+    a tick may sync the traffic twin for seconds, and the poll must not wait for it. Its results show on the
+    next poll. Does nothing when the incident has no simulated people."""
+    if col(RUNS).find_one({"incident_id": incident_id}, {"_id": 1}) is None:
+        return
+    with _background_lock:
+        running = _background.get(incident_id)
+        if running is not None and running.is_alive():
+            return
+        thread = threading.Thread(target=tick_quietly, args=(incident_id, snapshot), daemon=True,
+                                  name=f"virtual-people-{incident_id}")
+        _background[incident_id] = thread
+        thread.start()
+
+
 # ---- listing -------------------------------------------------------------------------------------------------
 
 
@@ -453,6 +481,15 @@ def _list(incident_id: str) -> list[dict[str, Any]]:
     est = estimate_fire(index.drill, t, (), injects_mod.rules.spots_due(injects_mod.load(incident_id), t))
     helps = _help_status(incident_id, [p["party_key"] for p in persons])
     return [_participant(p, t, est.geometry, helps.get(p["party_key"])) for p in persons]
+
+
+def find_participant(incident_id: str, participant_id: str) -> dict[str, Any] | None:
+    """One simulated person in the participants shape (after a tick), or None. ``participant_id`` is the
+    person's ``id``, which is also its device's ``party_key``."""
+    if col(PEOPLE).find_one({"incident_id": incident_id, "id": participant_id}, {"_id": 1}) is None:
+        return None
+    tick_quietly(incident_id)
+    return next((p for p in _list(incident_id) if p["id"] == participant_id), None)
 
 
 def list_participants(incident_id: str) -> list[dict[str, Any]]:
@@ -510,11 +547,12 @@ def _add(request, incident_id: str) -> Any:
     active_from = _minute(clock_from(drill_doc(incident_id), index, now).replay_now)
     added = [_new_person(incident_id, index, seed, n, active_from) for n in range(first, first + count)]
     for p in added:
-        _ensure_device(incident_id, p["party_key"], now)
+        _ensure_device(incident_id, p["party_key"], p["name"], now)
     people.insert_many(added)
     runs.update_one({"incident_id": incident_id}, {"$set": {"ticked_to": None}})  # tick the new people now
     tick_quietly(incident_id)
-    listed = [p for p in _list(incident_id) if int(p["id"].split("-")[1]) >= first]
+    new_ids = {p["id"] for p in added}
+    listed = [p for p in _list(incident_id) if p["id"] in new_ids]
     return ok({"added": len(added), "total": existing + len(added), "seed": seed, "label": LABEL,
                "people": listed}, status=201)
 

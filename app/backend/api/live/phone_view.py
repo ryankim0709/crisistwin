@@ -9,7 +9,6 @@ Contract: docs/app-integration.md "Phone mirror".
 
 from __future__ import annotations
 
-import importlib
 import math
 from typing import Any
 
@@ -36,30 +35,19 @@ VERDICTS = {"evacuate_now": "Leave now", "be_ready": "Be ready to leave"}
 
 
 def _virtual_participant(incident_id: str, participant_id: str) -> dict[str, Any] | None:
-    """HOOK: simulated people from the virtual-people module (another agent's work, not landed yet).
+    """A simulated person (``virtual_people``, docs/app-integration.md "Simulated people").
 
-    Expects ``list_participants(incident_id)`` returning dicts ``{id, kind: "simulated", zone_id,
-    position: [lon, lat], status, flags, behaviour}``. Looks in ``api.live.virtual_people`` and
-    ``livecore.virtual_people``; when neither exists only real participants resolve. ``status``
-    ``out`` / ``need_help`` is mapped to a check-in; adjust here once the real module lands.
+    Its ``id`` is its device's ``party_key``, and it checks in, chooses destinations and reports through
+    the phone endpoints, so its stored check-in and destination choice are read exactly as a phone's are;
+    the position is the estimated one from ``list_participants``.
     """
-    for name in ("api.live.virtual_people", "livecore.virtual_people"):
-        try:
-            module = importlib.import_module(name)
-        except ImportError:
-            continue
-        lister = getattr(module, "list_participants", None)
-        if lister is None:
-            continue
-        for person in lister(incident_id) or []:
-            if person.get("id") == participant_id:
-                person = dict(person)
-                person["kind"] = "simulated"
-                person.setdefault("role", "civilian")
-                if person.get("status") in ("out", "need_help", "staying"):
-                    person.setdefault("checkin", {"status": person["status"], "zone_id": person.get("zone_id")})
-                return person
-    return None
+    from . import virtual_people
+
+    person = virtual_people.find_participant(incident_id, participant_id)
+    if person is None:
+        return None
+    checkin = col("live_checkins").find_one({"incident_id": incident_id, "party_key": participant_id})
+    return {**person, "role": "civilian", "checkin": checkin}
 
 
 def _real_participant(incident_id: str, participant_id: str) -> dict[str, Any] | None:
@@ -333,4 +321,7 @@ def phone_view(request, incident_id: str, participant_id: str, principal: Princi
     person = _virtual_participant(incident_id, participant_id) or _real_participant(incident_id, participant_id)
     if person is None:
         return error(404, "not_found", "Unknown participant.")
-    return ok(build_phone_view(incident_id, person))
+    body = build_phone_view(incident_id, person)
+    if person.get("position_source") == "estimated" and body.get("position_is") == "device":
+        body["position_is"] = "estimated"  # a simulated person's position is the model's estimate, not a GPS fix
+    return ok(body)

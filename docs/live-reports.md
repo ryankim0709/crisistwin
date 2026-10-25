@@ -874,7 +874,8 @@ fetches again without `zones=0`.
   "checkins": {
     "by_zone": [ { "zone_id": "bg:060070009011", "out": 12, "need_help": 1, "staying": 3 } ],
     "need_help": [ { "id": "chk_01J...", "zone_id": "bg:060070009011", "coord": [-121.6012, 39.7593], "at": "...Z",
-                     "help": { "status": "open", "assignee": null, "task_id": null, "updated_at": "...Z" } } ] },
+                     "help": { "status": "open", "assignee": null, "task_id": null, "updated_at": "...Z" },
+                     "simulated": false } ] },  // true: a simulated resident (live_run_scenario, virtual people)
                                             // need_help counts and list exclude resolved requests
   "destination_preferences": [ { "zone_id": "bg:060070009011", "destination_id": "exit:osm-node:86546172", "count": 4 } ],
   "responders": [ { "party_key": "rsp_7c1...", "coord": [-121.6, 39.76], "accuracy_m": 15, "at": "...Z" } ],
@@ -1518,6 +1519,7 @@ Configuration (server environment, never `VITE_*`): `ANTHROPIC_API_KEY` and `CAR
 | `PATCH`, `DELETE me/reports/{id}` | any, owner ([Edit or withdraw](#edit-or-withdraw-your-own-report)) |
 | `GET incidents/{id}/twin` | controller ([twin-api.md](twin-api.md#http-adapter-live-drill-appbackendapilivetwin_servicepy)) |
 | `POST incidents/{id}/twin/whatif` | controller |
+| `GET`, `POST`, `DELETE incidents/{id}/virtual-people` | controller ([app-integration.md, Simulated people](app-integration.md#simulated-people)) |
 | `POST incidents/{id}/impact` | controller ([Impact analysis](#impact-analysis)) |
 | `GET incidents/{id}/aar` | controller ([After-action report](#after-action-report)) |
 | `GET incidents/{id}/board` | any ([Task board](#task-board-passive-observations-and-information-priority-adr-0041)) |

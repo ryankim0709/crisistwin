@@ -1,6 +1,6 @@
 from django.urls import path
 
-from . import events, injects, packages, participants, phone_view, responder_routing, views, voice
+from . import events, injects, packages, participants, phone_view, responder_routing, views, virtual_people, voice
 
 urlpatterns = [
     path("devices", views.devices, name="live-devices"),
@@ -27,6 +27,7 @@ urlpatterns = [
     path("incidents/<str:incident_id>/twin", views.twin, name="live-twin"),
     path("incidents/<str:incident_id>/twin/whatif", views.twin_whatif, name="live-twin-whatif"),
     path("incidents/<str:incident_id>/people", views.twin_people, name="live-people"),
+    path("incidents/<str:incident_id>/virtual-people", virtual_people.virtual_people, name="live-virtual-people"),
     path(
         "incidents/<str:incident_id>/participants/<str:participant_id>/phone-view",
         phone_view.phone_view,
