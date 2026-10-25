@@ -1373,8 +1373,9 @@ export default function SimulationStudioPage({
                         sizeReady({ longitude: region.center.longitude, latitude: region.center.latitude, radiusMeters: boardRadius, cellMeters: boardCellMetersFor(boardRadius) })
                           ? "This size is cached and loads right away."
                           : `The first load of this size takes about ${firstLoadSeconds(boardRadius, boardCellMetersFor(boardRadius))} s; later loads are cached.`}
-                        {boardRadius > 13_000
-                          ? " Evacuation and roads cover the centre of the board only."
+                        {/* One routing box (fire/useBoardStreets.ts) is 0.26 x 0.2 degrees, about 22 km. */}
+                        {boardRadius > 11_000
+                          ? " Roads and evacuation cover only the part of the board around the fires (about 22 km across)."
                           : ""}
                       </p>
                     )}
