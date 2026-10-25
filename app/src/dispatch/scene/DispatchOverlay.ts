@@ -558,19 +558,24 @@ export class DispatchOverlay implements BoardOverlay {
     if (!group || !area || !labels || !frame) return;
     const engine = this.engine;
     const wanted = new Map<number, { cls: string; html: string }>();
+    // Plain-language labels: "Zone 12 · leaving by Exit 3 · 25 of 32 homes out".
+    const zoneName = (id: string) => `Zone ${id.replace(/^Z0*/, "") || id}`;
+    const exitName = (id: string) => `Exit ${id.replace(/^X0*/, "") || id}`;
     area.zones.forEach((zone, index) => {
       const state = engine?.zones[index];
       const selected = index === this.selectedZone;
       const sel = selected ? " fdx-dsp-zone--selected" : "";
       if (state?.status === "cleared") {
+        // Finished zones only label when selected, to keep the board readable.
+        if (!selected) return;
         wanted.set(index, {
           cls: `fdx-dsp-zone fdx-dsp-zone--cleared${sel}`,
-          html: `✓ <b>${zone.id}</b> clear · ${state.safe}/${zone.homes}`,
+          html: `✓ <b>${zoneName(zone.id)}</b> · everyone who left is safe · ${state.safe} of ${zone.homes} homes`,
         });
       } else if (state?.status === "overrun") {
         wanted.set(index, {
           cls: `fdx-dsp-zone fdx-dsp-zone--overrun${sel}`,
-          html: `✕ <b>${zone.id}</b> fire · ${state.safe}/${zone.homes} out`,
+          html: `✕ <b>${zoneName(zone.id)}</b> · fire reached it · ${state.safe} of ${zone.homes} homes got out`,
         });
       } else if (state?.status === "ordered") {
         const swatch = state.exitId
@@ -578,17 +583,17 @@ export class DispatchOverlay implements BoardOverlay {
           : "";
         wanted.set(index, {
           cls: `fdx-dsp-zone fdx-dsp-zone--ordered${sel}`,
-          html: `#${state.orderRank} <b>${zone.id}</b> ${swatch}→ ${state.exitId}${state.routeBlocked ? " ⚠" : ""} · ${state.safe}/${zone.homes}`,
+          html: `<b>${zoneName(zone.id)}</b> · leaving by ${swatch}${state.exitId ? exitName(state.exitId) : "an exit"}${state.routeBlocked ? " · ⚠ route blocked" : ""} · ${state.safe} of ${zone.homes} homes out`,
         });
       } else if (state?.stage && engine) {
         wanted.set(index, {
           cls: `fdx-dsp-zone fdx-dsp-zone--staged${sel}`,
-          html: `⏳ wave ${engine.waveOf(index) ?? "?"} <b>${zone.id}</b> after ${area.zones[state.stage.after].id}`,
+          html: `⏳ <b>${zoneName(zone.id)}</b> · waiting to leave after ${zoneName(area.zones[state.stage.after].id)} (wave ${engine.waveOf(index) ?? "?"})`,
         });
       } else if (selected) {
         wanted.set(index, {
           cls: `fdx-dsp-zone${sel}`,
-          html: `<b>${zone.id}</b> · no order · ${zone.homes} homes`,
+          html: `<b>${zoneName(zone.id)}</b> · no evacuation order yet · ${zone.homes} homes`,
         });
       }
     });
