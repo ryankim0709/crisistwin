@@ -10,6 +10,10 @@ fuel-moisture preset are illustrative scenario choices (ASSUMPTION, not an obser
 incident), and the homes, vehicles and occupants are the dispatch-area builder's synthetic
 households. They are planning-experiment numbers, not predictions of any real fire.
 
+> **Re-measured on `SPREAD_MODEL` 5.1.1 (after the fire-resume fix, feat/one-view 386b101).**
+> Every outcome number in earlier versions of this note and in the earlier `demoSeeds.ts`
+> (commit 11880b6, board code e67007d) was taken before that fix and is superseded.
+
 ## The presets
 
 Board: `berkeley-hills-tilden@15km` (region `berkeley-hills-tilden`, 15 km half-width = the
@@ -18,25 +22,42 @@ reported 4 min after ignition, board seed 1. Wind is the open 20 ft wind in mph,
 true (offshore, Diablo-type directions; the 35 to 40 mph speeds are scenario choices, within
 the Studio's 0 to 60 mph limit).
 
-| id | ignition (lon, lat) | wind | no action at 6 h: homes burned / people caught | first home burned (min) |
-|---|---|---|---|---|
-| `berkeley-claremont-hills-ene` | -122.2180, 37.8600 | 40 mph from 60 | 1,255 / 807 | 30 |
-| `berkeley-grizzly-peak-ene` | -122.2180, 37.8760 | 40 mph from 60 | 999 / 534 | 150 |
-| `berkeley-south-hills-east-wind` | -122.2340, 37.8680 | 40 mph from 80 | 1,158 / 777 | 30 |
-| `berkeley-two-spot-ene` | -122.2340, 37.8680 and -122.2260, 37.8760 | 35 mph from 60 | 1,110 / 1,206 | 70 |
+Listed in the order the presets appear in `DEMO_SEEDS` (most convincing and least variable
+first). `none` = nobody acts; `aids` = the scripted decision-aid policy (see Method). Seed 1
+(the preset's own seed), at 6 h:
 
-Why these four (what each is for):
+| id | ignition (lon, lat) | wind | none: homes burned / people caught | aids: homes burned / people caught | first home burned (min, none) |
+|---|---|---|---|---|---|
+| `berkeley-grizzly-peak-ene` | -122.2180, 37.8760 | 40 mph from 60 | 730 / 371 | 465 / 129 | 150 |
+| `berkeley-claremont-hills-ene` | -122.2180, 37.8600 | 40 mph from 60 | 1,118 / 807 | 0 / 0 (contained T+18) | 30 |
+| `berkeley-two-spot-ene` | -122.2340, 37.8680 and -122.2260, 37.8760 | 35 mph from 60 | 1,034 / 1,115 | 951 / 496 | 70 |
+| `berkeley-south-hills-east-wind` | -122.2340, 37.8680 | 40 mph from 80 | 1,038 / 777 | 935 / 136 | 30 |
 
+Why this order and what each is for:
+
+- **Grizzly Peak hills** is first because it is the steadiest and the clearest: the decision
+  aids cut both homes burned (36%, 36%, 69% across seeds 1, 2, 3) and people caught (65%, 53%,
+  65%) in every seed, and the no-action figures sit in a narrow band (homes 622 to 802, people
+  292 to 388). It builds slowly (first home after about 2.5 h), which leaves time to watch
+  evacuation orders being sequenced.
 - **Claremont hills** is the fast one: homes burn within half an hour of ignition. With board
-  seed 1 the scripted policy's initial attack contains the fire at minute 18 with zero homes
-  lost (seed 8 did the same; seeds 2 and 3 did not), so it is the clearest "fast dispatch
-  matters" demo. The no-action harm is large and the seeds agree on homes (1,255 to 1,357).
-- **Grizzly Peak hills** builds slowly (first home after about 2.5 h): it leaves time to watch
-  evacuation orders being sequenced, and its seeds agree well on homes (892 to 999).
-- **South Berkeley hills, east wind** tests a different wind direction on a different slope;
-  fast (first home within 30 min).
-- **Two spots** has two fronts, and has the most repeatable no-action people-caught figure
-  (1,161 to 1,206 across three seeds) and the largest, steadiest gain from evacuation advice.
+  seed 1 the decision aids' initial attack contains the fire at minute 18 with zero homes lost
+  (a seeded draw: seeds 2 and 3 were not contained early, but still caught 82% and 71% fewer
+  people and burned 15% and 12% fewer homes). The clearest "fast dispatch matters" demo, but the
+  no-action people-caught figure varies a lot by seed (807 to 1,394).
+- **Two spots** has two fronts, a large harm and a clear gain from the aids in every seed (homes
+  8%, 7%, 22% lower; people 55%, 42%, 79% lower), but the no-action people-caught figure swings
+  from 449 to 1,115 across seeds, so it is not the lowest-variance pick.
+- **South Berkeley hills, east wind** tests a different wind direction on a different slope; fast
+  (first home within 30 min) with a tight no-action band (homes 1,038 to 1,253), but the gain from
+  the aids is the least steady (people 82%, 54%, 23% lower; homes 10%, 20%, 2% lower).
+
+The earlier version of this note (commit 11880b6, board code e67007d) listed other numbers
+(for example claremont 1,255 homes / 807 people, grizzly 999 / 534, two-spot 1,110 / 1,206, and a
+"board finding" that crews made the fire grow faster). Those were taken before the fire-resume fix
+(`SPREAD_MODEL` 5.1.1, lead P) and are **superseded**: the board re-solves the fire as it runs,
+and the old resume credited a step's progress wrongly, which also changed the no-action fire and
+made crews accelerate it.
 
 ## Method
 
@@ -46,7 +67,8 @@ outcome metrics. It writes nothing to the drill.
 
 - `--policy none`: nobody acts (no crews, no orders). This is the `measured` field.
 - `--policy baseline`: a scripted policy (`baselinePolicy.ts`) that uses only the model's own
-  decision aids, no LLM. It stands in for what a commander can do with the same information.
+  decision aids, no LLM (so, "aids"). It stands in for what a commander, or the AI, can do with
+  the same information. It is not a measurement of the AI itself.
 - Synthetic Studio fire: `--ign lon,lat[;lon,lat] --start 0 --report 4 --wind MPH --from DEG
   --moisture critical --board berkeley-hills-tilden@15km --seed N --minutes 360`.
 - Each pick was measured on **its own drill package**, built the way `/run` builds it
@@ -54,12 +76,13 @@ outcome metrics. It writes nothing to the drill.
   off, then `POST /api/live/packages`), because the package's road box (the fire's reach plus
   3 km) decides which zones and synthetic homes exist. A different fire gives a different box, so
   numbers from one package do not transfer to another. Packages used (dispatch builder
-  `dispatch-area/6`): claremont `pkg_706776a190eb`, grizzly `pkg_ef6ee9c95bec`, south hills
-  `pkg_26f34b02b314`, two-spot `pkg_b630ceb1dc58`. The resource snapshot was seeded the way
-  activation does it (`live_seed_snapshots`: synthetic occupants, vehicles, engines).
+  `dispatch-area/6`): grizzly `pkg_1f40dababe05`, claremont `pkg_c2ecf25d6eb4`, two-spot
+  `pkg_4150a8f4de75`, south hills `pkg_2c416ab57371` (same zones and homes as the earlier
+  packages: 54, 51, 48 and 57 zones). The resource snapshot was seeded the way activation does it
+  (`live_seed_snapshots`: synthetic occupants, vehicles, engines).
 - Determinism: for each pick `--policy none --seed 1` was run twice; the two results were
   identical in every reported number (homes, people, area, timeline).
-- Variance: seeds 1, 2 and 3 for `none` and for the scripted policy.
+- Variance: seeds 1, 2 and 3 for `none` and for the decision-aid policy.
 
 ### Why a sidecar backend (nothing shared was touched)
 
@@ -68,81 +91,76 @@ The harness reads the active drill from the live API, which serves only the Camp
 local backend on :8000 had the Camp exercise active (Paradise zones), which is meaningless on a
 Berkeley board, and the task was not to change the active incident. So the measurements ran on
 private backends: Django on 127.0.0.1:8101 to 8104 from this worktree's backend code, each with
-its own Mongo database for the live collections (`crisistwin_oneview_i`), read access to the
-shared landscape and dispatch-area caches, a scratch `LIVE_PACKAGES_DIR` and
-`LIVE_ACTIVE_INCIDENT_ID` set to the pick's package, and the harness pointed at it with
-`--base http://127.0.0.1:810x`. The only writes outside that are a few new cached Berkeley
-dispatch areas (one per package) in the shared cache database. Scratch tooling (not committed): a Studio-equivalent
-run exporter (`loadLandscapeCached` + `simulateScheduledFireSpread` + `buildRunExport`) and a
-copy of `evaluate.ts` with a `--no-prefetch` flag.
+the same private Mongo database for the live collections (`crisistwin_oneview_q`, dropped
+afterwards; the incident ids differ), read access to the shared landscape and dispatch-area
+caches, a scratch `LIVE_PACKAGES_DIR` and `LIVE_ACTIVE_INCIDENT_ID` set to the pick's package, and
+the harness pointed at it with `--base http://127.0.0.1:810x`. Scratch tooling (not committed): a
+Studio-equivalent run exporter (`loadLandscapeCached` + `simulateScheduledFireSpread` +
+`buildRunExport`) and a copy of `evaluate.ts` with a `--no-prefetch` flag.
 
 `--fast --no-prefetch` were used: the harness's per-board-minute road-time prefetch costs about
 3 s of wall time each and only refines the decision aids' travel times (road legs for dispatched
-units are still fetched when the clock waits on them). Without prefetch a `none` run takes
-1.5 to 3 min and a scripted-policy run 8 to 27 min (several runs in parallel on one machine).
+units are still fetched when the clock waits on them). With 16 runs in parallel on a 12-core
+machine a `none` run took 1.5 to 2 min and a decision-aid run 4 to 17 min.
 
-Code version: `feat/one-view` e67007d (self-evacuation on, fleets, safe-area destinations,
-road-class routing). Re-measure after outcome-changing board changes.
+Code version: `feat/one-view` 386b101 (`SPREAD_MODEL` 5.1.1, board self-evacuation on, fleets,
+safe-area destinations, road-class routing). The route fix in 386b101 (the routes endpoint 400 on
+`excluded_destination_ids`) does not touch these runs: the harness posts `{ fires }` only and
+all 679 routes requests in the sidecar logs returned 200 (and so did all 1,639 requests of any kind). Note that for the same
+reason the harness's route options ignore closed or full safe areas (`excluded_destination_ids`),
+which the browser board sends. Re-measure after outcome-changing board or fire-solver changes.
 
-## Final measurements (preset package, e67007d)
+## Final measurements (preset package, 386b101)
 
 `homes` = homes burned, `people` = people caught by fire (synthetic occupants), at the end of
-the 360 min run. "evac only" = the scripted policy with only its evacuation orders kept
-(`EVAL_FILTER=evac` in the scratch harness copy): the fire is identical to no action, so only
-people caught can differ. "full" = the whole scripted policy (crews, strategy, extra
-resources, evacuation).
+the 360 min run (the contained claremont seed 1 aids run stopped at T+28 when the fire was out).
+"aids" = the whole scripted decision-aid policy (crews, strategy, extra resources, evacuation).
 
-| pick | seed | none homes | none people | first home / first caught (min) | evac only people | full homes | full people |
-|---|---|---|---|---|---|---|---|
-| claremont | 1 | 1,255 | 807 | 30 / 100 | 387 | 0 (contained T+18) | 0 |
-| claremont | 2 | 1,357 | 1,394 | 20 / 90 | 627 | 2,552 | 1,423 |
-| claremont | 3 | 1,342 | 903 | 20 / 90 | 442 | 2,357 | 1,448 |
-| grizzly | 1 | 999 | 534 | 150 / 200 | 258 | 2,857 | 1,537 |
-| grizzly | 2 | 968 | 388 | 160 / 190 | 203 | 3,027 | 1,824 |
-| grizzly | 3 | 892 | 292 | 160 / 240 | 154 | 2,917 | 1,601 |
-| south hills | 1 | 1,158 | 777 | 30 / 120 | 528 | 1,761 | 726 |
-| south hills | 2 | 1,126 | 861 | 30 / 100 | 605 | 1,617 | 744 |
-| south hills | 3 | 1,461 | 1,007 | 20 / 90 | 768 | 2,445 | 1,157 |
-| two-spot | 1 | 1,110 | 1,206 | 70 / 280 | 541 | 2,045 | 778 |
-| two-spot | 2 | 989 | 1,193 | 70 / 260 | 509 | 2,260 | 1,101 |
-| two-spot | 3 | 1,170 | 1,161 | 60 / 240 | 532 | 2,365 | 1,125 |
+| pick | seed | none homes | none people | none area (ha) | first home / first caught (min) | aids homes | aids people | aids area (ha) |
+|---|---|---|---|---|---|---|---|---|
+| grizzly | 1 | 730 | 371 | 566 | 150 / 200 | 465 | 129 | 465 |
+| grizzly | 2 | 802 | 388 | 558 | 160 / 190 | 512 | 183 | 404 |
+| grizzly | 3 | 622 | 292 | 470 | 160 / 240 | 190 | 102 | 240 |
+| claremont | 1 | 1,118 | 807 | 675 | 30 / 100 | 0 (contained T+18) | 0 | 0.4 |
+| claremont | 2 | 1,260 | 1,394 | 771 | 20 / 90 | 1,076 | 247 | 657 |
+| claremont | 3 | 1,226 | 903 | 747 | 20 / 90 | 1,079 | 264 | 647 |
+| two-spot | 1 | 1,034 | 1,115 | 561 | 70 / 280 | 951 | 496 | 440 |
+| two-spot | 2 | 847 | 449 | 568 | 70 / 260 | 786 | 260 | 480 |
+| two-spot | 3 | 1,035 | 1,104 | 606 | 60 / 240 | 807 | 236 | 444 |
+| south hills | 1 | 1,038 | 777 | 513 | 30 / 120 | 935 | 136 | 470 |
+| south hills | 2 | 1,071 | 861 | 516 | 30 / 100 | 857 | 399 | 430 |
+| south hills | 3 | 1,253 | 881 | 596 | 20 / 90 | 1,224 | 677 | 568 |
 
-Burned area under no action (ha, seeds 1/2/3): claremont 777 / 865 / 856, grizzly 764 / 737 /
-661, south hills 582 / 561 / 737, two-spot 669 / 691 / 747. First home / first caught are
-10-minute timeline steps (the board's timeline samples every 10 minutes).
+First home / first caught are 10-minute timeline steps (the board's timeline samples every 10
+minutes). The aids policy ended with a smaller burned area than no action in all 12 pairs.
 
-Claremont, extra seeds for the full scripted policy (to see how often the early containment
-happens): seed 8 contained the fire at T+18 with 0 homes burned, like seed 1. Seeds 4, 5, 6 and
-7 were stopped after T+120 to T+150 with the fire still burning and 149 to 347 homes already
-burned (not run to the end). So the early containment came up in 2 of the 8 seeds tried (1 and
-8); seed 1 is the preset's seed.
+Spread of the no-action figure across seeds: homes grizzly 622 to 802, claremont 1,118 to 1,260,
+two-spot 847 to 1,035, south hills 1,038 to 1,253; people grizzly 292 to 388, claremont 807 to
+1,394, two-spot 449 to 1,115, south hills 777 to 881.
 
-Evacuation advice alone (evac only vs none, people caught): claremont -52% / -55% / -51%,
-grizzly -52% / -48% / -47%, south hills -32% / -30% / -24%, two-spot -55% / -57% / -54%
-(seeds 1/2/3). The spread of the no-action figure across seeds is small for homes (claremont
-+-4%, grizzly +-6%, two-spot +-8%; south hills larger, 1,126 to 1,461) and larger for people
-caught in the claremont (807 to 1,394) and grizzly (292 to 534) picks; the two-spot figure is
-the steadiest (1,161 to 1,206).
+Reduction by the decision aids vs no action (seeds 1 / 2 / 3), homes burned and people caught:
+grizzly -36% / -36% / -69% and -65% / -53% / -65%; claremont -100% / -15% / -12% and -100% / -82% /
+-71%; two-spot -8% / -7% / -22% and -55% / -42% / -79%; south hills -10% / -20% / -2% and -82% /
+-54% / -23%.
 
-## What the full scripted policy does NOT show (a board finding)
+Claremont seed 1 is the only run where the policy contained the fire early. It is a seeded draw
+(the board's response draws are keyed per purpose and seed), so it repeats for the same seed and
+dispatch timing but another dispatch order or timing can change it. The earlier note's extra
+claremont seeds (4 to 8) were not re-run.
 
-In these runs the full scripted policy burned **more** homes than doing nothing in every seed
-except the ones where it contained the fire at once (claremont 1 and 8), and its burned area was
-about 1.5 to 2.2 times the no-action area. Isolation runs on the two-spot seed 1 (same seed,
-scripted orders filtered by type; compared with no action through T+50): keeping only the
-evacuation orders left the fire identical to no action (6.8 ha at T+30, 19.1 ha at T+60 in the
-90 min run); keeping only `set_strategy` or only `order_resources` left it identical too; keeping
-only `send_crew` made the fire diverge between T+10 and T+20 (T+20: 3.2 ha without crews, 12.6
-ha with; T+30: 6.8 vs 39.6 ha; 2 fire solves vs 11 over the 60 min run), i.e. as soon as crews
-are assigned and arrive. So the board's free-burning fire grows faster once crews work it. This looks
-like a fire-solver or suppression-accounting issue on the board side (resumed solves, line or
-knockdown cells), not a property of the scenarios. It matters for `/run`: an AI run that sends
-crews will show more burned area and homes than the no-action baseline for the same seed until
-that is understood. It is why the picks are ranked on the no-action harm, the repeatability and
-the evacuation-advice gap (which is unaffected, because the fire is identical), not on the full
-scripted policy's homes.
+## The earlier "board finding" is resolved
+
+The earlier note reported that the full scripted policy burned more homes and area than no action
+because assigning crews made the free-burning fire grow faster (a fire-solver resume bug). With
+`SPREAD_MODEL` 5.1.1 that no longer happens in any of the 12 seed/pick pairs measured above
+(burned area with the aids is below no-action in all of them), so the `/run` AI run can be compared
+with the no-action baseline for the same seed.
 
 ## Candidates tried (stage 1 screen)
+
+Selection history only: this screen ran on older board code (before the fire-resume fix), so its
+fire areas, homes and first-home times are superseded by the final measurements above; it still
+shows why these ignitions and winds were chosen.
 
 `none`, seed 1, 360 min, critical moisture, on a single broad package (`pkg_1eff3a47568d`, built
 from a three-ignition 12 h Studio run, 53 zones), older board code (`176b4c1`: 16 units, before
@@ -196,6 +214,7 @@ How the picks came out of this table:
   40 mph from 80 (D4, 834 homes) and A1 at 40 mph from 60 (1,017 homes) were close seconds.
   Four, not five, because the remaining candidates repeat a location or are slow.
 
+
 ## Caveats
 
 - **Package dependence.** Outcomes depend on the preset's own package (its zones and synthetic
@@ -207,12 +226,15 @@ How the picks came out of this table:
   those occupants.
 - **Wind and ignition points are assumptions**, labelled as such; they are not tied to an
   observed Diablo-wind event.
-- **`measured` is no-action only.** There is no measurement here of what the AI commander
-  achieves (no ANTHROPIC key was available); the "evac only" column is the clean proxy for the
-  evacuation part, the "full" column is unreliable for the reason above.
+- **`measured` is no-action only.** The "aids" figures come from the scripted decision-aid policy
+  (no LLM; no ANTHROPIC key was available), a proxy for what the AI can do with the same
+  information, not a measurement of the AI commander.
 - **Containment on claremont seed 1** is a seeded draw (the board's response draws are keyed
   per purpose and seed); it repeats for the same seed and dispatch timing but another dispatch
   order or timing can change it.
+- **Harness routes.** The harness requests routes with `{ fires }` only, so its evacuation
+  options do not exclude closed or full safe areas the way the browser board does; real `/run`
+  outcomes can differ somewhat.
 
 ## Reproduce
 
