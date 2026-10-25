@@ -2022,6 +2022,15 @@ moisture, horizon_minutes, outside_drill}], evidence_class: "simulated"}`, newes
 Every ignition carries `report_minute` (`null` when not set, including fires stored before the
 field existed).
 
+`wind` is the one constant wind the Live board runs (mph, bearing FROM, degrees true): the run's
+wind, or, for a run on an hourly series with no weather record (a random scenario), the series'
+peak hour within the run. `source` is `assumed` (set by hand), `historical`, `forecast`,
+`worst_case` (climatology percentile) or `climatology` (a series' climatology analog); `label`
+names it. On the board (`model.ts` `ingestStudioFire`) an ignition whose `id` is already a board
+fire on the same landscape cell (burning, contained or waiting to start) is not started again:
+a Studio rerun, or another Studio tab synced to the same shared world, republishes it. That
+publish's wind and moisture still apply.
+
 ## Road closures
 
 The controller closes drill roads on the Live map for the simulated command board (a drill

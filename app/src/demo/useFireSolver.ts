@@ -47,10 +47,15 @@ export function useFireSolver(board: Board | null, version: number, onApplied: (
   boardRef.current = board;
   const [retryTick, setRetryTick] = useState(0);
 
+  // Unmount (also a dev Fast Refresh / StrictMode remount, which keeps the refs) ends the worker
+  // and forgets its solve in flight: a stale `inflight` would hold the board clock forever, since
+  // no answer ever comes from a terminated worker. The next render asks the solve again.
   useEffect(
     () => () => {
       workerRef.current?.terminate();
       workerRef.current = null;
+      inflight.current = null;
+      sentGrid.current = null;
     },
     [],
   );
@@ -89,6 +94,23 @@ export function useFireSolver(board: Board | null, version: number, onApplied: (
           applyFireSolve(current, reply.result, asked.minute);
           setState({ solving: null, lastSolveMs: reply.result.computeMilliseconds, error: null });
         }
+        onAppliedRef.current();
+      };
+      // A worker that fails to load or dies posts no reply: record the failure (retried after
+      // RETRY_WALL_MS on a fresh worker) instead of waiting for an answer that never comes.
+      const own = worker;
+      worker.onerror = (event: ErrorEvent) => {
+        event.preventDefault();
+        if (workerRef.current !== own) return;
+        own.terminate();
+        workerRef.current = null;
+        const asked = inflight.current;
+        inflight.current = null;
+        const message = `The fire model worker stopped${event.message ? `: ${event.message}` : ""}.`;
+        failedAt.current = Date.now();
+        const current = boardRef.current;
+        if (current && asked?.board === current) fireSolveFailed(current, message);
+        setState((s) => ({ ...s, solving: null, error: message }));
         onAppliedRef.current();
       };
       workerRef.current = worker;

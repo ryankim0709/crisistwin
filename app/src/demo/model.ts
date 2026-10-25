@@ -270,9 +270,10 @@ export interface Fire {
    * The Studio publish it came from: board tag ("S1"), scenario name and ignition name, and
    * reportAfterMin = Studio report_minute - start_minute: minutes after ignition the fire is
    * reported to dispatch, as the Studio user set it (an assumption); null = not set, so the
-   * board models the report delay (boardResponse.ts reportFor).
+   * board models the report delay (boardResponse.ts reportFor). `ignitionId` is the Studio
+   * ignition's own id (StudioFire ignitions[].id), so a rerun of the same ignition is recognised.
    */
-  studio: { tag: string; name: string; ignition: string; reportAfterMin: number | null };
+  studio: { tag: string; name: string; ignition: string; ignitionId: string; reportAfterMin: number | null };
   origin: LonLat;
   ignitedAt: number;
   /** Whole board minute the solver lets it spread from (ceil of `ignitedAt`). */
@@ -1912,6 +1913,12 @@ export function ingestStudioFire(board: Board, fire: StudioFire): boolean {
   const grid = board.env.landscape;
   const outside = new Set(fire.outside_drill);
   const taken = new Set([...board.fires.map((f) => f.id), ...board.scheduled.map((s) => s.id)]);
+  // The same Studio ignition at the same place, still burning, contained or waiting to start, is
+  // already this board's fire: a Studio rerun (or another Studio tab synced to the same shared
+  // world) republishes it, and starting it again would stack a duplicate fire on the same cell.
+  const onBoard = new Map<string, { id: string; origin: LonLat }>();
+  for (const f of board.fires) if (f.status !== "out") onBoard.set(f.studio.ignitionId, { id: f.id, origin: f.origin });
+  for (const s of board.scheduled) onBoard.set(s.studio.ignitionId, { id: s.id, origin: s.origin });
   const skipped: string[] = [];
   let scheduled = 0;
   let reportSet = 0;
@@ -1925,6 +1932,11 @@ export function ingestStudioFire(board: Board, fire: StudioFire): boolean {
       skipped.push(`${name} is off the board's landscape (${board.env.landscapeRegion.name})`);
       return;
     }
+    const same = onBoard.get(ign.id);
+    if (same && cellAt(grid, { longitude: same.origin[0], latitude: same.origin[1] }) === cellAt(grid, { longitude: ign.lon, latitude: ign.lat })) {
+      skipped.push(`${name} is already on the board as ${same.id} (same Studio ignition and place)`);
+      return;
+    }
     const base = `${tag}-${ignitionPart(name, i)}`;
     let id = base;
     for (let k = 2; taken.has(id); k += 1) id = `${base}-${k}`;
@@ -1934,7 +1946,7 @@ export function ingestStudioFire(board: Board, fire: StudioFire): boolean {
       origin: [ign.lon, ign.lat],
       at: board.minute + Math.max(0, ign.start_minute),
       // Same offset convention as the start: the report comes report_minute - start_minute after ignition.
-      studio: { tag, name: fire.name, ignition: name, reportAfterMin: studioReportAfterMin(ign) },
+      studio: { tag, name: fire.name, ignition: name, ignitionId: ign.id, reportAfterMin: studioReportAfterMin(ign) },
     });
     scheduled += 1;
     if (studioReportAfterMin(ign) !== null) reportSet += 1;
