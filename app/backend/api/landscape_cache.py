@@ -22,7 +22,7 @@ from django.views.decorators.http import require_http_methods
 from gridfs.errors import GridFSError
 from pymongo.errors import PyMongoError
 
-from .mongodb import get_database
+from .mongodb import get_cache_database
 
 BUCKET = "landscape_cache"
 FILES = f"{BUCKET}.files"
@@ -81,7 +81,7 @@ def landscape_cache(request):
     if not KEY_PATTERN.fullmatch(key):
         return _json(400, "invalid_key")
     try:
-        db = get_database()
+        db = get_cache_database()
         bucket = gridfs.GridFSBucket(db, bucket_name=BUCKET)
         if request.method == "POST":
             declared = request.META.get("CONTENT_LENGTH", "")

@@ -612,7 +612,20 @@ struct CheckInResponse: Codable, Equatable {
     var checkin: CheckIn
 }
 
-/// Body of `POST me/location` (responders who opted in; latest position only).
+/// What this person is, shown to the controller. Raw values are the `kind` the server accepts.
+enum ParticipantKind: String, CaseIterable, Identifiable {
+    case resident, firefighter, observer
+    var id: String { rawValue }
+    var label: String { rawValue.capitalized }
+}
+
+/// Body of `POST me/profile`: short nickname (empty clears it) and kind.
+struct ProfileUpdate: Codable, Equatable {
+    var name: String
+    var kind: String
+}
+
+/// Body of `POST me/location` (latest position only; sent while the phone shares its location).
 struct ResponderLocationUpdate: Codable, Equatable {
     var coord: LonLat
     var accuracyM: Double?

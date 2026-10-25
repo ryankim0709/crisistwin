@@ -939,16 +939,23 @@ def checkin_help(request, checkin_id: str, principal: Principal):
     return ok({"checkin": checkin_json(stored)})
 
 
-@live_view(["POST", "DELETE"], roles=["responder"])
+@live_view(["POST", "DELETE"], roles=["civilian", "responder"])
 def my_location(request, principal: Principal):
+    """Latest phone position. Always kept on the device document (`location`, for the controller's
+    participants list); a responder's also feeds `live_responder_locations` (task routing)."""
     incident_id = principal.incident_id or controller_incident()
     locations = col("live_responder_locations")
+    devices = col("live_devices")
     if request.method == "DELETE":
+        devices.update_one({"party_key": principal.party_key}, {"$unset": {"location": ""}})
         locations.delete_one({"incident_id": incident_id, "party_key": principal.party_key})
         return Response(status=204, headers={"Cache-Control": "no-store"})
     code = "invalid_location"
     body = json_body(request, code)
-    coord = parse_coord(body.get("coord"), "coord", code)
+    raw = body.get("coord")
+    if raw is None and "lon" in body and "lat" in body:
+        raw = [body.get("lon"), body.get("lat")]
+    coord = parse_coord(raw, "coord", code)
     accuracy = body.get("accuracy_m")
     if accuracy is not None and (not _bool_number(accuracy) or accuracy < 0):
         return error(400, code, "`accuracy_m` must be a nonnegative number or null.")
@@ -958,6 +965,16 @@ def my_location(request, principal: Principal):
         return error(400, code, "`at` is in the future.")
     if now - at > timedelta(seconds=RESPONDER_LOCATION_TTL_S):
         return error(400, code, "`at` is older than the location expiry.")
+    devices.update_one(
+        {"party_key": principal.party_key},
+        {"$set": {"location": {
+            "coord": [coord[0], coord[1]],
+            "accuracy_m": float(accuracy) if accuracy is not None else None,
+            "at": at,
+        }, "last_seen_at": now}},
+    )
+    if principal.role != "responder":
+        return Response(status=204, headers={"Cache-Control": "no-store"})
     locations.update_one(
         {"incident_id": incident_id, "party_key": principal.party_key},
         {

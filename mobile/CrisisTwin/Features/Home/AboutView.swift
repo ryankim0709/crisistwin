@@ -33,6 +33,8 @@ struct AboutView: View {
                 }
                 .ctPanel()
 
+                ProfileCard()
+
                 ServerSettingsCard { retry() }
             }
             .ctScreenPadding()
@@ -107,5 +109,49 @@ struct AboutView: View {
             }
             connection = .failed(message: message)
         }
+    }
+}
+
+/// Nickname, kind and location sharing for the drill's controller. Short on purpose.
+@MainActor
+private struct ProfileCard: View {
+    @Environment(LiveStore.self) private var store
+    @Environment(LocationProvider.self) private var location
+
+    var body: some View {
+        @Bindable var store = store
+        VStack(alignment: .leading, spacing: 12) {
+            PlanCardHeader("You")
+            TextField("Name (optional)", text: $store.displayName)
+                .textInputAutocapitalization(.words)
+                .submitLabel(.done)
+                .onSubmit { store.syncProfile() }
+                .onChange(of: store.displayName) { _, name in
+                    if name.count > 24 { store.displayName = String(name.prefix(24)) }
+                }
+                .frame(minHeight: 44)
+            Picker("I am", selection: kindBinding) {
+                ForEach(ParticipantKind.allCases) { Text($0.label).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            Toggle("Share my location", isOn: $store.shareResponderLocation)
+                .tint(Color.ctBrand)
+                .frame(minHeight: 44)
+            if store.shareResponderLocation, !location.isAuthorized, location.authorization != .notDetermined {
+                Text("Location is off for this app.")
+                    .font(.subheadline)
+                    .foregroundStyle(Color.ctInkMuted)
+            }
+        }
+        .font(.subheadline)
+        .foregroundStyle(Color.ctInk)
+        .ctPanel()
+        .onDisappear { store.syncProfile() }
+    }
+
+    private var kindBinding: Binding<ParticipantKind> {
+        Binding(
+            get: { store.participantKind ?? (store.role == .responder ? .firefighter : .resident) },
+            set: { store.participantKind = $0; store.syncProfile() })
     }
 }

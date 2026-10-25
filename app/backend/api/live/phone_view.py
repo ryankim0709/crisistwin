@@ -71,8 +71,8 @@ def _real_participant(incident_id: str, participant_id: str) -> dict[str, Any] |
     if device is not None and device.get("incident_id") not in (None, incident_id):
         return None
     role = (device or checkin or {}).get("role", "civilian")
-    location = None
-    if role == "responder":
+    location = (device or {}).get("location")  # set by me/location, civilians and responders
+    if location is None and role == "responder":
         location = col("live_responder_locations").find_one(
             {"incident_id": incident_id, "party_key": participant_id, "expires_at": {"$gt": wall_now()}}
         )
@@ -81,6 +81,7 @@ def _real_participant(incident_id: str, participant_id: str) -> dict[str, Any] |
         "id": participant_id,
         "kind": "simulated" if simulated else "phone",
         "role": role,
+        "name": (device or {}).get("name"),
         "checkin": checkin,
         "position": list(location["coord"]) if location else None,
     }

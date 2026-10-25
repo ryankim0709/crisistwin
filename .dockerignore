@@ -1,0 +1,13 @@
+.git
+.claude
+.codex
+.cursor
+mobile
+actors
+node_modules
+**/node_modules
+app/dist
+app/backend/var
+**/__pycache__
+.env
+.env.*
