@@ -28,6 +28,12 @@
     --ov-right-w: 300px;
   }
 }
+/* Room for the 3D view even at 1440 wide (1440 - 340 - 410 - 4 gaps leaves about 640 px). */
+@media (min-width: 1400px) {
+  .ov-root {
+    --ov-right-w: 410px;
+  }
+}
 
 /* Visually hidden, still read by screen readers. */
 .ov-sr {
@@ -195,8 +201,8 @@
   width: var(--ov-left-w);
 }
 .ov-right {
-  /* Lead C's AgentInputsPanel sizes its feed to this; the panel itself scrolls. */
-  --ais-max-height: 100%;
+  /* This panel is the one scroll area (vertical only); AgentInputsPanel does not scroll itself. */
+  --ais-max-height: none;
 
   right: var(--ov-gap);
   width: var(--ov-right-w);

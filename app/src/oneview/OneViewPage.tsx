@@ -638,15 +638,8 @@ export default function OneViewPage() {
       </Panel>
 
       <Panel glass compact className="ov-panel ov-right" title="What the agent sees" aside={<EvidenceTag kind="simulated" />}>
-        {phase === "ai" ? (
-          <AgentInputsPanel agent={cb.agent} board={board} />
-        ) : (
-          <p className="ov-dim">
-            {phase === "baseline"
-              ? "Nobody acts in the baseline: the AI agent is off and sees nothing."
-              : "The AI agent's inputs appear here during step 3."}
-          </p>
-        )}
+        <AgentInputsPanel agent={cb.agent} board={board} forecasts={cb.forecasts} phase={phase} embedded />
+
       </Panel>
 
       <Panel glass compact className="ov-panel ov-bottom" aria-label="Clock and scoreboard">
