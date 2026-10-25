@@ -11,6 +11,7 @@
 
 import { activate, fetchPackages, type StoredPackage } from "../live/active";
 import { MOISTURE_PRESETS } from "../fire/spread";
+import { DISPATCH_BUILDER } from "../studio/drillPackage";
 import { postLiveFire, type LiveFirePayload } from "../studio/liveFire";
 import { fetchLiveDrill, liveToken, packageRegionId } from "../studio/liveSync";
 import type { DemoSeedPreset } from "../demo/runContracts";
@@ -21,8 +22,13 @@ export const BERKELEY_REGION = "berkeley-hills-tilden";
 
 const regionOf = (boardId: string | null): string | null => (boardId ? boardId.split("@")[0] : null);
 
-/** A stored package's road box (`summary.bbox`, [west, south, east, north]) holds every ignition. */
+/**
+ * A stored package's road box (`summary.bbox`, [west, south, east, north]) holds every ignition, and
+ * its destinations are the current safe areas (built by DISPATCH_BUILDER, as studio/usePublishLiveFire.ts
+ * requires); a package from an older area builder is rebuilt, not reused.
+ */
 function covers(pkg: StoredPackage, ignitions: ScenarioDraft["ignitions"]): boolean {
+  if (pkg.summary.dispatch_builder !== DISPATCH_BUILDER) return false;
   const box = pkg.summary.bbox;
   if (!Array.isArray(box) || box.length !== 4 || !box.every((v) => typeof v === "number")) return false;
   const [west, south, east, north] = box as number[];

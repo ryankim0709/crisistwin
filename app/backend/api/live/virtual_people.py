@@ -39,7 +39,7 @@ from livecore import drill as drillmod
 from livecore import routing
 from livecore import virtual_people as vp
 from livecore.fire import estimate_fire
-from livecore.geo import haversine_m, simplify_line
+from livecore.geo import haversine_m, point_in_multipolygon, simplify_line
 
 from . import injects as injects_mod
 from . import twin_service
@@ -255,14 +255,27 @@ def _zone_motion(snapshot) -> dict[str, vp.ZoneMotion] | None:
         raise
 
 
-def _nearest_exit(index, home: list[float]) -> tuple[str, str, tuple[float, float]] | None:
-    """The nearest exit the planner can route to (``routing`` keeps destinations with a road node nearby)."""
+def _nearest_exit(index, home: list[float], fire_geometry=None, full: frozenset[str] = frozenset(),
+                  load: dict[str, int] | None = None) -> tuple[str, str, tuple[float, float]] | None:
+    """The nearest OPEN safe destination of any kind (shelter, evacuation point or exit) the planner can route
+    to (``routing`` keeps destinations with a road node nearby). Open = not reported full, not inside the fire
+    estimate, and, where the bundle records a capacity (``capacity_veh``), not already holding that many of the
+    virtual people (``load`` counts one vehicle per person). With none open, the nearest routable one."""
     routable = routing._index(index.drill).destination_nodes
     dests = [d for d in index.destinations.values() if d.id in routable] or list(index.destinations.values())
-    exits = [d for d in dests if d.kind == "exit"] or dests
-    if not exits:
+    safe = [d for d in dests if d.kind in ("exit", "shelter")] or dests
+
+    def is_open(d) -> bool:
+        if d.id in full:
+            return False
+        if fire_geometry and point_in_multipolygon(d.coord, fire_geometry):
+            return False
+        return d.capacity_veh is None or (load or {}).get(d.id, 0) < d.capacity_veh
+
+    pool = [d for d in safe if is_open(d)] or safe
+    if not pool:
         return None
-    d = min(exits, key=lambda d: (haversine_m(tuple(home), d.coord), d.id))
+    d = min(pool, key=lambda d: (haversine_m(tuple(home), d.coord), d.id))
     return d.id, d.name, d.coord
 
 
@@ -373,6 +386,20 @@ def _tick_locked(incident_id, run, index, clock, target, restart, snapshot, now)
             motion_cache["m"] = _zone_motion(snap)
         return motion_cache["m"]
 
+    open_cache: dict[str, Any] = {}
+
+    def open_state() -> tuple[Any, frozenset[str], dict[str, int]]:
+        """(fire estimate geometry at the target minute, destinations reported full, persons per destination),
+        read once per tick for the people who leave with no route offered."""
+        if "o" not in open_cache:
+            snap = snapshot if snapshot is not None else load_snapshot(incident_id, wall_now())
+            load: dict[str, int] = defaultdict(int)
+            for q in persons:
+                if q["state"].get("dest_id"):
+                    load[q["state"]["dest_id"]] += 1
+            open_cache["o"] = (fire.at(target)[1], snap.full_destinations, dict(load))
+        return open_cache["o"]
+
     fallbacks: dict[str, Any] = {}
     stepped = 0
     minutes: dict[datetime, tuple] = {}
@@ -386,12 +413,12 @@ def _tick_locked(incident_id, run, index, clock, target, restart, snapshot, now)
                 minutes[t] = fire.at(t)
             fkey, geometry = minutes[t]
             moving = state["phase"] in ("packing", "trip", "en_route")
-            if p["id"] not in fallbacks:
-                fallbacks[p["id"]] = _nearest_exit(index, p["home"])
+            if p["id"] not in fallbacks and not state.get("dest_id"):  # only a person with no destination yet
+                fallbacks[p["id"]] = _nearest_exit(index, p["home"], *open_state())
             ctx = vp.MinuteContext(
                 t=t, guidance=timeline.at(p["zone_id"], t), home_fire_m=fire.home_distance(fkey, geometry, p),
                 motion=(motion() or {}).get(p["zone_id"]) if moving else None,
-                help_status=help_status.get(p["party_key"]), fallback=fallbacks[p["id"]])
+                help_status=help_status.get(p["party_key"]), fallback=fallbacks.get(p["id"]))
             vp.step(p, state, ctx)
             stepped += 1
             t += timedelta(minutes=1)
