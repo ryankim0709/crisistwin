@@ -3,7 +3,8 @@ import { useMediaQuery } from "../diorama/ui/format";
 import { BurnedGlyph, FireEdgeGlyph } from "../diorama/ui/glyphs";
 import { FireDioramaScene } from "../fire/diorama/FireDioramaScene";
 import type { DioramaRun, FireDioramaSceneApi } from "../fire/diorama/types";
-import { loadLandscape, type LandscapeGrid } from "../fire/landscape";
+import { type LandscapeGrid } from "../fire/landscape";
+import { loadLandscapeCached } from "../fire/landscapeCache";
 import { formatDuration } from "../fire/ui/format";
 import {
   PLAYBACK_SPEEDS,
@@ -127,7 +128,7 @@ export default function HistoricalFireDiorama({ fireId, onSelectFire, onExit }: 
           return;
         }
         const { center, radius_m, cell_m } = value.board;
-        const grid = await loadLandscape(center[0], center[1], radius_m, controller.signal, {
+        const { grid } = await loadLandscapeCached(center[0], center[1], radius_m, controller.signal, {
           cellMeters: cell_m,
         });
         landscapeCache.set(value.id, grid);
