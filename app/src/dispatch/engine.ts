@@ -47,6 +47,8 @@
  */
 
 import { groundMeters, roadLabel, type DispatchArea, type LonLat } from "./area";
+import { HAND_CREW_MAX_HIKE_MINUTES, hikeMinutes, toblerKmh } from "../response/reach";
+import { IA_SUCCESS_MAX_ACRES, IA_SUCCESS_MAX_HA, WILDLAND_RUN_CARDS } from "../response/runCards";
 import type { FireExposure } from "./fireExposure";
 import { tacticBlocked, type FireTactic } from "./fireTactics";
 import type { LinePlan } from "../studio/firefighting";
@@ -105,6 +107,19 @@ export const TURNOUT_SECONDS = 80;
  * out of that unit's reach (the Studio crew dispatch's limit, studio/crewDispatch.ts).
  */
 export const MAX_ROAD_GAP_METERS = 1500;
+/**
+ * Fire attack: a unit stages at the nearest reachable road node and its crew walks the rest
+ * (response/reach.ts: Tobler off-path pace, flat ground assumed here), attacking only if the
+ * walk takes at most HAND_CREW_MAX_HIKE_MINUTES (labelled assumption there).
+ */
+const MAX_ATTACK_WALK_METERS = (HAND_CREW_MAX_HIKE_MINUTES / 60) * toblerKmh(0) * 1000;
+/**
+ * Initial attack cap per fire: CAL FIRE's high dispatch-level run card's ground units
+ * (response/runCards.ts WILDLAND_RUN_CARDS.high). ASSUMPTION: the high card is used as the cap
+ * whatever the day's level; more units only once the fire passes the IA success size.
+ */
+const IA_GROUND_CAP =
+  WILDLAND_RUN_CARDS.high.engines + WILDLAND_RUN_CARDS.high.hand_crews + WILDLAND_RUN_CARDS.high.dozers;
 export const EXIT_OPTIONS_PER_ZONE = 3;
 const SECONDS_PER_MINUTE = 60;
 const VEHICLE_EPSILON = 0.01;
@@ -237,6 +252,8 @@ export interface UnitState {
   holdSeconds: number;
   /** Minute the unit arrived on scene, for the crews panel. */
   arrivedMinute: number | null;
+  /** Minutes the crew walks from its staging node to the fire before it can build line. */
+  walkMinutes?: number;
 }
 
 export type AlertType =
@@ -615,10 +632,11 @@ export class DispatchEngine {
 
   /** Start minute of each engine on a fire: arrival on scene, or now plus its drive. */
   crewMinutes(index: number): number[] {
-    return this.fireAttackers(index).map((unit) =>
-      unit.status === "on_scene"
-        ? (unit.arrivedMinute ?? this.minute)
-        : this.minute + (this.unitEtaMinutes(unit) ?? 0),
+    return this.fireAttackers(index).map(
+      (unit) =>
+        (unit.status === "on_scene"
+          ? (unit.arrivedMinute ?? this.minute)
+          : this.minute + (this.unitEtaMinutes(unit) ?? 0)) + (unit.walkMinutes ?? 0),
     );
   }
 
@@ -675,16 +693,18 @@ export class DispatchEngine {
   attackRoute(
     unit: UnitState,
     index: number,
-  ): { node: number; route: Route; seconds: number } | null {
+  ): { node: number; route: Route; seconds: number; walkMinutes: number } | null {
     if (unit.status === "stranded") return null;
     const from = this.unitNextNode(unit);
     const tree = this.unitTree(unit, from, this.blockedAt(this.minute));
     const { node: best, meters: bestMeters } = this.nearestReached(tree, this.fires[index].target.location);
-    if (this.access && bestMeters > MAX_ROAD_GAP_METERS) return null;
+    if (bestMeters > MAX_ATTACK_WALK_METERS) return null;
     const route = best < 0 ? null : routeTo(this.area, tree, best);
     if (!route) return null;
     const approach = unit.status === "available" ? this.approachSeconds(unit) : 0;
-    return { node: best, route, seconds: route.seconds + approach };
+    const walkMinutes = hikeMinutes(Math.max(0, bestMeters), 0);
+    // `seconds` is when line work can start: drive, station approach and the walk in.
+    return { node: best, route, seconds: route.seconds + approach + walkMinutes * SECONDS_PER_MINUTE, walkMinutes };
   }
 
   /**
@@ -917,8 +937,8 @@ export class DispatchEngine {
     });
     const node = this.nearestReached(tree, this.fires[index].target.location);
     const open = node.node < 0 ? null : routeTo(this.area, tree, node.node);
-    const km = MAX_ROAD_GAP_METERS / 1000;
-    if (!open || node.meters > MAX_ROAD_GAP_METERS)
+    const km = Math.round(MAX_ATTACK_WALK_METERS / 100) / 10;
+    if (!open || node.meters > MAX_ATTACK_WALK_METERS)
       return { rule: null, why: `no open road within ${km} km of the fire (fire or closures)`, road: null };
     return (
       this.firstClosedToClass(unit, open.steps) ?? {
@@ -1108,6 +1128,11 @@ export class DispatchEngine {
         return reject(`${unit.id} is already on ${fire.target.name}.`);
       let seconds = 0;
       if (!(unit.task === "fire_attack" && unit.fire === index)) {
+        const attackers = this.fireAttackers(index).length;
+        if (attackers >= IA_GROUND_CAP && this.fireAreaSquareMeters(index) / 10_000 <= IA_SUCCESS_MAX_HA)
+          return reject(
+            `${fire.target.name} already has its initial attack package (${attackers} ground units, the high run card). Send more once it grows past ${IA_SUCCESS_MAX_ACRES} acres.`,
+          );
         const plan = this.attackRoute(unit, index);
         if (!plan)
           return reject(
@@ -1116,6 +1141,7 @@ export class DispatchEngine {
         const fromStation = unit.status === "available";
         this.sendUnit(unit, from, plan.route, "en_route", "fire_attack", null, plan.node);
         unit.fire = index;
+        unit.walkMinutes = plan.walkMinutes;
         if (fromStation) this.holdAtStation(unit);
         seconds = plan.seconds;
       }
@@ -1498,7 +1524,7 @@ export class DispatchEngine {
           unit.status === "on_scene" &&
           unit.task === "fire_attack" &&
           unit.fire === index &&
-          (unit.arrivedMinute ?? 0) < this.minute,
+          (unit.arrivedMinute ?? 0) + (unit.walkMinutes ?? 0) < this.minute,
       );
       if (working.length === 0) return;
       fire.lineMeters += working.reduce((sum, unit) => sum + this.unitLineMetersPerMinute(unit), 0);
