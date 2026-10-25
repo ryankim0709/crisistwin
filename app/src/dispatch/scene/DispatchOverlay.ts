@@ -94,6 +94,36 @@ const LABEL_CSS = `
 type Glide = { x: number; z: number; tx: number; tz: number; heading: number };
 type CarGlide = Glide & { zone: number; vehicles: number; stuck: boolean };
 
+type Ribbon = { key: string; base: Line2; flow: Line2; vehicles: number; state: number };
+const FLOW_COLORS = [0x14b8a6, 0xf2a33a, 0xd8432f] as const;
+const GLOW_COLOR = 0xffb347;
+/** Ribbon width (world units) from vehicles on the edge. */
+const ribbonWidth = (vehicles: number) => Math.min(3.2, 0.5 + Math.sqrt(vehicles) * 0.32);
+/** Vehicles on one road segment above which moving traffic is drawn as slow. */
+const SLOW_VEHICLES = 14;
+const READOUT_CSS = `
+.fdx-dsp-readout { position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); pointer-events: none; z-index: 5;
+  background: rgba(20,43,39,0.9); color: #fff; font: 600 12.5px/1.3 system-ui, sans-serif; padding: 6px 12px; border-radius: 999px;
+  white-space: nowrap; box-shadow: 0 2px 8px rgba(0,0,0,0.25); }
+.fdx-dsp-readout i { font-style: normal; opacity: 0.7; font-weight: 500; }
+.fdx-dsp-readout b { font-weight: 750; }
+`;
+
+function glowTexture(): THREE.CanvasTexture {
+  const canvas = document.createElement("canvas");
+  canvas.width = canvas.height = 64;
+  const ctx = canvas.getContext("2d");
+  if (ctx) {
+    const g = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
+    g.addColorStop(0, "rgba(255,255,255,1)");
+    g.addColorStop(0.55, "rgba(255,255,255,0.45)");
+    g.addColorStop(1, "rgba(255,255,255,0)");
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, 64, 64);
+  }
+  return new THREE.CanvasTexture(canvas);
+}
+
 type RouteLine = { key: string; base: Line2; flow: Line2; color: number };
 
 export class DispatchOverlay implements BoardOverlay {
@@ -114,6 +144,11 @@ export class DispatchOverlay implements BoardOverlay {
   private selectedZone: number | null = null;
   private closedEdges: ReadonlySet<number> = new Set();
   private closures: { line: Line2; label: CSS2DObject }[] = [];
+  private ribbons = new Map<string, Ribbon>();
+  private glows: { mesh: THREE.Mesh; zone: number; base: number }[] = [];
+  private glowTex: THREE.CanvasTexture | null = null;
+  private readout: HTMLDivElement | null = null;
+  private startMs: number | null = null;
 
   // Static (per area): homes, exits, stations.
   private walls: THREE.InstancedMesh | null = null;
@@ -152,7 +187,11 @@ export class DispatchOverlay implements BoardOverlay {
     parent.add(this.group);
     this.style = document.createElement("style");
     this.style.textContent = LABEL_CSS;
+    this.style.textContent += READOUT_CSS;
     labels.renderer.domElement.appendChild(this.style);
+    this.readout = document.createElement("div");
+    this.readout.className = "fdx-dsp-readout";
+    labels.renderer.domElement.appendChild(this.readout);
     this.buildStatic();
     this.buildClosures();
     this.refresh();
@@ -169,6 +208,12 @@ export class DispatchOverlay implements BoardOverlay {
     this.unitLabels.clear();
     this.exitMarkers = [];
     this.routes.clear();
+    this.ribbons.clear();
+    this.glows = [];
+    this.glowTex?.dispose();
+    this.glowTex = null;
+    this.readout?.remove();
+    this.readout = null;
     this.unitPaths.clear();
     this.carGlide.clear();
     this.unitGlide.clear();
@@ -198,6 +243,144 @@ export class DispatchOverlay implements BoardOverlay {
     this.drawTrucks(k);
   }
 
+  // ------------------------------------------------------------------ flow, density, readout
+
+  /** One ribbon per road segment direction carrying evacuees: width = vehicles, colour = state. */
+  private updateRibbons() {
+    const { group, area, engine } = this;
+    if (!group || !area) return;
+    const rows = new Map<string, { edge: number; forward: boolean; moving: number; stuck: number }>();
+    for (const packet of engine?.packetStates() ?? []) {
+      if (packet.edge === null) continue;
+      const key = `${packet.edge}:${packet.forward ? 1 : 0}`;
+      const row = rows.get(key) ?? { edge: packet.edge, forward: packet.forward, moving: 0, stuck: 0 };
+      if (packet.stuck) row.stuck += packet.vehicles;
+      else row.moving += packet.vehicles;
+      rows.set(key, row);
+    }
+    for (const [key, row] of rows) {
+      const vehicles = row.moving + row.stuck;
+      const state = row.stuck > 0 ? 2 : row.moving >= SLOW_VEHICLES ? 1 : 0;
+      let ribbon = this.ribbons.get(key);
+      if (!ribbon) {
+        const edge = area.edges[row.edge];
+        if (!edge) continue;
+        const coords = row.forward ? edge.coords : [...edge.coords].reverse();
+        const positions = this.drape(coords, LINE_LIFT + 0.08);
+        if (positions.length < 6) continue;
+        const base = this.line(positions, FLOW_COLORS[state], 1, false);
+        base.material.worldUnits = true;
+        base.material.transparent = true;
+        base.material.opacity = 0.78;
+        base.renderOrder = 2;
+        const flow = this.line(
+          positions.map((v, i) => (i % 3 === 1 ? v + 0.06 : v)),
+          0xffffff,
+          2,
+          true,
+        );
+        flow.material.dashSize = 0.9;
+        flow.material.gapSize = 1.6;
+        group.add(base, flow);
+        ribbon = { key, base, flow, vehicles: -1, state: -1 };
+        this.ribbons.set(key, ribbon);
+      }
+      if (ribbon.vehicles !== vehicles || ribbon.state !== state) {
+        ribbon.base.material.linewidth = ribbonWidth(vehicles);
+        ribbon.base.material.color.setHex(FLOW_COLORS[state]);
+        ribbon.flow.visible = state !== 2;
+        ribbon.vehicles = vehicles;
+        ribbon.state = state;
+      }
+    }
+    for (const [key, ribbon] of this.ribbons) {
+      if (rows.has(key)) continue;
+      this.disposeLine(ribbon.base);
+      this.disposeLine(ribbon.flow);
+      this.ribbons.delete(key);
+    }
+  }
+
+  /** Soft warm disc per zone: bigger and brighter while more households are still home. */
+  private updateGlows() {
+    const { group, area, frame } = this;
+    if (!group || !area || !frame) return;
+    if (this.glows.length === 0) {
+      this.glowTex = glowTexture();
+      const spread = area.zones.map(() => 0);
+      const centers = area.zones.map((zone) => this.toWorld(zone.centroid));
+      for (const home of area.homes) {
+        const c = centers[home.zone];
+        const p = this.toWorld(home.position);
+        if (c && p) spread[home.zone] = Math.max(spread[home.zone], Math.hypot(p.x - c.x, p.z - c.z));
+      }
+      area.zones.forEach((_, zone) => {
+        const c = centers[zone];
+        if (!c) return;
+        const r = Math.max(6, spread[zone] * 1.15);
+        const mesh = new THREE.Mesh(
+          new THREE.PlaneGeometry(r * 2, r * 2).rotateX(-Math.PI / 2),
+          new THREE.MeshBasicMaterial({
+            map: this.glowTex,
+            color: GLOW_COLOR,
+            transparent: true,
+            opacity: 0,
+            depthWrite: false,
+            depthTest: false,
+            blending: THREE.AdditiveBlending,
+          }),
+        );
+        mesh.position.set(c.x, frame.surfaceAt(c.x, c.z) + 1.2, c.z);
+        mesh.renderOrder = 1;
+        group.add(mesh);
+        this.glows.push({ mesh, zone, base: r });
+      });
+    }
+    for (const g of this.glows) {
+      const zone = area.zones[g.zone];
+      const state = this.engine?.zones[g.zone];
+      const frac = state ? state.atHome / Math.max(1, zone.homes) : 1;
+      const mat = g.mesh.material as THREE.MeshBasicMaterial;
+      mat.opacity = frac <= 0.01 ? 0 : 0.12 + 0.55 * frac;
+      g.mesh.scale.setScalar(0.45 + 0.55 * Math.sqrt(frac));
+    }
+  }
+
+  private updateReadout() {
+    const { readout, area, engine } = this;
+    if (!readout || !area) return;
+    if (!engine) {
+      readout.style.display = "none";
+      return;
+    }
+    let home = 0;
+    let road = 0;
+    let out = 0;
+    let stuck = 0;
+    engine.zones.forEach((z, i) => {
+      const people = engine.vehiclesPerHome(i) * PERSONS_PER_VEHICLE;
+      home += z.atHome * people;
+      road += (z.queued + z.onRoad) * people;
+      out += z.safe * people;
+    });
+    for (const packet of engine.packetStates()) {
+      if (!packet.stuck) continue;
+      const p = packet.homes * engine.vehiclesPerHome(packet.zone) * PERSONS_PER_VEHICLE;
+      stuck += p;
+      road -= p;
+    }
+    const nf = (n: number) => Math.max(0, Math.round(n)).toLocaleString("en-US");
+    const when =
+      this.startMs === null
+        ? `T+${Math.round(engine.minute)} min`
+        : new Date(this.startMs + engine.minute * 60_000).toLocaleTimeString("en-US", {
+            hour: "numeric",
+            minute: "2-digit",
+          });
+    readout.style.display = "";
+    readout.innerHTML = `<i>At ${when}</i> &nbsp;<b>${nf(home)}</b> home · <b>${nf(road)}</b> on the road · <b>${nf(stuck)}</b> stuck · <b>${nf(out)}</b> out`;
+  }
+
   // ------------------------------------------------------------------ page API
 
   setArea(area: DispatchArea | null, exposure: FireExposure | null): void {
@@ -216,6 +399,13 @@ export class DispatchOverlay implements BoardOverlay {
       }
     }
     this.refresh();
+  }
+
+  /** Wall-clock time of T+0 (epoch ms) for the time readout; null shows "T+N min". */
+  setStartMs(ms: number | null): void {
+    if (ms === this.startMs) return;
+    this.startMs = ms;
+    this.updateReadout();
   }
 
   /** Call after every engine step (or with null to show the area without a session). */
@@ -486,6 +676,9 @@ export class DispatchOverlay implements BoardOverlay {
     this.updateZoneLabels();
     this.updateExits();
     this.updateVehicles();
+    this.updateRibbons();
+    this.updateGlows();
+    this.updateReadout();
     this.updateUnits();
   }
 
@@ -816,7 +1009,7 @@ export class DispatchOverlay implements BoardOverlay {
   private drawCars(k: number) {
     const { cars, frame, engine, area } = this;
     if (!cars || !frame || !area) return;
-    if (!engine) {
+    if (!engine || this.lod !== "near") {
       cars.count = 0;
       return;
     }

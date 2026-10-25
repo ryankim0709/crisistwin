@@ -1217,6 +1217,7 @@ export default function SimulationStudioPage({
           <div className="studio-page-map">
             {view === "diorama" ? (
               <StudioDiorama
+                startMs={startMsOf(result?.scenario.firefighting ?? DEFAULT_FIREFIGHTING)}
                 landscape={dioramaLandscape}
                 run={dioramaShowsRun ? dioramaRun : null}
                 ignitions={dioramaIgnitions}
