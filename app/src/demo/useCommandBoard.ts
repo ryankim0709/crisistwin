@@ -600,7 +600,7 @@ export function useCommandBoard({
   }, [token, incidentId, data]);
   const applyLive = useCallback((orders: LiveOrder[]) => {
     const { token: t, incidentId: id, data: d } = liveRef.current;
-    return runLiveOrders(t, id, d, orders, setNotice);
+    return runLiveOrders(t, id, d, orders, setNotice, boardRef.current);
   }, []);
   const agentRun = useDemoAgent({ board, version, incidentId, routes: routes.routes, forecasts, enabled: autopilot && !baseline, apply, applyLive, picture });
   // A baseline run never calls the agent ("Ask Claude now" included).
