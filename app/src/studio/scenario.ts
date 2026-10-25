@@ -11,6 +11,7 @@ import {
   type GeoPoint,
 } from "../fire/spread";
 import { recordMatchesWind, type ScenarioWindRecord } from "../fire/scenarioWeather";
+import { MAX_ROS_LOG_SIGMA } from "../fire/stochastic";
 import { spanProblem } from "./bounds";
 import {
   MAX_RESOURCES_PER_KIND,
@@ -132,6 +133,18 @@ function validateSettings(settings: FireSettings): ScenarioIssue[] {
     add(
       `Structure spread rate must be between 0 and ${MAX_STRUCTURE_RATE_METERS_PER_MINUTE} m/min.`,
     );
+  }
+  const { stochastic } = settings;
+  if (stochastic) {
+    if (typeof stochastic.enabled !== "boolean" || !isFiniteNumber(stochastic.seed)) {
+      add("Stochastic spread needs enabled true or false and a finite seed.");
+    }
+    if (
+      stochastic.rosSigma !== undefined &&
+      (!isFiniteNumber(stochastic.rosSigma) || !inRange(stochastic.rosSigma, 0, MAX_ROS_LOG_SIGMA))
+    ) {
+      add(`Rate-of-spread variability (log sigma) must be between 0 and ${MAX_ROS_LOG_SIGMA}.`);
+    }
   }
   return issues;
 }
@@ -486,6 +499,27 @@ function parseSettings(
       );
     } else {
       settings.structureSpread = { enabled: s.enabled, rateMetersPerMinute: s.rateMetersPerMinute };
+    }
+  }
+  if (raw.stochastic !== undefined) {
+    // Seeded stochastic spread (fire/stochastic.ts). Optional numbers are kept only when
+    // finite; anything else falls back to the solver's documented defaults.
+    const s = raw.stochastic;
+    if (!isRecord(s) || typeof s.enabled !== "boolean" || !isFiniteNumber(s.seed)) {
+      fail("Stochastic spread must be { enabled, seed, ... } with a finite seed.", "settings");
+    } else {
+      const optionalNumber = (value: unknown) => (isFiniteNumber(value) ? value : undefined);
+      const optionalBoolean = (value: unknown) => (typeof value === "boolean" ? value : undefined);
+      settings.stochastic = {
+        enabled: s.enabled,
+        seed: s.seed,
+        rosSigma: optionalNumber(s.rosSigma),
+        rosCorrelationMeters: optionalNumber(s.rosCorrelationMeters),
+        spotting: optionalBoolean(s.spotting),
+        windWander: optionalBoolean(s.windWander),
+        gustFactor: optionalNumber(s.gustFactor) ?? null,
+        airTemperatureF: optionalNumber(s.airTemperatureF),
+      };
     }
   }
   return settings;

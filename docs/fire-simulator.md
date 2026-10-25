@@ -219,3 +219,92 @@ operational evacuation instructions. See the
 [crown fire decision](adr/0008-crown-fire.md), and the
 [solver direction set decision](adr/0009-solver-direction-set.md) for the constants,
 their sources, and where they are least trustworthy.
+
+## Stochastic spread (opt-in, seeded)
+
+The solver (`app/src/fire/spread.ts`) can run as one realisation of a seeded random fire
+instead of the single deterministic answer. The random parts live in
+`app/src/fire/stochastic.ts` (pure); an ensemble helper is in `app/src/fire/ensemble.ts`.
+It is off unless a caller sets it, and with it off (absent, or `enabled: false`) every output
+is bit-for-bit the deterministic run (checked by fingerprinting the arrival fields, cell
+behaviour and resumed solves of /fire, Studio-style scheduled and /live board solves before
+and after the change).
+
+### Options
+
+`FireScenario.stochastic` (so `FireSettings.stochastic` in Studio scenarios and
+`FireSolveRequest.stochastic` on the /live board):
+
+```ts
+interface StochasticSpreadOptions {
+  enabled: boolean;
+  seed: number;                  // any finite number, reduced to uint32
+  rosSigma?: number;             // sd of ln(ROS multiplier); default ln(1.35) = 0.300
+  rosCorrelationMeters?: number; // default 90 m
+  spotting?: boolean;            // default true; also needs scenario spotting.enabled
+  windWander?: boolean;          // default true
+  gustFactor?: number | null;    // peak gust / mean wind; default Durst 3-s gust 1.52
+  airTemperatureF?: number;      // for ignition probability; default 86 F
+}
+```
+
+The shared world's `fire.stochastic: {enabled, seed}` maps straight onto this. A run that
+used it carries `run.stochastic`: `evidence: "simulated"`, the resolved options (seed
+included), spot launches and ignitions, and the range of wind factors drawn. Studio's
+firefighting and initial-attack re-solves inherit the same settings, so every tactic is
+compared on the same realisation. `gustFactorOf(sample)` turns a weather sample's
+`gustMs / speedMs` into the gust factor.
+
+Every draw is a pure function of (seed, stream, cell or wind step), a counter-based hash,
+not a sequential generator. So the same seed reproduces the same field whatever order
+cells settle in, and a resumed /live solve (`ResumeFrom`) makes the same draws for the
+same cells; measured: an unchanged-settings resume at minute 120 matched the uninterrupted
+stochastic run cell for cell (no membership differences, largest arrival difference 0.006
+min, from float32 storage of the earlier behaviour). Keep a board's seed fixed and include
+the options in its solve key.
+
+### Model, sources and evidence
+
+| Mechanism | What it does | Source | Evidence |
+| --- | --- | --- | --- |
+| ROS field | Per-cell multiplier exp(sigma z), z a unit-variance Gaussian field (white noise blurred by a separable Gaussian, rescaled to unit variance at every cell, edges included). Scales head, flank/backing floor and sustained-crown rates of vegetated cells; intensity scales with it and flame length with its 0.46 power (Byram 1959). Crown classification stays on the unperturbed fire. | sigma = ln(1.35): Cruz & Alexander (2013) propose a 35% error interval as about one standard deviation of heading-ROS prediction error with accurate inputs (49 datasets, 1278 fires; most datasets had 51-75% mean absolute error, so this is the narrow end). | Sigma sourced; applying a whole-fire error as cell-scale variability, the 90 m correlation length and median 1 (their under-prediction bias not applied) are assumptions. |
+| Wind wander | Each 10-minute step draws a speed factor exp(s z - s^2/2) capped at the gust factor, and a direction offset 0.8 s z' radians, independent per step. A cell spreads out at the wind of the step it ignites in (rate, heading, ellipse, crown state recomputed). | s = (G - 1) x 0.117 / 1.267: 0.117 is Durst's (1960) ratio of 10-minute to 3-second gust excess over the hourly mean (ASCE 7-05 form), 1.267 the expected maximum of six independent normals; 0.8 = sigma_v / sigma_u (Kaimal & Finnigan 1994). Default G = Durst's 3-second gust, 1.52; an observed gust replaces it. At the default s = 0.048 (speed) and 2.2 degrees (direction). | Formulas sourced; independent steps, reading the sample's speed as the hourly mean, and the 10-minute step are assumptions. |
+| Stochastic spotting | A cell above 100 Btu/ft/s launches one firebrand with probability 1 - exp(-0.001 per m x cell width) (2.9% at 30 m), at most 5000 per solve. Distance is lognormal with median a quarter of the maximum and the maximum at the 99th percentile; draws past it or past the scenario's spotting ceiling start nothing. Direction is downwind plus the direction sigma. Only vegetated, unburned fuel outside built line can ignite. Arrival = flight at half the wind + the existing 10-minute delay. | Maximum distance: Albini (1979, 1983) surface-fire spotting as implemented in BehavePlus (`firelab/behave` `spot.cpp`), flat terrain. Ignition: Schroeder (1969) probability of ignition as in BehavePlus `ignite.cpp`, fuel temperature = air + 25 F - 20 F x shade, shade = landing cell's canopy cover. Lognormal shape: Sardoy et al. (2008), Himoto & Tanaka (2005). | Albini and Schroeder sourced (ignition reproduces BehavePlus's worked examples to 8 decimals); launch rate, median fraction, air temperature, closed-canopy cut-off (cover >= 0.5) are assumptions. |
+
+The deterministic gap-crossing spotting (above) still runs alongside; stochastic spots are
+the only mechanism that lands embers in continuous fuel ahead of the front.
+
+What was measured (synthetic 300 x 300 grid of GR2 / SH5 / TU5 with a road and a pond,
+20 mph, 6-hour /fire run, 229.8 ha deterministic; 20 seeds each):
+
+| Configuration | Burned area, ha: min / median / max |
+| --- | --- |
+| ROS field only | 190 / 233 / 282 |
+| Wind wander only | 247 / 261 / 269 |
+| Stochastic spotting only | 230 / 230 / 231 (about 70 launches, 8 spot ignitions per run) |
+| All on | 214 / 260 / 310 |
+
+Wind wander biases area upward (+13% at default): each 10-minute cohort of cells spreads on
+its own heading and the minimum-travel-time front is their envelope, which is Huygens'
+principle doing what it does under a varying wind. An earlier variant drew independent
+1-minute winds with the instantaneous turbulence intensity; it burned 79% more than
+deterministic because a step's rate is fixed when its source cell ignites and a step lasts
+up to about 12 minutes, so a one-minute gust direction persisted for the whole step. That
+was rejected as a lattice artifact, and the 10-minute step matches how long a solver step
+lasts.
+
+Not verified: BehavePlus's spotting worked example (GS4, 5 mph, 30 ft closed cover, 0.22005
+mi) needs a 15.8 ft flame; this solver's own GS4 surface run at those inputs gives 5.5 to 6.2
+ft, the live-fuel discrepancy of [integration-todo](integration-todo.md) section 4, so the
+example could not be reproduced end to end. The spotting formulas were checked term by term
+against `spot.cpp` instead. That discrepancy is unchanged here.
+
+Cost (507 x 507 grid, two fires, 6 hours, about 24,000 burned cells): 201 ms deterministic,
+243 ms all on with a cached field, 262 ms with a new seed (the rate field takes 30 ms and is
+cached for the last seed and grid). `burnProbabilityEnsemble(landscape, input, {members,
+baseSeed})` runs `members` seeds (`memberSeed(baseSeed, k)`, at most 200) and returns the
+per-cell fraction burned by the horizon, `evidence: "simulated"`: 20 members of the
+300 x 300 test took 1.5 s. Run it in a worker.
+
+Every output of a stochastic run is simulated. A burn-probability raster is a fraction of
+model runs, not a calibrated probability, and must be labelled that way in any UI.
