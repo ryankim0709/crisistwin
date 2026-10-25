@@ -734,10 +734,21 @@ export interface FireRunResolution {
 }
 
 export class NonBurnableIgnitionError extends Error {
+  /** Why the point cannot burn, without the advice that ends `message`. */
+  readonly reason: string;
   constructor(readonly fuelCode: number) {
-    super(
-      `The ignition point is on ${(NON_BURNABLE_CODES.get(fuelCode) ?? "unmapped ground").toLowerCase()}, which carries no fire. Place it on vegetated ground.`,
-    );
+    const ground = (NON_BURNABLE_CODES.get(fuelCode) ?? "unmapped ground").toLowerCase();
+    // Developed ground is refused only when structure-to-structure spread is off or has a
+    // zero rate (see the origin check in simulateScheduledFireSpread), so it gets its own advice.
+    const developed = fuelCode === DEVELOPED_FUEL_CODE;
+    const reason = developed
+      ? `The ignition point is on ${ground} ground, which carries no fire while structure-to-structure spread is off.`
+      : `The ignition point is on ${ground}, which carries no fire.`;
+    const advice = developed
+      ? "Turn on structure spread, or place it on vegetated ground."
+      : "Place it on vegetated ground, or on developed ground with structure spread on.";
+    super(`${reason} ${advice}`);
+    this.reason = reason;
     this.name = "NonBurnableIgnitionError";
   }
 }
