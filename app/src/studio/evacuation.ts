@@ -19,7 +19,7 @@
  * papers find that point by reverse fire spread from the community; here the fire's time to a
  * zone is read forward from the studio run's arrival field (`exposure.zoneContact`):
  * - "Leave now" (`order_evacuation`) once zoneContact − now ≤ time to clear = departure delay
- *   (`clearDepartureMinutes`) + free-flow drive to the zone's fastest open exit (dispatch
+ *   (`clearDepartureMinutes`) + free-flow drive to the zone's chosen exit (dispatch
  *   routing) + TRIGGER_SAFETY_BUFFER_MINUTES.
  * - "Get ready" (a warning; households stay home) once zoneContact − now ≤ time to clear +
  *   GET_READY_LEAD_MINUTES.
@@ -31,8 +31,11 @@
  * `orderMinute` every zone the fire has not overrun is ordered at once.
  *
  * Both modes:
- * - An ordered zone goes to the exit it can reach fastest at free flow, avoiding closed edges
- *   and edges the fire reaches within the engine's routing lookahead.
+ * - An ordered zone goes away from the fire: among the exits it can reach (routes avoid closed
+ *   edges and edges the fire reaches within the engine's routing lookahead), it takes the
+ *   fastest at free flow whose position is farther from the fire (road nodes burning by its
+ *   expected departure, else the ignition) than the zone's centroid. Only when none is away
+ *   does it take the fastest open exit, and its reason text says so. Re-orders use the same rule.
  * - An optional plan (`EvacuationPlan`, built by studio/evacuationOptimizer.ts) changes only a
  *   zone's first order: a planned zone goes to its planned exit when it is reachable then (else
  *   its fastest), and a zone planned to wait is staged behind its predecessor (the engine's
@@ -51,7 +54,7 @@
  *   contact, then the most households still at home, skipping zones the fire is about to reach.
  */
 
-import { groundMeters, type DispatchArea } from "../dispatch/area";
+import { groundMeters, type DispatchArea, type LonLat } from "../dispatch/area";
 import {
   DEFAULT_CHECK_INTERVAL_MINUTES,
   DEPARTURE_SPREAD_MINUTES,
@@ -176,7 +179,9 @@ export interface EvacuationSummary {
  */
 export function clearDepartureMinutes(departureDelays?: Float32Array): number {
   if (!departureDelays) return DEPARTURE_SPREAD_MINUTES * CLEAR_DELAY_QUANTILE;
-  const finite = Array.from(departureDelays).filter(Number.isFinite).sort((a, b) => a - b);
+  const finite = Array.from(departureDelays)
+    .filter(Number.isFinite)
+    .sort((a, b) => a - b);
   if (finite.length === 0) return 0;
   return finite[Math.min(finite.length - 1, Math.floor(CLEAR_DELAY_QUANTILE * finite.length))];
 }
@@ -208,6 +213,7 @@ export class EvacuationPolicyRun {
   /** Per zone, free-flow drive to its fastest exit avoiding closures only, minutes. */
   private driveFloorMinutes: Float64Array | null = null;
   private ordered = false;
+  private fireCache: { key: number; nodes: number[] } | null = null;
   /** Ordered zones whose route was cut and that have no exit left; not searched again. */
   private stranded = new Set<number>();
   /** Crew units by id once they have left the fire. */
@@ -262,13 +268,47 @@ export class EvacuationPolicyRun {
       const route = exit ? routeTo(area, tree, exit.node) : null;
       if (route) return { id: preferred, seconds: route.seconds };
     }
-    let best: { id: string; seconds: number } | null = null;
+    // Away from the fire: among reachable exits, the fastest one farther from the fire than the
+    // zone is; the fastest reachable exit only when none is away.
+    const fire = this.fireNodes(this.engine.minute + this.clearDepartMinutes);
+    const zoneMeters = fireMeters(area, fire, area.zones[zone].centroid);
+    let best: { id: string; seconds: number; away: boolean } | null = null;
     for (const exit of area.exits) {
       const route = routeTo(area, tree, exit.node);
-      if (route && (!best || route.seconds < best.seconds))
-        best = { id: exit.id, seconds: route.seconds };
+      if (!route) continue;
+      const away = fireMeters(area, fire, area.nodes[exit.node]) > zoneMeters;
+      if (!best || (away && !best.away) || (away === best.away && route.seconds < best.seconds))
+        best = { id: exit.id, seconds: route.seconds, away };
     }
     return best;
+  }
+
+  /** Reason suffix: why this exit (called after `bestRoute` picked it). */
+  private awayNote(zone: number, exitId: string): string {
+    const { area } = this.inputs;
+    const exit = area.exits.find((candidate) => candidate.id === exitId);
+    if (!exit) return "";
+    const fire = this.fireNodes(this.engine.minute + this.clearDepartMinutes);
+    const away =
+      fireMeters(area, fire, area.nodes[exit.node]) >
+      fireMeters(area, fire, area.zones[zone].centroid);
+    return away ? "away from the fire" : "no exit leads away from the fire; fastest open exit";
+  }
+
+  /** Road nodes the fire has reached by `minute` (else the first node it ignites), cached. */
+  private fireNodes(minute: number): number[] {
+    const key = Math.floor(minute);
+    if (this.fireCache?.key === key) return this.fireCache.nodes;
+    const { nodeArrival } = this.inputs.exposure;
+    const nodes: number[] = [];
+    let first = -1;
+    nodeArrival.forEach((arrival, node) => {
+      if (arrival <= minute) nodes.push(node);
+      if (Number.isFinite(arrival) && (first < 0 || arrival < nodeArrival[first])) first = node;
+    });
+    if (nodes.length === 0 && first >= 0) nodes.push(first);
+    this.fireCache = { key, nodes };
+    return nodes;
   }
 
   /**
@@ -340,19 +380,19 @@ export class EvacuationPolicyRun {
         route.id,
         plan
           ? "Studio plan: planned exit, fire within the zone's evacuation trigger."
-          : "Studio policy: fire within the zone's evacuation trigger; fastest open exit.",
+          : `Studio policy: fire within the zone's evacuation trigger; ${this.awayNote(zone.index, route.id)}.`,
       );
       this.initialOrders.set(zone.index, { exitId: route.id, after: null });
     }
   }
 
-  private order(zone: number, exitId: string, reason = "Studio policy: fastest open exit."): void {
+  private order(zone: number, exitId: string, reason = ""): void {
     this.engine.applyOrders([
       {
         type: "order_evacuation",
         zone_id: this.inputs.area.zones[zone].id,
         exit_id: exitId,
-        reason,
+        reason: reason || `Studio policy: ${this.awayNote(zone, exitId)}.`,
       },
     ]);
   }
@@ -578,10 +618,22 @@ export class EvacuationPolicyRun {
       if (zone.status !== "ordered" || !zone.routeBlocked || this.stranded.has(zone.index))
         continue;
       const exitId = this.bestExit(zone.index);
-      if (exitId) this.order(zone.index, exitId);
+      if (exitId)
+        this.order(
+          zone.index,
+          exitId,
+          `Studio policy: route cut; ${this.awayNote(zone.index, exitId)}.`,
+        );
       else this.stranded.add(zone.index);
     }
   }
+}
+
+/** Ground metres from `point` to the nearest of the fire's road nodes (Infinity when none). */
+function fireMeters(area: DispatchArea, fire: readonly number[], point: LonLat): number {
+  let best = Infinity;
+  for (const node of fire) best = Math.min(best, groundMeters(area.nodes[node], point));
+  return best;
 }
 
 /** Households of a zone still at home that will leave (those staying home excluded). */
@@ -709,7 +761,7 @@ export const ROAD_PICK_METERS = 120;
  */
 export function nearestEdge(
   area: DispatchArea,
-  point: readonly [number, number],
+  point: LonLat,
   maxMeters = ROAD_PICK_METERS,
 ): number | null {
   const [px, py] = lonLatToMercator(point[0], point[1]);

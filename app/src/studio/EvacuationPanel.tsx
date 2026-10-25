@@ -29,7 +29,11 @@ import {
 export type PlayPlan = "fastest" | "optimized";
 
 const PLAY_OPTIONS = [
-  { value: "fastest", label: "Fastest exit", title: "Every zone to its fastest open exit" },
+  {
+    value: "fastest",
+    label: "Away from fire",
+    title: "Every zone to its fastest exit leading away from the fire",
+  },
   { value: "optimized", label: "Optimized plan", title: "The best plan the search found" },
 ] as const;
 
@@ -459,25 +463,25 @@ export default function EvacuationPanel(props: EvacuationPanelProps) {
                           (withClosures !== null && rows(withClosures)[key] > 0),
                       )
                       .map(([label, key, digits]) => {
-                      const base = rows(baseline)[key];
-                      const change = withClosures
-                        ? delta(rows(withClosures)[key], base, digits)
-                        : "";
-                      return (
-                        <tr key={key}>
-                          <th scope="row">{label}</th>
-                          <td className="num">{base.toFixed(digits)}</td>
-                          {withClosures && (
-                            <td className="num">
-                              {rows(withClosures)[key].toFixed(digits)}
-                              {change && (
-                                <small className="studio-evac__delta">{change} vs open</small>
-                              )}
-                            </td>
-                          )}
-                        </tr>
-                      );
-                    })}
+                        const base = rows(baseline)[key];
+                        const change = withClosures
+                          ? delta(rows(withClosures)[key], base, digits)
+                          : "";
+                        return (
+                          <tr key={key}>
+                            <th scope="row">{label}</th>
+                            <td className="num">{base.toFixed(digits)}</td>
+                            {withClosures && (
+                              <td className="num">
+                                {rows(withClosures)[key].toFixed(digits)}
+                                {change && (
+                                  <small className="studio-evac__delta">{change} vs open</small>
+                                )}
+                              </td>
+                            )}
+                          </tr>
+                        );
+                      })}
                     <tr>
                       <th scope="row">Everyone ordered is out by</th>
                       <td className="num">{clearText(baseline)}</td>
@@ -532,8 +536,9 @@ export default function EvacuationPanel(props: EvacuationPanelProps) {
             {orderMinute === null
               ? `A zone is told to get ready, then to leave, once the modelled fire is within its time to clear (departure + drive + ${TRIGGER_SAFETY_BUFFER_MINUTES} min assumed buffer; Cova et al. 2005 triggers). Zones the fire does not threaten stay home.`
               : `Every zone is ordered at ${formatElapsed(orderMinute)}.`}{" "}
-            Unless you play the optimized plan, a zone goes to its fastest open exit and is
-            re-routed when fire cuts its route. Closures change traffic only, not the fire. Homes and zones are synthetic; counts
+            Unless you play the optimized plan, people head away from the fire, to the fastest exit
+            that leads away (else the fastest open one), and are re-routed when fire cuts their
+            route. Closures change traffic only, not the fire. Homes and zones are synthetic; counts
             are model output, not casualty estimates.
           </p>
         </>
