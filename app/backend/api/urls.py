@@ -16,6 +16,8 @@ from .intel import (
     intel_runs,
 )
 from .intel_feeds_api import intel_feed_poll, intel_feeds
+from .geo_cache import imagery_tile, landfire_wcs, terrarium_tile
+from .landscape_cache import landscape_cache
 from .landscapes import landscape_list, landscape_package
 from .live_active import live_active
 from .live_broadcast import live_broadcast, live_snapshot
@@ -87,6 +89,10 @@ urlpatterns = [
         intel_candidate_review,
         name="intel-candidate-review",
     ),
+    path("geo/landfire/wcs", landfire_wcs, name="geo-landfire-wcs"),
+    re_path(r"^geo/terrarium/(?P<z>\d{1,2})/(?P<x>\d{1,8})/(?P<y>\d{1,8})\.png$", terrarium_tile, name="geo-terrarium"),
+    re_path(r"^geo/imagery/(?P<z>\d{1,2})/(?P<y>\d{1,8})/(?P<x>\d{1,8})$", imagery_tile, name="geo-imagery"),
+    path("landscapes/cache", landscape_cache, name="landscape-cache"),
     re_path(r"^landscapes/?$", landscape_list, name="landscape-list"),
     re_path(r"^landscapes/(?P<region_id>[^/]{1,64})/?$", landscape_package, name="landscape-package"),
 ]

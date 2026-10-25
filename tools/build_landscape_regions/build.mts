@@ -16,7 +16,7 @@ import {
   LANDFIRE_COVERAGE,
   LANDFIRE_UPSTREAM_WCS_URL,
   LANDFIRE_USER_AGENT,
-  TERRAIN_TILE_URL,
+  TERRAIN_UPSTREAM_TILE_URL,
   loadLandscape,
   type LandscapeResampling,
 } from "../../app/src/fire/landscape";
@@ -147,7 +147,7 @@ async function buildRegion(region: LandscapeRegion): Promise<ManifestEntry> {
       cellMeters: region.cellMeters,
       endpoints: {
         landfireWcsUrl: LANDFIRE_UPSTREAM_WCS_URL,
-        terrainTileUrl: TERRAIN_TILE_URL,
+        terrainTileUrl: TERRAIN_UPSTREAM_TILE_URL,
         userAgent: LANDFIRE_USER_AGENT,
         fetch: buildFetch,
       },
@@ -158,7 +158,7 @@ async function buildRegion(region: LandscapeRegion): Promise<ManifestEntry> {
   const sources: LandscapePackageSources = {
     landfireWcs: LANDFIRE_UPSTREAM_WCS_URL,
     coverages: [LANDFIRE_COVERAGE, ...Object.values(LANDFIRE_CANOPY_COVERAGES)],
-    terrainTiles: TERRAIN_TILE_URL,
+    terrainTiles: TERRAIN_UPSTREAM_TILE_URL,
     retrievedAt,
   };
   const bytes = await encodeLandscapePackage(grid, {

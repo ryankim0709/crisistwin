@@ -917,7 +917,9 @@ export default function SimulationStudioPage({
                       {board.status === "ready"
                         ? board.source === "stored"
                           ? "Stored board: LANDFIRE fuels and terrain, prebuilt."
-                          : "Stored board unavailable; loaded live from LANDFIRE."
+                          : board.source === "cached"
+                            ? "Cached board: LANDFIRE fuels and terrain from an earlier live load."
+                            : "Stored board unavailable; loaded live from LANDFIRE."
                         : board.status === "loading"
                           ? board.storedUnavailable
                             ? "Stored board unavailable; loading live from LANDFIRE…"
