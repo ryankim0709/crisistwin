@@ -100,11 +100,22 @@ export default function WindSourcePicker({
   const abortRef = useRef<AbortController | null>(null);
   useEffect(() => () => abortRef.current?.abort(), []);
 
-  // Editing the wind by hand drops the record; the selector follows.
+  // Editing the wind by hand drops the record; the selector follows. A record set from outside
+  // (the shared world, a loaded scenario) shows its own date and percentile here.
   const hadRecord = useRef(record !== null);
   useEffect(() => {
     if (record === null && hadRecord.current) setMode("assumed");
     hadRecord.current = record !== null;
+    if (!record) return;
+    setMode(modeFromRecord(record));
+    const start = record.query.startUtc;
+    if (record.mode === "historical_replay" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(start)) {
+      setHistorical(start.slice(0, 16));
+    } else if (record.mode === "climatology_percentile") {
+      const month = Number(start.slice(5, 7));
+      if (month >= 1 && month <= 12) setMonth(month);
+      if (record.query.percentile !== undefined) setPercentile(record.query.percentile);
+    }
   }, [record]);
 
   const hours = Math.max(1, Math.min(MAX_WEATHER_HOURS, Math.ceil(horizonHours)));
@@ -218,7 +229,10 @@ export default function WindSourcePicker({
               value={percentile}
               onChange={(event) => setPercentile(Number(event.target.value))}
             >
-              {PERCENTILES.map((value) => (
+              {(PERCENTILES.includes(percentile as (typeof PERCENTILES)[number])
+                ? [...PERCENTILES]
+                : [...PERCENTILES, percentile].sort((a, b) => a - b)
+              ).map((value) => (
                 <option key={value} value={value}>
                   P{value}
                 </option>

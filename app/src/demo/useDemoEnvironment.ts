@@ -221,13 +221,15 @@ export async function loadEnvironment(
   fallbackCenter: LonLat | null,
   signal: AbortSignal,
   radiusMeters: number = DEFAULT_BOARD_RADIUS_METERS,
+  centerOverride: LonLat | null = null,
 ): Promise<DemoEnvironment> {
-  // The wind and the environment answer independently; the centre (environment `center`, else the
-  // zones' centroid) is needed for the bases and landscape lookups.
+  // The wind and the environment answer independently; the centre (the shared world's area when
+  // it is this drill, else the environment `center`, else the zones' centroid) is needed for the
+  // bases and landscape lookups.
   const envPromise = getJson<EnvironmentResponse>(demoUrl(ENVIRONMENT_URL, incidentId), signal);
   const windPromise = loadWind(preset, incidentId, signal);
   const envData = await envPromise;
-  const center: LonLat | null = envData?.center ?? fallbackCenter;
+  const center: LonLat | null = centerOverride ?? envData?.center ?? fallbackCenter;
   const [wind, basesJson, landscape] = await Promise.all([
     windPromise,
     center
@@ -273,10 +275,15 @@ export function useDemoEnvironment(
   incidentId: string,
   fallbackCenter: LonLat | null,
   radiusMeters: number = DEFAULT_BOARD_RADIUS_METERS,
+  /** The shared world's centre when its area is this drill (useCommandBoard); null: the drill's own. */
+  centerOverride: LonLat | null = null,
 ): DemoEnvironment | null {
   const radius = clampBoardRadiusMeters(radiusMeters);
   const [state, setState] = useState<{ key: string; env: DemoEnvironment } | null>(null);
-  const key = `${incidentId}|${preset.value}|${radius}`;
+  const centreKey = centerOverride ? `${centerOverride[0].toFixed(4)},${centerOverride[1].toFixed(4)}` : "";
+  const key = `${incidentId}|${preset.value}|${radius}|${centreKey}`;
+  const override = useRef(centerOverride);
+  override.current = centerOverride;
   const fallback = useRef(fallbackCenter);
   fallback.current = fallbackCenter;
   // Wait for the zones centroid on a non-Camp incident only until the command data arrives.
@@ -284,7 +291,7 @@ export function useDemoEnvironment(
   useEffect(() => {
     if (!ready) return;
     const controller = new AbortController();
-    loadEnvironment(preset, incidentId, fallback.current, controller.signal, radius).then(
+    loadEnvironment(preset, incidentId, fallback.current, controller.signal, radius, override.current).then(
       (env) => {
         if (!controller.signal.aborted) setState({ key, env });
       },
