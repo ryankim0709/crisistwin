@@ -13,17 +13,21 @@ const seedsModule = Object.values(
 
 /**
  * Stand-in preset, used only until lead I's curated seeds (oneview/demoSeeds.ts) are in the build.
- * ASSUMPTION (unsourced, demo stand-in): ignition point on the Grizzly Peak ridge above Berkeley,
- * a 25 mph wind from the northeast (the offshore "Diablo" direction) and critical fuel moisture.
- * Not measured: `measured` is null, so the page shows no outcome claim for it.
+ * ASSUMPTION (unsourced, demo stand-in): ignition point in Claremont Canyon above the Claremont
+ * hill homes, a 25 mph wind from the northeast (the offshore "Diablo" direction) and critical fuel
+ * moisture. The point was picked by a scratch scan of the board's own fire solve (no action, seed 1):
+ * the earlier point (-122.24, 37.88) sits in developed ground and timber litter with the wind
+ * running downslope, so it burned about 1 ha in the first hour and reached no homes in 2 h; this
+ * one reaches homes within the first hour. Not measured: `measured` is null, so the page shows no
+ * outcome claim for it.
  */
 const STAND_IN_SEED: DemoSeedPreset = {
   id: "berkeley-standin",
   label: "Berkeley Hills ridge fire (stand-in)",
-  blurb: "Stand-in until the curated seeds land: a ridge-top start pushed downhill toward the hill homes by an offshore wind.",
+  blurb: "Stand-in until the curated seeds land: a Claremont Canyon start pushed downhill toward the hill homes by an offshore wind.",
   regionId: "berkeley-hills-tilden@15km",
   seed: 1,
-  ignitions: [{ lon: -122.24, lat: 37.88, startMinute: 0, reportMinute: 10 }],
+  ignitions: [{ lon: -122.235, lat: 37.86, startMinute: 0, reportMinute: 10 }],
   wind: { speedMph: 25, fromDeg: 45 },
   moisturePreset: "critical",
   horizonMinutes: 240,
