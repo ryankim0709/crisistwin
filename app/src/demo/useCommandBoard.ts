@@ -234,7 +234,9 @@ export function useCommandBoard({ token, incidentId, data: commandData, studioBo
   const worldSeed = useRef<number | null>(null);
 
   // Shared world: this board takes the world's size, weather (closest preset), seed and, when the
-  // world's area is this drill, its centre; it writes what its user changes here.
+  // world's area is this drill, its centre; it writes what its user changes here. A new world seed
+  // (Studio's random scenario, natural-variation seed) is only kept for the next board: only a
+  // Studio run (a publish) or this page's own restart changes the running board.
   const sync = useWorldSync({
     tab: "live",
     local: null,
@@ -243,11 +245,7 @@ export function useCommandBoard({ token, incidentId, data: commandData, studioBo
       const weatherChanged = [...changed].some((p) => p.startsWith("conditions.weather.") || p === "conditions.startUtc");
       const closest = weatherChanged ? closestWeatherPreset(w) : null;
       if (closest) setWeatherState(closest);
-      if (changed.has("fire.stochastic.seed")) {
-        worldSeed.current = w.fire.stochastic.seed;
-        const b = boardRef.current;
-        if (b && b.seed !== w.fire.stochastic.seed) restartRef.current(w.fire.stochastic.seed);
-      }
+      if (changed.has("fire.stochastic.seed")) worldSeed.current = w.fire.stochastic.seed;
     },
   });
   const { write: writeWorld } = sync;
@@ -327,7 +325,7 @@ export function useCommandBoard({ token, incidentId, data: commandData, studioBo
   useEffect(() => {
     studioRef.current = studio.data;
   }, [studio.data]);
-  // Boards that must not take the recent publishes at their first read of the feed (a restart).
+  // Boards that must not take the newest publish at their first read of the feed (Reset board).
   const [noRecent] = useState(() => new WeakSet<Board>());
 
   // The drill's resource snapshot (units, stations, households), read once per incident (and
@@ -386,30 +384,35 @@ export function useCommandBoard({ token, incidentId, data: commandData, studioBo
     bump();
   }, [env, bump]);
 
-  // A restart rebuilds from the snapshot (clean unit states, every household home); `load` is a
-  // freshly read snapshot (Reset board), else the one already loaded.
-  const restartWith = (seed: number, load: SnapshotLoad | null = snapshot) => {
-    if (!data || !env || !load) return;
+  // A restart rebuilds from the snapshot (clean unit states, every household home) at T+0; `load` is
+  // a freshly read snapshot (Reset board), else the one already loaded. `studio` "newest": the new
+  // board runs the newest Studio publish listed (Studio is the source of truth: "Restart board",
+  // a new Studio run); "none": it starts empty and never takes the publishes listed now (Reset
+  // board, which has just deleted them). Returns the new board (null when it cannot be built yet).
+  const restartWith = (seed: number, load: SnapshotLoad | null = snapshot, studio: "newest" | "none" = "newest"): Board | null => {
+    if (!data || !env || !load) return null;
     const created = aiOnly(createBoard(baseZones(data), seed, env, resourceInput(load)));
-    // A restart starts empty: the publishes listed now are never ingested by this board.
     const listed = studioRef.current;
-    if (listed) created.studioBaseline = listed.map((f) => f.fire_id);
-    else noRecent.add(created);
+    if (studio === "none") {
+      if (listed) created.studioBaseline = listed.map((f) => f.fire_id);
+      else noRecent.add(created);
+    } else if (listed) created.studioBaseline = studioBaseline(listed, true);
     boardRef.current = created;
     setBoard(created);
     setSelection(null);
     if (created.resources.source !== "snapshot") setNotice(resourceNoticeOf(created));
     bump();
+    return created;
   };
   const restartRef = useRef(restartWith);
   useEffect(() => {
     restartRef.current = restartWith;
   });
-  /** "Restart board": a new seed, shared with the other tabs; `load` as restartWith. */
-  const restart = (load: SnapshotLoad | null = snapshot) => {
+  /** "Restart board": a new seed (written to the shared world); `load` and `studio` as restartWith. */
+  const restart = (load: SnapshotLoad | null = snapshot, studio: "newest" | "none" = "newest") => {
     if (!data || !env || !load) return;
     const seed = Math.floor(Math.random() * 2 ** 31);
-    restartWith(seed, load);
+    restartWith(seed, load, studio);
     worldSeed.current = seed;
     writeWorld({ fire: { stochastic: { seed } } });
   };
@@ -430,7 +433,7 @@ export function useCommandBoard({ token, incidentId, data: commandData, studioBo
         setSnapshotLoad(load);
         setSnapshotAttempt(attempt);
       }
-      restart(load ?? snapshot);
+      restart(load ?? snapshot, "none");
     } catch (error) {
       setNotice(`Reset failed: ${error instanceof Error ? error.message : "Live API error."}`);
     } finally {
@@ -438,15 +441,31 @@ export function useCommandBoard({ token, incidentId, data: commandData, studioBo
     }
   };
 
-  // Studio publishes start fires on the board (ingest rule in useStudioFires.ts).
+  // Studio publishes start fires on the board (ingest rule in useStudioFires.ts): the board runs
+  // Studio's newest run only. A board still at T+0 with no Studio fire takes it as is; any other
+  // board restarts on it (a new Board: new run id, lease and Claude memory; the seed is not
+  // written to the shared world, so no other tab restarts), at T+0 like Studio.
   useEffect(() => {
     const b = boardRef.current;
     const fires = studio.data;
     if (!b || !fires) return;
     if (b.studioBaseline === null) b.studioBaseline = studioBaseline(fires, !noRecent.has(b));
-    let changed = false;
-    for (const f of studioFiresToIngest(fires, b.studioBaseline, b.studioFireIds)) changed = ingestStudioFire(b, f) || changed;
-    if (changed) bump();
+    const fresh = studioFiresToIngest(fires, b.studioBaseline, b.studioFireIds);
+    if (fresh.length === 0) return;
+    const newest = fresh[fresh.length - 1];
+    const older = fires.filter((f) => f.fire_id !== newest.fire_id).map((f) => f.fire_id);
+    if (b.minute === 0 && b.studioFireIds.length === 0) {
+      b.studioBaseline = [...new Set([...b.studioBaseline, ...older])];
+      ingestStudioFire(b, newest);
+      bump();
+      return;
+    }
+    const replaced = b.studioFireIds.length > 0;
+    const created = restartRef.current(worldSeed.current ?? b.seed);
+    if (!created) return;
+    created.studioBaseline = older;
+    ingestStudioFire(created, newest, replaced);
+    bump();
   }, [studio.data, board, noRecent, bump]);
 
   // Open fire_seen field reports from the live drill join the fire already there (they never start one).

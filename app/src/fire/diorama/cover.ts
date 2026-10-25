@@ -576,8 +576,11 @@ export class CoverLayer {
       );
     }
 
-    if (streets && streets.homes.length > 0) this.buildStreetHouses(frame, streets.homes);
-    else this.buildHouses(frame);
+    // With streets, houses stand only on their residential streets (none when a page's overlay
+    // draws them); the fuel-class lattice is the fallback for boards without streets.
+    if (streets) {
+      if (streets.homes.length > 0) this.buildStreetHouses(frame, streets.homes);
+    } else this.buildHouses(frame);
   }
 
   /** One house per synthetic home, set back from its street and facing it. */

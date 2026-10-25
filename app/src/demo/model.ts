@@ -90,6 +90,7 @@ import { fuelLabel } from "../fire/fuelModels";
 import { simClock } from "./format";
 import { mercatorToLonLat, type LandscapeGrid } from "../fire/landscape";
 import { DEVELOPED_FUEL_CODE, cellAt, type FuelMoisture } from "../fire/spread";
+import { weatherAtStep, weatherStepAt, type FireWeatherSeries } from "../fire/weatherSeries";
 import type { LonLat } from "../live/types";
 import type { EngineKind, EngineStatus, ScenarioSnapshot, SnapshotBasis, SnapshotTotals, SnapshotZone } from "../live/scenarioSnapshot";
 import { DRAWDOWN_KEEP_SHARE, buildFleet, engineTurnoutMinutes, type BaseInput, type Department, type Tier, type UnitSeed } from "../response/fleet";
@@ -596,6 +597,7 @@ export type BoardEventAction =
   | "monitoring_started"
   | "solver_failed"
   | "studio_received"
+  | "studio_restart"
   | "ignition_skipped"
   | "ignition_not_started"
   | "ignition_started"
@@ -722,6 +724,17 @@ export interface StudioConditions {
   moisture: FuelMoisture;
   moisturePreset: string;
   moistureLabel: string;
+  /** When Studio published the run (server time, ISO); the activity feed starts there. */
+  publishedAt: string;
+  /**
+   * The run's hourly weather series (Studio's own samples, Studio clock), or null: the constant wind
+   * above. With a series the board reads it exactly as Studio does at the same Studio minute
+   * (boardWind: weatherAtStep at board minute - seriesStartMinute); `windSpeedMph` etc. above are
+   * then the publish's peak-hour summary, used only in labels.
+   */
+  series: FireWeatherSeries | null;
+  /** Board minute of Studio's T+0 (the ingest minute). */
+  seriesStartMinute: number;
 }
 
 /** A Studio ignition waiting for its start minute. */
@@ -960,14 +973,34 @@ function stopMinute(fire: Fire): number | null {
   return fire.containedAt ?? fire.outAt;
 }
 
+/** Studio's weather step at the board minute (fire/weatherSeries.ts, 10-min steps), as Studio shows and solves it. */
+function studioStep(c: StudioConditions, minute: number) {
+  return c.series ? weatherAtStep(c.series, weatherStepAt(minute - c.seriesStartMinute)) : null;
+}
+
 /**
- * The wind the board runs on now: the newest Studio fire's (constant), or, with no Studio fire
- * yet (so no fire at all), the station series' current hour.
+ * The wind the board runs on now: the newest Studio fire's (its hourly series at the same Studio
+ * minute, or its constant wind), or, with no Studio fire yet (so no fire at all), the station
+ * series' current hour.
  */
 export function boardWind(board: Board): WindNow {
   const c = board.conditions;
-  if (c) return { speedMetersPerSecond: c.windSpeedMetersPerSecond, fromDegrees: c.windFromDegrees, hourIndex: 0, held: false };
+  if (c) {
+    const w = studioStep(c, board.minute);
+    if (w) {
+      const hourIndex = Math.max(0, Math.floor((board.minute - c.seriesStartMinute) / 60));
+      return { speedMetersPerSecond: w.windSpeedMph * METERS_PER_SECOND_PER_MPH, fromDegrees: w.windFromDegrees, hourIndex, held: false };
+    }
+    return { speedMetersPerSecond: c.windSpeedMetersPerSecond, fromDegrees: c.windFromDegrees, hourIndex: 0, held: false };
+  }
   return windAt(board.env.spread.wind, board.minute);
+}
+
+/** Fuel moisture the board runs on now: the Studio series' at this minute when it carries one, else the publish's. */
+export function boardMoisture(board: Board): FuelMoisture {
+  const c = board.conditions;
+  if (!c) return moistureOf(NO_STUDIO_MOISTURE);
+  return studioStep(c, board.minute)?.moisture ?? c.moisture;
 }
 
 const MOISTURE_IDS: readonly MoistureId[] = ["critical", "dry", "moderate", "wet"];
@@ -1012,7 +1045,7 @@ function moistureKey(m: FuelMoisture): string {
 /** Wind and moisture at the board minute, as the solver takes them. */
 function weatherNow(board: Board): { speed: number; from: number; moisture: FuelMoisture; moistureKey: string; key: string } {
   const w = boardWind(board);
-  const moisture = board.conditions?.moisture ?? moistureOf(NO_STUDIO_MOISTURE);
+  const moisture = boardMoisture(board);
   const mk = moistureKey(moisture);
   return { speed: w.speedMetersPerSecond, from: w.fromDegrees, moisture, moistureKey: mk, key: `${w.speedMetersPerSecond}|${w.fromDegrees}|${mk}` };
 }
@@ -1852,6 +1885,24 @@ function ignite(board: Board, id: string, origin: LonLat, at: number, studio: Fi
   return fire;
 }
 
+/** A publish's hourly series in the solver's shape (fire/weatherSeries.ts), or null. */
+function seriesOf(fire: StudioFire): FireWeatherSeries | null {
+  const s = fire.weather_series;
+  if (!s || s.samples.length === 0) return null;
+  const evidence = (["observed", "forecast", "derived", "modelled", "assumed"] as const).find((e) => e === s.evidence);
+  return {
+    enabled: true,
+    samples: s.samples.map((x) => ({
+      minute: x.minute,
+      windSpeedMph: x.wind_speed_mph,
+      windFromDegrees: x.wind_from_deg,
+      ...(x.moisture ? { moisture: { ...x.moisture } } : {}),
+    })),
+    ...(s.source ? { source: s.source } : {}),
+    ...(evidence ? { evidence } : {}),
+  };
+}
+
 /** Starts the scheduled Studio ignitions whose minute has come, earliest first. */
 function startDueIgnitions(board: Board): void {
   while (board.scheduled.length > 0 && board.scheduled[0].at <= board.minute) {
@@ -1888,9 +1939,10 @@ function ignitionPart(name: string, index: number): string {
  * fire on the board. Each ignition is scheduled at the board minute now + its Studio
  * start_minute, as fire "S<n>-<ignition name>" (n counts this board's publishes). Ignitions the
  * server lists in `outside_drill`, or off the board's landscape, are skipped with an event saying
- * why. Returns false when this publish was already ingested.
+ * why. `restarted`: the board was just rebuilt for this run (a new Studio run replaced the one it
+ * was running), logged first. Returns false when this publish was already ingested.
  */
-export function ingestStudioFire(board: Board, fire: StudioFire): boolean {
+export function ingestStudioFire(board: Board, fire: StudioFire, restarted = false): boolean {
   if (board.studioFireIds.includes(fire.fire_id)) return false;
   board.studioFireIds.push(fire.fire_id);
   board.studioCount += 1;
@@ -1909,7 +1961,17 @@ export function ingestStudioFire(board: Board, fire: StudioFire): boolean {
     moisture: { dead1h: v.dead1h, dead10h: v.dead10h, dead100h: v.dead100h, liveHerb: v.liveHerb, liveWoody: v.liveWoody },
     moisturePreset: fire.moisture.preset,
     moistureLabel: fire.moisture.label || fire.moisture.preset,
+    publishedAt: fire.published_at,
+    series: seriesOf(fire),
+    seriesStartMinute: board.minute,
   };
+  if (restarted) {
+    const n = fire.ignitions.length;
+    log(board, "studio", "studio", `Simulation Studio run ${tag} received: board restarted with its ${n} fire${n === 1 ? "" : "s"} ('${fire.name}', ${fire.fire_id}).`, {
+      action: "studio_restart",
+      studioTag: tag,
+    });
+  }
   const grid = board.env.landscape;
   const outside = new Set(fire.outside_drill);
   const taken = new Set([...board.fires.map((f) => f.id), ...board.scheduled.map((s) => s.id)]);
