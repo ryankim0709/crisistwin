@@ -19,6 +19,7 @@ import { VERDICT, labelPoint, nf, plural, responderName, shortZoneName, wallCloc
 import { installInjectLayers } from "./injectMap";
 import { buildInjectSources } from "./injects";
 import { attachPeopleLayer, PEOPLE_INTERACTIVE_LAYERS, type PeopleLayer, type PeopleSnapshot } from "./people";
+import { PERSONS_PER_VEHICLE } from "../population/peopleSnapshot";
 import type { QueueItem } from "./queue";
 import type { CommandResponse, GuidanceLevel, ImpactResponse, LonLat, TwinMonitor } from "./types";
 
@@ -95,7 +96,7 @@ const lineFeature = (coords: LonLat[], properties: Feature["properties"] = {}): 
 /** On-map zone tags, so a red zone never reads as fire. */
 const ZONE_TAG: Record<Exclude<GuidanceLevel, "none">, string> = { evacuate_now: "LEAVE NOW", be_ready: "BE READY" };
 
-function buildSources(data: CommandResponse, items: QueueItem[]): Record<string, GeoJSON.FeatureCollection> {
+function buildSources(data: CommandResponse, items: QueueItem[], twin: TwinMonitor | null): Record<string, GeoJSON.FeatureCollection> {
   const guidance = new Map(data.guidance.map((g) => [g.zone_id, g]));
   const counts = new Map(data.checkins.by_zone.map((c) => [c.zone_id, c]));
 
@@ -139,15 +140,29 @@ function buildSources(data: CommandResponse, items: QueueItem[]): Record<string,
   const responders = data.responders.map((r) =>
     point(r.coord, { label: `Responder ${responderName(r)}, ${wallClock(r.at)}` }),
   );
+  const routedTo = new Set<string>();
+  for (const g of data.guidance) if (g.level !== "none" && g.destination?.id) routedTo.add(g.destination.id);
+  const arrivedVeh = new Map((twin?.destinations ?? []).map((t) => [t.id, t.arrived_veh]));
   const dests = data.destinations
     .filter((d) => d.kind !== "exit")
-    .map((d) =>
-      point(d.coord, {
+    .map((d) => {
+      const arrived = arrivedVeh.get(d.id) ?? 0;
+      const active = routedTo.has(d.id) || arrived > 0;
+      const people = Math.round(arrived * PERSONS_PER_VEHICLE);
+      const parts = [`Shelter: ${d.name}`];
+      if (arrived > 0) parts.push(`${nf(people)} arrived`);
+      if (d.capacity_veh !== null && arrivedVeh.has(d.id)) {
+        const room = Math.max(0, Math.round((d.capacity_veh - arrived) * PERSONS_PER_VEHICLE));
+        parts.push(`room for ${nf(room)} more`);
+      } else if (active && arrived === 0) parts.push("people routed here");
+      return point(d.coord, {
         kind: d.kind,
         name: d.name,
+        active,
+        text: active ? parts.join(" · ") : d.name,
         label: `${d.name}${d.capacity_veh !== null ? `, ${nf(d.capacity_veh)} vehicles` : ", capacity unknown"}`,
-      }),
-    );
+      });
+    });
 
   const zoneById = new Map(data.zones.map((z) => [z.id, z]));
   const ground: Feature[] = [];
@@ -443,25 +458,27 @@ function installLayers(map: MapLibreMap): void {
     type: "circle",
     source: "lc-dest",
     paint: {
-      "circle-radius": 4.5,
-      "circle-color": "#FFFFFF",
-      "circle-stroke-color": MAP_COLOR.shelter,
-      "circle-stroke-width": 2,
+      "circle-radius": ["case", ["==", ["get", "active"], true], 10, 4.5] as never,
+      "circle-color": ["case", ["==", ["get", "active"], true], MAP_COLOR.shelter, "#FFFFFF"] as never,
+      "circle-stroke-color": ["case", ["==", ["get", "active"], true], "#FFFFFF", MAP_COLOR.shelter] as never,
+      "circle-stroke-width": ["case", ["==", ["get", "active"], true], 3, 2] as never,
     },
   });
   map.addLayer({
     id: "lc-dest-labels",
     type: "symbol",
     source: "lc-dest",
-    minzoom: 12.5,
     layout: {
-      "text-field": ["get", "name"],
+      "text-field": ["get", "text"],
       "text-font": ["Noto Sans Regular"],
-      "text-size": 11,
-      "text-offset": [0, 1.1],
+      "text-size": ["case", ["==", ["get", "active"], true], 13, 11] as never,
+      "text-max-width": 16,
+      "text-offset": [0, 1.4],
       "text-anchor": "top",
       "text-optional": true,
+      "symbol-sort-key": ["case", ["==", ["get", "active"], true], 0, 1] as never,
     },
+    filter: ["any", ["==", ["get", "active"], true], [">=", ["zoom"], 12.5]] as never,
     paint: { "text-color": MAP_COLOR.shelter, "text-halo-color": "#FFFFFF", "text-halo-width": 1.4 },
   });
   map.addLayer({
@@ -710,7 +727,7 @@ export default function CommandMap({ data, twin, people = null, items, selected,
   useEffect(() => {
     const map = mapRef.current;
     if (!ready || !map || !data) return;
-    for (const [id, fc] of Object.entries({ ...buildSources(data, items), ...buildInjectSources(data) })) {
+    for (const [id, fc] of Object.entries({ ...buildSources(data, items, twin), ...buildInjectSources(data) })) {
       (map.getSource(id) as GeoJSONSource | undefined)?.setData(fc);
     }
     if (!fitted.current && data.zones.length) {
@@ -722,7 +739,7 @@ export default function CommandMap({ data, twin, people = null, items, selected,
       if (!bounds.isEmpty()) map.fitBounds(bounds, { padding: FIT_PADDING, duration: 0 });
       fitted.current = true;
     }
-  }, [ready, data, items]);
+  }, [ready, data, items, twin]);
 
   useEffect(() => {
     const map = mapRef.current;

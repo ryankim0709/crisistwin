@@ -204,11 +204,11 @@ export function attachPeopleLayer(map: MapLibreMap, beforeId?: string): PeopleLa
     type: "circle",
     source: SRC.out,
     paint: {
-      "circle-radius": byPeople(5, 20),
-      "circle-color": C.out,
-      "circle-opacity": 0.75,
+      "circle-radius": byPeople(9, 24),
+      "circle-color": ["coalesce", ["get", "color"], C.out] as never,
+      "circle-opacity": 0.85,
       "circle-stroke-color": C.halo,
-      "circle-stroke-width": 2,
+      "circle-stroke-width": 3,
     },
   });
   add({
@@ -241,7 +241,7 @@ export function attachPeopleLayer(map: MapLibreMap, beforeId?: string): PeopleLa
       paint: { "text-color": color, "text-halo-color": C.halo, "text-halo-width": 1.8 },
     });
   label("ppl-homes-label", SRC.homes, C.homeEdge, { "text-size": 11, "text-offset": [0, 0], "text-anchor": "center" });
-  label("ppl-out-label", SRC.out, C.outEdge);
+  label("ppl-out-label", SRC.out, C.outEdge, { "text-size": 13, "text-offset": [0, 1.6], "text-max-width": 18 });
   label("ppl-stuck-label", SRC.stuck, C.stuckInk, { "text-size": 12.5 });
   map.setLayerZoomRange("ppl-homes-label", 11.5, 24);
 
@@ -400,11 +400,15 @@ export function attachPeopleLayer(map: MapLibreMap, beforeId?: string): PeopleLa
         SRC.out,
         fc(
           snapshot.destinations
-            .filter((d) => d.people > 0)
+            .filter((d) => d.people > 0 || (d.heading_people ?? 0) > 0)
             .map((d) =>
               pt(d.coord, {
-                people: d.people,
-                text: `${nf(d.people)} out via ${d.name}`,
+                people: d.people + (d.heading_people ?? 0),
+                color: d.color ?? C.out,
+                text:
+                  d.heading_people !== undefined
+                    ? `${d.name} · ${nf(d.heading_people)} heading here · ${nf(d.people)} arrived`
+                    : `${nf(d.people)} out via ${d.name}`,
                 label: `Simulated: ${nf(d.people)} people reached ${d.name}; ${nf(d.last_10_min_people)} in the last 10 min`,
               }),
             ),

@@ -6,6 +6,7 @@
  * engine's; groups and engines glide between simulated minutes for readability only.
  */
 
+import { PERSONS_PER_VEHICLE } from "../../population/peopleSnapshot";
 import * as THREE from "three";
 import type { CSS2DObject } from "three/examples/jsm/renderers/CSS2DRenderer.js";
 import { Line2 } from "three/examples/jsm/lines/Line2.js";
@@ -365,27 +366,30 @@ export class DispatchOverlay implements BoardOverlay {
     }
 
     // Exits: a dark post with a green sign; labelled only while a route uses them.
-    const exitMat = new THREE.MeshStandardMaterial({ color: 0x1f6b4f, roughness: 0.6 });
     const postMat = new THREE.MeshStandardMaterial({ color: 0x2a2e33, roughness: 0.7 });
     for (const exit of area.exits) {
+      const colour = exitColor(area, exit.id);
+      const exitMat = new THREE.MeshStandardMaterial({ color: colour, roughness: 0.5, emissive: colour, emissiveIntensity: 0.25 });
       const p = this.toWorld(area.nodes[exit.node]);
       if (!p || !this.labels) continue;
       const y = frame.surfaceAt(p.x, p.z);
       const marker = new THREE.Group();
-      const post = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.12, 3, 6), postMat);
-      post.position.y = 1.5;
-      const sign = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.9, 0.15), exitMat);
-      sign.position.y = 3;
+      const post = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.2, 8, 6), postMat);
+      post.position.y = 4;
+      const sign = new THREE.Mesh(new THREE.BoxGeometry(5, 2.6, 0.3), exitMat);
+      sign.position.set(2.5, 7, 0);
       marker.add(post, sign);
       marker.position.set(p.x, y, p.z);
       group.add(marker);
       const label = this.labels.add(
         group,
         "fdx-dsp-exit",
-        new THREE.Vector3(p.x, y + 4, p.z),
+        new THREE.Vector3(p.x, y + 10, p.z),
         new THREE.Vector2(0.5, 1),
       );
-      label.el.textContent = `⇥ ${exit.id}`;
+      label.el.style.borderColor = cssColor(colour);
+      label.el.style.borderWidth = "2px";
+      label.el.textContent = `Exit ${exit.id.replace(/^X0*/, "") || exit.id}`;
       label.obj.visible = false;
       this.exitMarkers.push({ group: marker, label: label.obj, el: label.el });
     }
@@ -628,10 +632,31 @@ export class DispatchOverlay implements BoardOverlay {
   private updateExits() {
     const area = this.area;
     if (!area) return;
-    const inUse = new Set((this.engine?.activeRoutes() ?? []).map((route) => route.exitId));
+    const engine = this.engine;
+    const inUse = new Set((engine?.activeRoutes() ?? []).map((route) => route.exitId));
+    // People heading to each exit (homes still to leave, as people) and people already arrived.
+    const heading = new Map<string, number>();
+    const arrived = new Map<string, number>();
+    if (engine) {
+      engine.zones.forEach((state, z) => {
+        if (!state.exitId || state.status === "cleared") return;
+        const homes = state.atHome + state.queued + state.onRoad;
+        heading.set(state.exitId, (heading.get(state.exitId) ?? 0) + homes * engine.vehiclesPerHome(z) * PERSONS_PER_VEHICLE);
+      });
+      for (const a of engine.exitArrivals) {
+        arrived.set(a.exitId, (arrived.get(a.exitId) ?? 0) + a.homes * engine.vehiclesPerHome(a.zone) * PERSONS_PER_VEHICLE);
+      }
+    }
+    const nf = (n: number) => Math.round(n).toLocaleString("en-US");
     area.exits.forEach((exit, i) => {
       const marker = this.exitMarkers[i];
-      if (marker) marker.label.visible = inUse.has(exit.id);
+      if (!marker) return;
+      const live = inUse.has(exit.id) || (arrived.get(exit.id) ?? 0) > 0;
+      marker.label.visible = live;
+      if (!live) return;
+      const name = `Exit ${exit.id.replace(/^X0*/, "") || exit.id}`;
+      const text = `${name} · ${nf(heading.get(exit.id) ?? 0)} people heading here · ${nf(arrived.get(exit.id) ?? 0)} arrived`;
+      if (marker.el.textContent !== text) marker.el.textContent = text;
     });
   }
 

@@ -25,6 +25,7 @@
 import type { DispatchArea, LonLat } from "../dispatch/area";
 import { groundMeters, roadLabel } from "../dispatch/area";
 import { HomeStatus, type DispatchEngine } from "../dispatch/engine";
+import { cssColor, exitColor } from "../dispatch/scene/DispatchOverlay";
 import type { ZoneHouseholds } from "./households";
 import type {
   PeopleCounts,
@@ -349,6 +350,12 @@ export function studioPeopleSnapshot(
     if (arrival.minute > minute - ARRIVAL_WINDOW_MINUTES) entry.recent += people;
     arrivals.set(arrival.exitId, entry);
   }
+  const heading = new Map<string, number>();
+  engine.zones.forEach((state, z) => {
+    if (!state.exitId || state.status === "cleared") return;
+    const homes = state.atHome + state.queued + state.onRoad;
+    heading.set(state.exitId, (heading.get(state.exitId) ?? 0) + homes * perHome[z]);
+  });
   const destinations = area.exits.map((exit) => {
     const entry = arrivals.get(exit.id) ?? { people: 0, recent: 0, vehicles: 0 };
     return {
@@ -359,6 +366,8 @@ export function studioPeopleSnapshot(
       people: Math.round(entry.people),
       veh: Math.round(entry.vehicles),
       last_10_min_people: Math.round(entry.recent),
+      heading_people: Math.round(heading.get(exit.id) ?? 0),
+      color: cssColor(exitColor(area, exit.id)),
     };
   });
 

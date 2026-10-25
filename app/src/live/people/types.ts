@@ -62,6 +62,10 @@ export interface PeopleDestination {
   people: number;
   veh: number;
   last_10_min_people: number;
+  /** Studio only: people in zones ordered to this exit who have not yet arrived. */
+  heading_people?: number;
+  /** Studio only: the exit's route colour, as #rrggbb. */
+  color?: string;
 }
 
 /** GET /api/live/incidents/{id}/people (docs/twin-api.md "People snapshot"). Every value is simulated. */
