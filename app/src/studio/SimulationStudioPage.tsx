@@ -23,6 +23,7 @@ import {
 } from "./evacuation";
 import { computeExposure } from "../dispatch/fireExposure";
 import { useBoardStreets } from "../fire/useBoardStreets";
+import { seriesActive, weatherAtStep, weatherStepAt } from "../fire/weatherSeries";
 import FirefightingFields from "./FirefightingFields";
 import FirefightingResults, { type FireShown } from "./FirefightingResults";
 import type { FirelineView } from "./FirelineOverlay";
@@ -989,6 +990,18 @@ export default function SimulationStudioPage({
   const stale = state.stale;
   const safeFrameIndex = Math.max(0, Math.min(frameIndex, frameMinutes.length - 1));
   const currentMinute = frameMinutes[safeFrameIndex] ?? 0;
+  // Wind shown at the playback minute: the weather step the solver used there (10-min steps),
+  // or the scenario's constant wind when no hourly series is active.
+  const weatherSeries = scenario.settings.weatherSeries;
+  const baseWindSpeedMph = scenario.settings.windSpeedMph;
+  const baseWindFromDegrees = scenario.settings.windFromDegrees;
+  const displayWind = useMemo(() => {
+    if (seriesActive(weatherSeries)) {
+      const w = weatherAtStep(weatherSeries, weatherStepAt(currentMinute));
+      return { speedMph: w.windSpeedMph, fromDegrees: w.windFromDegrees };
+    }
+    return { speedMph: baseWindSpeedMph, fromDegrees: baseWindFromDegrees };
+  }, [weatherSeries, currentMinute, baseWindSpeedMph, baseWindFromDegrees]);
   const publishStatus = useSimStatePublisher(
     publishOn && !Aside,
     evacuationInputs,
@@ -1233,8 +1246,8 @@ export default function SimulationStudioPage({
                 landscape={dioramaLandscape}
                 run={dioramaShowsRun ? dioramaRun : null}
                 ignitions={dioramaIgnitions}
-                windFromDegrees={scenario.settings.windFromDegrees}
-                windSpeedMph={scenario.settings.windSpeedMph}
+                windFromDegrees={displayWind.fromDegrees}
+                windSpeedMph={displayWind.speedMph}
                 timeRef={clockRef}
                 insets={{ top: 12, right: 12, bottom: DIORAMA_BOTTOM_INSET_PX, left: panelInset }}
                 fitKey={dioramaShowsRun ? resultKey : null}
@@ -1442,8 +1455,8 @@ export default function SimulationStudioPage({
                 visibleFrames={visibleFrames}
                 currentMinute={currentMinute}
                 horizonMinutes={playbackHorizon}
-                windSpeedMph={scenario.settings.windSpeedMph}
-                windFromDegrees={scenario.settings.windFromDegrees}
+                windSpeedMph={displayWind.speedMph}
+                windFromDegrees={displayWind.fromDegrees}
                 landscapeBox={result?.landscapeBox ?? null}
                 footprintIsStale={stale}
                 ignitionDetails={ignitionDetails}
