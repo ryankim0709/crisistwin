@@ -18,6 +18,7 @@ import { buildRunExport, postDrillPackage, type DrillPackageResponse } from "../
 import { emptyScenario, toSolverInput, validateScenario } from "../studio/scenario";
 import { gridBox, gridCoversScenario, parseStudioBoardId } from "../studio/useRegionBoard";
 import type { ScenarioDraft } from "./types";
+import { presetWeatherSeries } from "./presetWeather";
 
 /** The preset's Studio board landscape: a chosen size loads around the region centre, else the stored region board. */
 async function loadBoard(boardId: string, signal: AbortSignal): Promise<LandscapeGrid> {
@@ -44,6 +45,7 @@ async function loadBoard(boardId: string, signal: AbortSignal): Promise<Landscap
 export function presetScenario(draft: ScenarioDraft, preset: DemoSeedPreset): StudioScenario {
   const base = emptyScenario();
   const moisture = MOISTURE_PRESETS.find((m) => m.id === draft.moisturePreset) ?? MOISTURE_PRESETS[0];
+  const series = presetWeatherSeries(preset);
   return {
     ...base,
     name: preset.label,
@@ -64,6 +66,8 @@ export function presetScenario(draft: ScenarioDraft, preset: DemoSeedPreset): St
       windFromDegrees: ((Math.round(draft.windFromDeg) % 360) + 360) % 360,
       moisture: { ...moisture.moisture },
       horizonMinutes: Math.round(draft.horizonMinutes),
+      // The preset's weather schedule, so the package's road box follows the fire the board runs.
+      ...(series ? { weatherSeries: series } : {}),
     },
   };
 }

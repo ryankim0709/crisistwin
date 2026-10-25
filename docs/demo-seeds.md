@@ -10,6 +10,13 @@ fuel-moisture preset are illustrative scenario choices (ASSUMPTION, not an obser
 incident), and the homes, vehicles and occupants are the dispatch-area builder's synthetic
 households. They are planning-experiment numbers, not predictions of any real fire.
 
+> **STALE (worktree-agent-ad39edb7c016812e1):** every number below was measured with the wind and
+> fuel moisture held constant for 6 h. The Berkeley presets now carry an easing offshore event
+> (`weatherSchedule`: the preset wind until T+150, then 12 mph from the same direction; "critical"
+> moisture until T+240, then "dry"; all ASSUMPTION, `easingOffshoreEvent` in `demoSeeds.ts`), and
+> the board now closes a fire that burns itself out (`closedBy: "burned_out"`). Neither change is
+> re-measured yet; re-run the harness before quoting these figures.
+>
 > **Re-measured on `SPREAD_MODEL` 5.1.1 (after the fire-resume fix, feat/one-view 386b101).**
 > Every outcome number in earlier versions of this note and in the earlier `demoSeeds.ts`
 > (commit 11880b6, board code e67007d) was taken before that fix and is superseded.

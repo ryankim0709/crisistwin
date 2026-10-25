@@ -37,7 +37,9 @@
  *   out. Direct-attack units put out burning edge cells within reach at their line production
  *   rate (the knocked-down edge stops advancing: inert in the solver, with line around it);
  *   mop-up units put out burning cells inside a contained fire. A contained fire is out once
- *   nothing of it still burns (and MOPUP_MINUTES after containment at the earliest).
+ *   nothing of it still burns (and MOPUP_MINUTES after containment at the earliest). In any run
+ *   mode, a burning fire with nothing still burning and no further spread in the solver's
+ *   forecast burned itself out: it is out with closedBy "burned_out" (no line needed).
  * - The AI commander's orders (applyOrder) act on the same units and state machine: send_crew
  *   adds a unit (or an available aircraft) to a fire or reassigns it from another;
  *   release_crew sends it home; order_resources places an order; order_evacuation orders a zone
@@ -314,7 +316,8 @@ export interface Fire {
   status: FireStatus;
   containedAt: number | null;
   outAt: number | null;
-  closedBy: "teams" | "manual" | null;
+  /** Who closed it: units (contained, then mopped up), a manual close, or the fire itself (burned out with no line holding it). */
+  closedBy: "teams" | "manual" | "burned_out" | null;
 }
 
 /**
@@ -2863,6 +2866,21 @@ function heldByLine(board: Board, fire: Fire): number | null {
   return last <= board.minute ? Math.max(last, field.fromMinute ?? 0) : null;
 }
 
+/**
+ * The fire burned itself out: the current field (it includes the line built now) forecasts no cell
+ * of this fire igniting after now, to its horizon, and none of its cells is still burning
+ * (demo/suppression.ts burn durations: crossing time plus Anderson 1969 residence time).
+ */
+function burnedOut(board: Board, fire: Fire): boolean {
+  const field = board.solver.field;
+  const s = field?.sourceIndex.get(fire.id);
+  if (!field || s === undefined || field.lineKey !== lineKey(board)) return false;
+  if (field.horizonMinutes < board.minute + FORECAST_MINUTES) return false;
+  const arrivals = field.arrivalBySource[s];
+  const last = arrivals.length ? arrivals[arrivals.length - 1] : Number.NEGATIVE_INFINITY;
+  return last <= board.minute && burningCellCount(board, fire) === 0;
+}
+
 /** One order option at a position: the n nearest free units that can reach it, added to those on the line. */
 export interface PositionOption {
   teams: string[];
@@ -3951,6 +3969,20 @@ function stepOnce(board: Board, dt: number, landOn: number | null): void {
           lineM: built,
         });
         onContained(board, fire);
+      } else if (decide && burnedOut(board, fire)) {
+        // Natural burn-out, in any run mode: nothing of it still burns and the solver forecasts no
+        // further spread, with or without crews (a fire with no line could otherwise never close).
+        fire.status = "out";
+        fire.outAt = board.minute;
+        fire.closedBy = "burned_out";
+        board.firesOutTotal += 1;
+        reportKnockdown(board, fire.id);
+        for (const team of board.teams) if (team.fireId === fire.id) release(board, team);
+        log(board, "out", "board", `${fire.id} burned itself out at ${fire.areaHa.toFixed(1)} ha: nothing of it is still burning and the fire model forecasts no further spread.`, {
+          action: "out",
+          fireId: fire.id,
+          areaHa: fire.areaHa,
+        });
       } else if (decide) {
         // "Cannot catch it": ground units on scene, none still coming, and no containment in the forecast.
         escalate(
