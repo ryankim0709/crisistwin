@@ -43,7 +43,7 @@ marked **Firm** and are about honesty of data, safety, and secrets.
   directly. Never force-push a shared branch.
 - Finish with a short handoff: what changed, which files/interfaces, what you checked.
 
-## Choosing a model for subagents
+## Subagents
 
 Pick the cheapest model that can do the subtask well, and set it explicitly:
 `haiku` for mechanical, fully specified edits and lookups; `sonnet` for routine
@@ -51,6 +51,13 @@ implementation, research and docs; `opus` for orchestration and for work where a
 answer is silent (simulation maths, solver geometry, unit conversions, shared
 contracts). Definitions live in `.claude/agents/`. Escalate if a cheaper model fails
 for lack of reasoning, not for a transient tool error.
+
+A subagent starts with none of your context, so brief it to avoid rediscovery: the goal,
+the exact files and interfaces involved, what you have already ruled out, and what to
+report back. Paste the few facts it needs (a signature, a constant and its source, a
+contract shape) instead of sending it to re-read files you have already read. Give each
+subagent a narrow scope and distinct files. For follow-up work in the same area, continue
+the subagent you already have rather than starting a fresh one.
 
 ## UI
 
